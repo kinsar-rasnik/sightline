@@ -1,0 +1,20 @@
+# CLAUDE.local.md (example — copy to CLAUDE.local.md, then edit)
+
+Per-developer overrides that should not be committed. This file is ignored via `.gitignore`. Use it for:
+
+- Personal Twitch developer credentials used during testing.
+- Alternate filesystem paths for the library root on your machine.
+- Opt-in verbose logging toggles.
+- Notes to yourself about open experiments on this checkout.
+
+## Example
+
+```
+## Environment
+- Library root on this machine: /Volumes/SomeDrive/sightline-lib
+- Twitch dev app: "sightline-dev-<yourname>"
+
+## Preferences
+- Prefer `pnpm tauri dev --no-watch` while hacking Rust
+- Default log level: debug
+```
