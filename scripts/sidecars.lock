@@ -1,0 +1,31 @@
+# Pinned sidecar binaries. See ADR-0003.
+#
+# Each entry fully specifies the upstream release URL + SHA-256 for every
+# supported OS/arch triple. Checksum verification is mandatory; a mismatch
+# must cause the bundler to refuse the download.
+#
+# Phase 1 ships this file with an empty entries list. Phase 3 populates it
+# alongside the real bundle-sidecars implementation.
+
+version: 1
+
+sidecars:
+  # - name: yt-dlp
+  #   upstream_version: "2026.03.14"
+  #   platforms:
+  #     macos-aarch64:
+  #       url: "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.14/yt-dlp_macos"
+  #       sha256: "TODO-64-hex"
+  #       triple: "aarch64-apple-darwin"
+  #     macos-x86_64:
+  #       url: "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.14/yt-dlp_macos"
+  #       sha256: "TODO-64-hex"
+  #       triple: "x86_64-apple-darwin"
+  #     linux-x86_64:
+  #       url: "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.14/yt-dlp_linux"
+  #       sha256: "TODO-64-hex"
+  #       triple: "x86_64-unknown-linux-gnu"
+  #     windows-x86_64:
+  #       url: "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.14/yt-dlp.exe"
+  #       sha256: "TODO-64-hex"
+  #       triple: "x86_64-pc-windows-msvc"
