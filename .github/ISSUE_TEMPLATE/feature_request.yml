@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability or enhancement.
+title: "[Feat] "
+labels: [feat]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user problem first. Propose a solution second. Feature requests without a described problem are hard to prioritize.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What user problem does this solve?
+      placeholder: |
+        Today I can't find VODs from the same event across streamers because the library is sorted by publish time, not stream time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution (optional)
+      placeholder: |
+        Add a toggle to sort by stream_started_at, default on.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: |
+        A manual filter by date range works but is clumsy.
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Who benefits?
+      placeholder: |
+        Anyone following more than 3 streamers during a shared event.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Self-check
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: This aligns with the roadmap in README.md (or is a deliberate new direction I want to propose).
+          required: true

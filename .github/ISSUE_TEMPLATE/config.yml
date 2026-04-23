@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/sightline/sightline/discussions
+    about: For questions, ideas, or anything open-ended — open a discussion instead of an issue.
