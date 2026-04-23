@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sightline",
+  "version": "0.1.0",
+  "identifier": "dev.sightline.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "Sightline",
+        "label": "main",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src ipc: https:; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "Entertainment",
+    "shortDescription": "Multi-streamer GTA-RP VOD viewer.",
+    "longDescription": "Aggregate VODs from every streamer you follow, order them by stream start time, and watch them in sync."
+  }
+}
