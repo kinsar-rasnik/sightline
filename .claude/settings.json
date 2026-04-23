@@ -1,0 +1,57 @@
+{
+  "$schema": "https://claude.ai/schemas/settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo *)",
+      "Bash(pnpm *)",
+      "Bash(node *)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git branch*)",
+      "Bash(git checkout*)",
+      "Bash(git fetch*)",
+      "Bash(git pull --ff-only*)",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(jq *)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/bash-firewall.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/format-on-write.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/stop-gate.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
