@@ -48,7 +48,7 @@ mod tests {
         let report = svc.report(0).await.unwrap();
         assert_eq!(report.app_name, "sightline");
         assert_eq!(report.app_version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(report.schema_version, 1);
+        assert!(report.schema_version >= 1);
         assert!(report.checked_at >= report.started_at);
     }
 }

@@ -41,64 +41,122 @@ The `schema_meta` table gives the `health` command a read target and lets future
 
 ---
 
-## Phase 2 — Streamers and VODs
+## Phase 2 — Streamers, VODs, chapters, poll log, settings, credentials meta
+
+Phase 2 lands schema version **3** via migrations `0002_streamers_vods_chapters.sql` and `0003_poll_log.sql`. The shipping shape:
 
 ```sql
--- 0002_streamers_and_vods.sql (draft — lands in Phase 2)
-
+-- streamers: soft-deletable roster.
 CREATE TABLE streamers (
-  twitch_user_id   TEXT    PRIMARY KEY,        -- Helix user.id
-  login            TEXT    NOT NULL UNIQUE,    -- lowercase login
-  display_name     TEXT    NOT NULL,
-  profile_image_url TEXT,
-  followed_at      INTEGER NOT NULL,
-  deleted_at       INTEGER
+    twitch_user_id     TEXT    PRIMARY KEY,         -- Helix user.id
+    login              TEXT    NOT NULL,            -- stored lowercase (case-insensitive unique active below)
+    display_name       TEXT    NOT NULL,
+    profile_image_url  TEXT,
+    broadcaster_type   TEXT    NOT NULL DEFAULT '', -- 'partner' | 'affiliate' | ''
+    twitch_created_at  INTEGER NOT NULL,
+    added_at           INTEGER NOT NULL,
+    deleted_at         INTEGER,                     -- soft delete
+    last_polled_at     INTEGER,
+    next_poll_at       INTEGER,                     -- adaptive schedule target
+    last_live_at       INTEGER                      -- drives adaptive interval
 );
+CREATE UNIQUE INDEX idx_streamers_login_active ON streamers(login) WHERE deleted_at IS NULL;
+CREATE INDEX idx_streamers_next_poll ON streamers(next_poll_at) WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_streamers_login ON streamers(login) WHERE deleted_at IS NULL;
-
+-- vods: the MASTER chronology, ordered by stream_started_at.
 CREATE TABLE vods (
-  twitch_video_id   TEXT    PRIMARY KEY,
-  twitch_user_id    TEXT    NOT NULL REFERENCES streamers(twitch_user_id) ON DELETE CASCADE,
-  title             TEXT    NOT NULL,
-  duration_seconds  INTEGER NOT NULL,
-  stream_started_at INTEGER NOT NULL,      -- canonical chronological key
-  published_at      INTEGER NOT NULL,
-  game_name         TEXT,                  -- from chapters: first chapter, or null
-  thumbnail_url     TEXT,
-  state             TEXT    NOT NULL CHECK (state IN ('discovered','eligible','ignored','queued','downloading','downloaded','watched','failed')),
-  discovered_at     INTEGER NOT NULL,
-  last_seen_at      INTEGER NOT NULL,
-  ignored_reason    TEXT                   -- 'not_gta', 'live', 'sub_only', ...
+    twitch_video_id     TEXT    PRIMARY KEY,
+    twitch_user_id      TEXT    NOT NULL REFERENCES streamers(twitch_user_id) ON DELETE CASCADE,
+    stream_id           TEXT,
+    title               TEXT    NOT NULL,
+    description         TEXT    NOT NULL DEFAULT '',
+    stream_started_at   INTEGER NOT NULL,           -- canonical chronological key (UTC seconds)
+    published_at        INTEGER NOT NULL,
+    url                 TEXT    NOT NULL,
+    thumbnail_url       TEXT,
+    duration_seconds    INTEGER NOT NULL,
+    view_count          INTEGER NOT NULL DEFAULT 0,
+    language            TEXT    NOT NULL DEFAULT '',
+    muted_segments_json TEXT    NOT NULL DEFAULT '[]',  -- JSON array of { duration, offset }
+    is_sub_only         INTEGER NOT NULL DEFAULT 0,
+    helix_game_id       TEXT,                        -- fallback for single-game streams
+    helix_game_name     TEXT,
+    ingest_status       TEXT    NOT NULL DEFAULT 'pending' CHECK (ingest_status IN (
+        'pending','chapters_fetched','eligible','skipped_game','skipped_sub_only','skipped_live','error'
+    )),
+    status_reason       TEXT    NOT NULL DEFAULT '',
+    first_seen_at       INTEGER NOT NULL,
+    last_seen_at        INTEGER NOT NULL
 );
 
-CREATE INDEX idx_vods_user ON vods(twitch_user_id);
-CREATE INDEX idx_vods_chronological ON vods(stream_started_at DESC);
-CREATE INDEX idx_vods_state ON vods(state);
+-- chapters: GAME_CHANGE moments from the public Twitch GQL endpoint (ADR-0008).
+CREATE TABLE chapters (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    twitch_video_id  TEXT    NOT NULL REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
+    position_ms      INTEGER NOT NULL CHECK (position_ms >= 0),
+    duration_ms      INTEGER NOT NULL CHECK (duration_ms >= 0),
+    game_id          TEXT,                                     -- null for unknown (review state)
+    game_name        TEXT    NOT NULL DEFAULT '',
+    chapter_type     TEXT    NOT NULL DEFAULT 'GAME_CHANGE' CHECK (chapter_type IN (
+        'GAME_CHANGE','SYNTHETIC','OTHER'
+    ))
+);
+
+-- app_settings: single-row. Holds the game filter, poll intervals, concurrency cap.
+CREATE TABLE app_settings (
+    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled_game_ids_json TEXT    NOT NULL DEFAULT '["32982"]',  -- GTA V
+    poll_floor_seconds    INTEGER NOT NULL DEFAULT 600,
+    poll_recent_seconds   INTEGER NOT NULL DEFAULT 1800,
+    poll_ceiling_seconds  INTEGER NOT NULL DEFAULT 7200,
+    concurrency_cap       INTEGER NOT NULL DEFAULT 4,
+    first_backfill_limit  INTEGER NOT NULL DEFAULT 100,
+    updated_at            INTEGER NOT NULL
+);
+
+-- credentials_meta: safe-to-persist summary. The actual Client ID + Secret
+-- live in the OS keyring and never land in this file.
+CREATE TABLE credentials_meta (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    configured              INTEGER NOT NULL DEFAULT 0,
+    client_id_masked        TEXT,
+    last_token_acquired_at  INTEGER,
+    updated_at              INTEGER NOT NULL
+);
+
+-- poll_log: append-only audit, one row per poll cycle per streamer.
+CREATE TABLE poll_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    twitch_user_id    TEXT    NOT NULL REFERENCES streamers(twitch_user_id) ON DELETE CASCADE,
+    started_at        INTEGER NOT NULL,
+    finished_at       INTEGER,
+    vods_seen         INTEGER NOT NULL DEFAULT 0,
+    vods_new          INTEGER NOT NULL DEFAULT 0,
+    vods_updated      INTEGER NOT NULL DEFAULT 0,
+    chapters_fetched  INTEGER NOT NULL DEFAULT 0,
+    errors_json       TEXT    NOT NULL DEFAULT '[]',
+    status            TEXT    NOT NULL CHECK (status IN (
+        'running','ok','partial','error','rate_limited','skipped'
+    ))
+);
 ```
 
-### State machine for `vods.state`
+### State machine for `vods.ingest_status`
 
 ```
-         discovered
-           │
-           │ game whitelist match + stream ended
-           ▼
-         eligible ──► ignored (not_gta, sub_only, live, ...)
-           │
-           │ user or auto-queue
-           ▼
-         queued
-           │
-           ▼
-      downloading ──► failed (after retry budget)
-           │
-           ▼
-       downloaded
-           │
-           ▼
-         watched
+    pending
+      │  Helix fetch + optional GQL chapters
+      ▼
+    chapters_fetched ───► error (persisted, retried next poll)
+      │
+      │ game filter / live gate / sub-only detection
+      ▼
+    eligible ──► skipped_game | skipped_sub_only | skipped_live
 ```
+
+A VOD can oscillate between `skipped_live` and `eligible` as the streamer finishes the broadcast. A VOD marked `skipped_sub_only` is re-evaluated on every poll in case the streamer unlocks it. Game filter results (`skipped_game` / `eligible`) flip when the user changes `app_settings.enabled_game_ids_json`.
+
+The Phase 3 downstream states (`queued → downloading → downloaded → watched`) live on a separate `download_tasks` table (see §Phase 3) rather than stacking more enum values onto `ingest_status` — the ingest pipeline and the download pipeline have different retry policies and different failure domains.
 
 ---
 

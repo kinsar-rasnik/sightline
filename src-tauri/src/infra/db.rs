@@ -75,11 +75,15 @@ impl Db {
 mod tests {
     use super::*;
 
+    /// Latest migration bumps `PRAGMA user_version` to this value. Keep this
+    /// in lock-step with the highest-numbered `migrations/*.sql` file.
+    const LATEST_SCHEMA_VERSION: i64 = 3;
+
     #[tokio::test]
-    async fn in_memory_migrates_to_version_one() {
+    async fn in_memory_migrates_to_latest() {
         let db = Db::open_in_memory().await.unwrap();
         db.migrate().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 1);
+        assert_eq!(db.schema_version().await.unwrap(), LATEST_SCHEMA_VERSION);
     }
 
     #[tokio::test]
@@ -87,7 +91,7 @@ mod tests {
         let db = Db::open_in_memory().await.unwrap();
         db.migrate().await.unwrap();
         db.migrate().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 1);
+        assert_eq!(db.schema_version().await.unwrap(), LATEST_SCHEMA_VERSION);
     }
 
     #[tokio::test]
@@ -100,5 +104,43 @@ mod tests {
             .unwrap();
         let name: String = row.try_get(0).unwrap();
         assert_eq!(name, "sightline");
+    }
+
+    #[tokio::test]
+    async fn phase_2_tables_exist_and_are_empty() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        for table in ["streamers", "vods", "chapters", "poll_log"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+            assert_eq!(count, 0, "{table} should be empty after fresh migrate");
+        }
+    }
+
+    #[tokio::test]
+    async fn default_app_settings_seeded() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let games: String = sqlx::query_scalar(
+            "SELECT enabled_game_ids_json FROM app_settings WHERE id = 1",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert!(games.contains("32982"), "expected GTA V in default filter");
+    }
+
+    #[tokio::test]
+    async fn credentials_meta_starts_unconfigured() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let configured: i64 =
+            sqlx::query_scalar("SELECT configured FROM credentials_meta WHERE id = 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(configured, 0);
     }
 }

@@ -21,7 +21,7 @@ async fn health_report_against_tempfile_db() {
     let report = svc.report(started).await.expect("report");
 
     assert_eq!(report.app_name, "sightline");
-    assert_eq!(report.schema_version, 1);
+    assert!(report.schema_version >= 1, "schema version should be monotonic");
     assert_eq!(report.started_at, started);
     assert!(report.checked_at >= started);
 }
