@@ -143,6 +143,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: cargo audit
+        working-directory: src-tauri
         run: cargo audit --deny warnings
 
       - name: pnpm install
