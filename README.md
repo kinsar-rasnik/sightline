@@ -186,8 +186,8 @@ Deep dives:
 | 2     | Twitch API client, streamer + VOD ingestion, polling   | ✅             |
 | 3     | Download engine (yt-dlp orchestration, queue, throttle, library layout) | ✅             |
 | 4     | Tray daemon, timeline foundation, UI polish, sidecar bundling | ✅             |
-| 5     | Player + watch-progress                                | **Next**      |
-| 6     | Multi-View Sync                                        | Planned       |
+| 5     | Player, watch progress, Continue Watching, cross-streamer deep link | ✅             |
+| 6     | Multi-View Sync (split-screen) — deep-link math already lands in Phase 5 | **Next** |
 | 7     | Auto-cleanup, sub-only handling, polish, v1.0          | Planned       |
 
 ---

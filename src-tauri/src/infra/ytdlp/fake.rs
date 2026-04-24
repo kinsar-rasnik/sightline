@@ -34,6 +34,10 @@ pub struct FakeScript {
     pub progress_ticks: Vec<DownloadProgress>,
     /// Error `download` returns instead of producing a result.
     pub download_err: Option<String>,
+    /// Delay between progress ticks. Used by the graceful-shutdown
+    /// integration test to keep the download "in flight" long enough
+    /// for a concurrent shutdown to fire.
+    pub tick_delay_ms: u64,
 }
 
 fn default_info() -> VodInfo {
@@ -161,6 +165,9 @@ impl YtDlp for YtDlpFake {
             // still want to complete the download (mirrors the real
             // wrapper's behaviour).
             let _ = progress_sink.send(tick.clone()).await;
+            if s.tick_delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(s.tick_delay_ms)).await;
+            }
         }
 
         let final_bytes = ticks.last().map(|t| t.bytes_done).unwrap_or(0);

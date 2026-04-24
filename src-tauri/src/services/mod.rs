@@ -2,12 +2,14 @@
 //! `infra` adapters. Services are the only place that combine multiple
 //! infra sources; commands should never do so directly.
 
+pub mod autostart;
 pub mod credentials;
 pub mod downloads;
 pub mod events;
 pub mod health;
 pub mod ingest;
 pub mod library_migrator;
+pub mod media_assets;
 pub mod notifications;
 pub mod poller;
 pub mod settings;
@@ -16,4 +18,6 @@ pub mod storage;
 pub mod streamers;
 pub mod time_util;
 pub mod timeline_indexer;
+pub mod tray;
 pub mod vods;
+pub mod watch_progress;

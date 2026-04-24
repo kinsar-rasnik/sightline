@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::infra::clock::{Clock, SystemClock};
 use crate::infra::db::Db;
@@ -40,6 +40,7 @@ use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
     LibraryMigrationEvent, LibraryMigratorService, MigrationSink,
 };
+use crate::services::media_assets::MediaAssetsService;
 use crate::services::notifications::NotificationService;
 use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
@@ -48,6 +49,7 @@ use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
 use crate::services::timeline_indexer::TimelineIndexerService;
 use crate::services::vods::VodReadService;
+use crate::services::watch_progress::{WatchEvent, WatchEventSink, WatchProgressService};
 
 /// Shared application state. One instance is constructed during
 /// `setup` and managed by Tauri; each command handler pulls the
@@ -70,6 +72,10 @@ pub struct AppState {
     pub timeline: Arc<TimelineIndexerService>,
     pub shortcuts: Arc<ShortcutsService>,
     pub notifications: Arc<NotificationService>,
+    // --- Phase 5 ---
+    pub media_assets: Arc<MediaAssetsService>,
+    pub watch_progress: Arc<WatchProgressService>,
+    pub watch_progress_sink: WatchEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -141,6 +147,15 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            // LaunchAgent is the standard macOS approach and works
+            // without Developer ID signing (AppleScript would prompt
+            // the user on first start — we prefer the silent plist
+            // path). Windows uses HKCU\Run and Linux uses XDG
+            // autostart; MacosLauncher controls only the macOS variant.
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
@@ -224,7 +239,7 @@ pub fn run() {
                     db.clone(),
                     clock.clone(),
                     ytdlp,
-                    ffmpeg,
+                    ffmpeg.clone(),
                     space_probe,
                     rate,
                     SettingsService::new(db.clone(), clock.clone()),
@@ -245,6 +260,64 @@ pub fn run() {
                 let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Phase 5: watch-progress service + event sink.
+                let watch_progress_svc = Arc::new(WatchProgressService::new(
+                    db.clone(),
+                    clock.clone(),
+                ));
+                let watch_handle = handle.clone();
+                let watch_sink: WatchEventSink = Arc::new(move |ev| match ev {
+                    WatchEvent::Updated {
+                        vod_id,
+                        position_seconds,
+                        state,
+                    } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_PROGRESS_UPDATED,
+                            crate::services::events::WatchProgressUpdatedEvent {
+                                vod_id,
+                                position_seconds,
+                                state: state.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::StateChanged { vod_id, from, to } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_STATE_CHANGED,
+                            crate::services::events::WatchStateChangedEvent {
+                                vod_id,
+                                from: from.as_db_str().to_owned(),
+                                to: to.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::Completed { vod_id } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_COMPLETED,
+                            crate::services::events::WatchCompletedEvent { vod_id },
+                        );
+                    }
+                });
+
+                // Phase 5: media-asset resolver (shared by the player
+                // route + the grid's hover preview) + preview-frame
+                // backfill for pre-Phase-5 downloads.
+                let media_assets_svc = Arc::new(MediaAssetsService::new(
+                    db.clone(),
+                    ffmpeg.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+                {
+                    let backfill = media_assets_svc.clone();
+                    tokio::spawn(async move {
+                        match backfill.backfill_preview_frames().await {
+                            Ok(n) if n > 0 => info!(count = n, "preview backfill complete"),
+                            Ok(_) => debug!("preview backfill: nothing to do"),
+                            Err(e) => warn!(error = ?e, "preview backfill failed"),
+                        }
+                    });
+                }
 
                 // Seed the close-behavior atomic from the persisted
                 // setting so `on_window_event` can read it synchronously.
@@ -481,8 +554,38 @@ pub fn run() {
                     timeline: timeline_svc,
                     shortcuts: shortcuts_svc,
                     notifications: notifications_svc,
+                    media_assets: media_assets_svc,
+                    watch_progress: watch_progress_svc,
+                    watch_progress_sink: watch_sink,
                     close_behavior,
                     app_handle: handle.clone(),
+                });
+
+                // Install the tray icon + menu. Failure is non-fatal
+                // (headless CI, Linux without StatusNotifierItem), but
+                // we log it so it shows up in the support bundle.
+                if let Err(e) = install_tray(&handle) {
+                    warn!(error = %e, "tray icon install skipped");
+                }
+
+                // Phase 5 housekeeping: reconcile the autostart
+                // setting against the OS. If the user enabled "Start
+                // at login" in a previous session but disabled it in
+                // System Settings, we pick up the OS state and update
+                // the DB; if the DB says on and the OS says off, we
+                // re-register. This runs after `manage` so the
+                // reconcile's SettingsService handle is identical to
+                // what `cmd_set_autostart` will later see.
+                let settings_for_reconcile =
+                    handle.state::<AppState>().settings.clone();
+                let autostart_svc = crate::services::autostart::AutostartService::new(
+                    handle.clone(),
+                    settings_for_reconcile,
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = autostart_svc.reconcile().await {
+                        warn!(error = ?e, "autostart reconcile failed");
+                    }
                 });
 
                 handle
@@ -551,6 +654,44 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Install the platform-native tray icon. Chooses the right icon file
+/// for each platform (macOS → template PNG, so it follows menu-bar
+/// theme; Linux → 22×22 colour; Windows → 32×32 colour) and falls back
+/// to the generic `icon.png` if the expected resource isn't bundled.
+fn install_tray(handle: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::path::BaseDirectory;
+    let is_macos = cfg!(target_os = "macos");
+    // On macOS we want a template PNG so the OS can invert it in dark
+    // mode; on Linux/Windows we want a colour PNG at a size the system
+    // tray renders without blurring.
+    let preferred = if is_macos {
+        &["icons/tray-template.png", "icons/icon.png"][..]
+    } else if cfg!(target_os = "linux") {
+        &["icons/tray-22.png", "icons/icon.png"][..]
+    } else {
+        &["icons/tray-32.png", "icons/icon.png"][..]
+    };
+    let mut resolved: Option<std::path::PathBuf> = None;
+    for candidate in preferred {
+        if let Ok(path) = handle.path().resolve(candidate, BaseDirectory::Resource)
+            && path.exists()
+        {
+            resolved = Some(path);
+            break;
+        }
+        // Dev fallback (not yet bundled as resources).
+        let repo = std::path::PathBuf::from("src-tauri").join(candidate);
+        if repo.exists() {
+            resolved = Some(repo);
+            break;
+        }
+    }
+    let path = resolved.ok_or_else(|| "no tray icon resource found".to_owned())?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("read tray icon {path:?}: {e}"))?;
+    crate::services::tray::install(handle, &bytes, is_macos)
+        .map_err(|e| format!("tray install: {e}"))
 }
 
 /// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's

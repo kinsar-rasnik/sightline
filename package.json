@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "a11y": "vitest run src/a11y",
     "check:ipc": "cd src-tauri && cargo test --test ipc_bindings --quiet && cd .. && git diff --exit-code -- src/ipc/bindings.ts"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
+    "@axe-core/react": "^4.11.2",
     "@eslint/js": "^9.14.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.1.0",
@@ -41,6 +43,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.3",
+    "axe-core": "^4.11.3",
     "eslint": "^9.14.0",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.37.2",

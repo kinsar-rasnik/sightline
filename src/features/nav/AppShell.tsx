@@ -6,6 +6,7 @@ import { useHealth } from "@/hooks/use-health";
 import { useNavStore, type NavPage } from "@/stores/nav-store";
 import { LibraryPage } from "@/features/vods/LibraryPage";
 import { DownloadsPage } from "@/features/downloads/DownloadsPage";
+import { PlayerPage } from "@/features/player/PlayerPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { StreamersPage } from "@/features/streamers/StreamersPage";
 import { TimelinePage } from "@/features/timeline/TimelinePage";
@@ -28,6 +29,7 @@ const NAV_ITEMS: Array<{ id: NavPage; label: string }> = [
 
 export function AppShell() {
   const page = useNavStore((s) => s.page);
+  const watchContext = useNavStore((s) => s.watch);
   const setPage = useNavStore((s) => s.setPage);
   const health = useHealth();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -167,6 +169,13 @@ export function AppShell() {
         {page === "streamers" && <StreamersPage />}
         {page === "downloads" && <DownloadsPage />}
         {page === "settings" && <SettingsPage />}
+        {page === "watch" && watchContext && (
+          <PlayerPage
+            vodId={watchContext.vodId}
+            initialPositionSeconds={watchContext.initialPositionSeconds}
+            autoplay={watchContext.autoplay}
+          />
+        )}
       </main>
 
       <NotificationsToaster />

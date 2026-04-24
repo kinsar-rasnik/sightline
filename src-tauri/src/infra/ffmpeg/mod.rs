@@ -51,11 +51,45 @@ pub struct ThumbnailSpec {
     pub percent: f64,
 }
 
+/// Multi-frame extract used for the library grid's hover preview
+/// (Phase 5 housekeeping). `frames[i]` is written atomically — if
+/// any one frame fails the caller should treat the whole preview as
+/// missing and fall back to the single thumbnail.
+#[derive(Debug, Clone)]
+pub struct PreviewFramesSpec {
+    pub source: PathBuf,
+    pub duration_seconds: i64,
+    /// One (percent, destination) tuple per frame. The caller decides
+    /// the percentages (we default to 6 evenly-spaced points at
+    /// 15/30/45/60/75/90%) so the extractor stays parameter-free.
+    pub frames: Vec<(f64, PathBuf)>,
+}
+
+/// Percentages used by the library grid preview. Public so tests and
+/// the service layer share a single source of truth.
+pub const PREVIEW_FRAME_PERCENTS: [f64; 6] = [15.0, 30.0, 45.0, 60.0, 75.0, 90.0];
+
 #[async_trait]
 pub trait Ffmpeg: Send + Sync + std::fmt::Debug {
     async fn version(&self) -> Result<FfmpegVersion, AppError>;
     async fn remux_to_mp4(&self, spec: &RemuxSpec) -> Result<(), AppError>;
     async fn extract_thumbnail(&self, spec: &ThumbnailSpec) -> Result<(), AppError>;
+    /// Extract all frames in a single ffmpeg process. The default impl
+    /// loops over `extract_thumbnail`; real implementations may batch
+    /// for speed. Returning an error after some frames wrote means the
+    /// caller should delete the partial set.
+    async fn extract_preview_frames(&self, spec: &PreviewFramesSpec) -> Result<(), AppError> {
+        for (percent, dest) in &spec.frames {
+            self.extract_thumbnail(&ThumbnailSpec {
+                source: spec.source.clone(),
+                destination: dest.clone(),
+                duration_seconds: spec.duration_seconds,
+                percent: *percent,
+            })
+            .await?;
+        }
+        Ok(())
+    }
 }
 
 pub type SharedFfmpeg = Arc<dyn Ffmpeg>;

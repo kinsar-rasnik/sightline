@@ -66,6 +66,50 @@ export const commands = {
 	listShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("list_shortcuts")),
 	setShortcut: (input: SetShortcutInput) => typedError<Shortcut[], AppError>(__TAURI_INVOKE("set_shortcut", { input })),
 	resetShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("reset_shortcuts")),
+	/**
+	 *  Fetch the asset bundle for a single VOD. Returns a struct with
+	 *  every `Option<String>` field set to `None` if the VOD has no
+	 *  completed download — that's the expected state for a VOD the user
+	 *  hasn't enqueued yet, not an error.
+	 */
+	getVodAssets: (input: VodAssetsInput) => typedError<VodAssets, AppError>(__TAURI_INVOKE("get_vod_assets", { input })),
+	/**
+	 *  Force-regenerate the single-frame thumbnail for a VOD. Useful for
+	 *  pre-Phase-5 rows that were downloaded before the preview pipeline
+	 *  existed and the thumbnail is missing. Returns when ffmpeg exits
+	 *  (success or failure — failure surfaces as `AppError::Sidecar`).
+	 */
+	regenerateVodThumbnail: (input: VodAssetsInput) => typedError<null, AppError>(__TAURI_INVOKE("regenerate_vod_thumbnail", { input })),
+	/**
+	 *  Return a `VideoSource` narrowed to `ready | missing | partial`.
+	 *  The player uses this as its single choke point — the renderer
+	 *  never builds a filesystem path directly.
+	 */
+	getVideoSource: (input: VodAssetsInput) => typedError<VideoSource, AppError>(__TAURI_INVOKE("get_video_source", { input })),
+	/**
+	 *  Remux the downloaded `.mp4` in-place via ffmpeg. The player's
+	 *  "Remux file" recovery action fires this when the `<video>`
+	 *  element can't decode the downloaded file.
+	 */
+	requestRemux: (input: VodAssetsInput) => typedError<null, AppError>(__TAURI_INVOKE("request_remux", { input })),
+	getWatchProgress: (input: WatchVodIdInput) => typedError<{
+	vodId: string,
+	positionSeconds: number,
+	durationSeconds: number,
+	watchedFraction: number,
+	state: WatchState,
+	firstWatchedAt: number | null,
+	lastWatchedAt: number,
+	lastSessionDurationSeconds: number,
+	totalWatchSeconds: number,
+} | null, AppError>(__TAURI_INVOKE("get_watch_progress", { input })),
+	updateWatchProgress: (input: UpdateWatchProgressInput) => typedError<WatchProgressRow, AppError>(__TAURI_INVOKE("update_watch_progress", { input })),
+	markWatched: (input: WatchVodIdInput) => typedError<WatchProgressRow, AppError>(__TAURI_INVOKE("mark_watched", { input })),
+	markUnwatched: (input: WatchVodIdInput) => typedError<WatchProgressRow, AppError>(__TAURI_INVOKE("mark_unwatched", { input })),
+	listContinueWatching: (input: ListContinueWatchingInput) => typedError<ContinueWatchingEntry[], AppError>(__TAURI_INVOKE("list_continue_watching", { input })),
+	getWatchStats: (input: GetWatchStatsInput) => typedError<WatchStats, AppError>(__TAURI_INVOKE("get_watch_stats", { input })),
+	getAutostartStatus: () => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("get_autostart_status")),
+	setAutostart: (input: SetAutostartInput) => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("set_autostart", { input })),
 };
 
 /* Types */
@@ -188,6 +232,17 @@ export type AppTrayActionEvent = {
 	kind: string,
 };
 
+/**
+ *  Mostly-data struct returned by the `cmd_get_autostart_status`
+ *  command. Separate from `AppSettings.start_at_login` because the
+ *  OS-observed value can diverge if the user toggled the OS setting
+ *  outside Sightline.
+ */
+export type AutostartStatus = {
+	osEnabled: boolean,
+	dbEnabled: boolean,
+};
+
 export type Chapter = {
 	positionMs: number,
 	durationMs: number,
@@ -205,6 +260,24 @@ export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
 export type CoStream = {
 	interval: Interval,
 	overlapSeconds: number,
+};
+
+/**
+ *  Items surfaced in the Continue Watching row. `remaining_seconds`
+ *  is a derived convenience so the frontend doesn't have to recompute
+ *  it from the stored position.
+ */
+export type ContinueWatchingEntry = {
+	vodId: string,
+	title: string,
+	streamerDisplayName: string,
+	streamerLogin: string,
+	durationSeconds: number,
+	positionSeconds: number,
+	remainingSeconds: number,
+	watchedFraction: number,
+	thumbnailUrl: string | null,
+	lastWatchedAt: number,
 };
 
 export type CredentialsChangedEvent = {
@@ -296,6 +369,10 @@ export type GetVodInput = {
 	twitchVideoId: string,
 };
 
+export type GetWatchStatsInput = {
+	streamerId?: string | null,
+};
+
 export type HealthReport = {
 	// Short program identifier. Always `"sightline"`.
 	appName: string,
@@ -366,6 +443,10 @@ export type LibraryMigrationCompletedEvent = {
 export type LibraryMigrationFailedEvent = {
 	migrationId: number,
 	reason: string,
+};
+
+export type ListContinueWatchingInput = {
+	limit?: number | null,
 };
 
 export type ListDownloadsInput = {
@@ -471,6 +552,10 @@ export type RemoveStreamerInput = {
 export type ReprioritizeInput = {
 	vodId: string,
 	priority: number,
+};
+
+export type SetAutostartInput = {
+	enabled: boolean,
 };
 
 export type SetShortcutInput = {
@@ -655,6 +740,30 @@ export type TriggerPollInput = {
 	twitchUserId: string | null,
 };
 
+export type UpdateWatchProgressInput = {
+	vodId: string,
+	positionSeconds: number,
+	durationSeconds: number,
+};
+
+/**
+ *  Single-choke-point answer for `<video src>`. The player uses this
+ *  to decide which state to render — the happy path (`ready`), the
+ *  "file moved / deleted externally" path (`missing`), or the
+ *  partial-download path (`partial`, download not finished yet).
+ */
+export type VideoSource = {
+	vodId: string,
+	/**
+	 *  `None` when state != "ready". Always absolute and verified to
+	 *  sit inside the library root.
+	 */
+	path: string | null,
+	state: VideoSourceState,
+};
+
+export type VideoSourceState = "ready" | "missing" | "partial";
+
 // Storage-aligned VOD row. The `*_at` fields are unix seconds UTC.
 export type Vod = {
 	twitchVideoId: string,
@@ -677,6 +786,32 @@ export type Vod = {
 	statusReason: string,
 	firstSeenAt: number,
 	lastSeenAt: number,
+};
+
+/**
+ *  Renderer-facing bundle of per-VOD asset paths. Every `path` is an
+ *  absolute filesystem string; the frontend passes each through
+ *  `convertFileSrc`.
+ */
+export type VodAssets = {
+	vodId: string,
+	/**
+	 *  Path to the `.mp4` under the library root if the download has
+	 *  completed; `None` otherwise.
+	 */
+	videoPath: string | null,
+	// Single-frame thumbnail from the Phase-3 pipeline.
+	thumbnailPath: string | null,
+	/**
+	 *  Ordered list of six hover-preview frames. Empty if the preview
+	 *  set is missing (pre-Phase-5 download that hasn't been backfilled
+	 *  yet, or an ffmpeg failure).
+	 */
+	previewFramePaths: string[],
+};
+
+export type VodAssetsInput = {
+	vodId: string,
 };
 
 /**
@@ -719,6 +854,65 @@ export type VodWithChapters = {
 	// Streamer display name, denormalized for convenience.
 	streamerDisplayName: string,
 	streamerLogin: string,
+};
+
+export type WatchCompletedEvent = {
+	vodId: string,
+};
+
+/**
+ *  Public snapshot of a VOD's watch progress — serialised to the
+ *  frontend via IPC and included in the Continue Watching row.
+ */
+export type WatchProgressRow = {
+	vodId: string,
+	positionSeconds: number,
+	durationSeconds: number,
+	watchedFraction: number,
+	state: WatchState,
+	firstWatchedAt: number | null,
+	lastWatchedAt: number,
+	lastSessionDurationSeconds: number,
+	totalWatchSeconds: number,
+};
+
+export type WatchProgressUpdatedEvent = {
+	vodId: string,
+	positionSeconds: number,
+	// Mirrors `WatchState` db strings.
+	state: string,
+};
+
+/**
+ *  Canonical watch state. Wire strings match the CHECK constraint in
+ *  migration 0008.
+ */
+export type WatchState = "unwatched" | "in_progress" | "completed" | "manually_watched";
+
+export type WatchStateChangedEvent = {
+	vodId: string,
+	from: string,
+	to: string,
+};
+
+/**
+ *  Aggregate stats used by the later "hours watched this streamer"
+ *  summaries. Defined now so the command + binding types are stable.
+ */
+export type WatchStats = {
+	totalWatchSeconds: number,
+	completedCount: number,
+	inProgressCount: number,
+};
+
+/**
+ *  Distinct from `crate::commands::downloads::VodIdInput` (downloads)
+ *  and `crate::commands::media::VodAssetsInput` so tauri-specta
+ *  doesn't collide on the type-name when emitting the bindings. The
+ *  wire shape is identical.
+ */
+export type WatchVodIdInput = {
+	vodId: string,
 };
 
 /**

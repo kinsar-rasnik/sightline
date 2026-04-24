@@ -46,6 +46,9 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0015](docs/adr/0015-timeline-data-model.md) — `stream_intervals` materialised view + indexer
 - [ADR-0016](docs/adr/0016-checks-job-bundles-sidecars.md) — `checks` CI job bundles sidecars before clippy
 - [ADR-0017](docs/adr/0017-audit-policy-until-release.md) — `cargo audit` policy through Phase 6; Phase 7 hardens
+- [ADR-0018](docs/adr/0018-watch-progress-model.md) — Watch-progress data model + state machine
+- [ADR-0019](docs/adr/0019-asset-protocol-scope.md) — Asset protocol scope for local playback
+- [ADR-0020](docs/adr/0020-cross-streamer-deep-link.md) — Cross-streamer deep-link math (Phase 6 foundation)
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

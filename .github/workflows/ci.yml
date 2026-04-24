@@ -90,6 +90,13 @@ jobs:
       - name: pnpm lint
         run: pnpm lint
 
+      # Phase 5 housekeeping: fail the checks job if any route has an
+      # axe-core WCAG 2.1 A/AA violation. Documented exceptions live
+      # in docs/a11y-exceptions.md + the ALLOWLIST constant in
+      # src/a11y/a11y.test.tsx.
+      - name: pnpm a11y
+        run: pnpm a11y
+
   # ------------------------------------------------------------------
   # Test matrix across platforms
   # ------------------------------------------------------------------

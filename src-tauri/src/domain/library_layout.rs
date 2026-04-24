@@ -95,9 +95,31 @@ pub trait LibraryLayout: Send + Sync {
     /// co-located with the video (see Flat's `.thumbs/`).
     fn thumbnail_path(&self, v: &VodWithStreamer) -> PathBuf;
 
+    /// Hover-preview frame paths (Phase 5). Co-located with the
+    /// thumbnail so `frame_count` is the public contract regardless of
+    /// layout — default impl derives paths from `thumbnail_path`,
+    /// appending `-preview-NN.jpg`. The caller ensures `frame_count`
+    /// matches the scheme in [`PREVIEW_FRAME_COUNT`].
+    fn preview_frame_paths(&self, v: &VodWithStreamer) -> Vec<PathBuf> {
+        let thumb = self.thumbnail_path(v);
+        let parent = thumb.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let stem = thumb
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("preview")
+            .to_owned();
+        (1..=PREVIEW_FRAME_COUNT)
+            .map(|i| parent.join(format!("{stem}-preview-{i:02}.jpg")))
+            .collect()
+    }
+
     /// Human-readable name used in the Settings UI preview.
     fn describe(&self) -> &'static str;
 }
+
+/// Number of frames used by the library-grid hover preview. Matches
+/// [`crate::infra::ffmpeg::PREVIEW_FRAME_PERCENTS`] length.
+pub const PREVIEW_FRAME_COUNT: usize = 6;
 
 /// Plex/Jellyfin layout.
 #[derive(Debug, Default, Clone, Copy)]
@@ -353,5 +375,49 @@ mod tests {
         let plex_path = PlexLayout.path_for(&v);
         let flat_path = FlatLayout.path_for(&v);
         assert_ne!(plex_path, flat_path);
+    }
+
+    #[test]
+    fn preview_frame_paths_colocate_with_thumbnail_plex() {
+        let vod = vod_fixture();
+        let v = with_streamer(&vod);
+        let layout = PlexLayout;
+        let frames = layout.preview_frame_paths(&v);
+        assert_eq!(frames.len(), PREVIEW_FRAME_COUNT);
+        let thumb = layout.thumbnail_path(&v);
+        let thumb_dir = thumb.parent().unwrap();
+        // Every frame shares the thumbnail directory.
+        for f in &frames {
+            assert_eq!(f.parent().unwrap(), thumb_dir);
+            let name = f.file_name().and_then(|s| s.to_str()).unwrap();
+            assert!(name.contains("-preview-"), "got {name}");
+            assert!(name.ends_with(".jpg"), "got {name}");
+        }
+        // Index suffixes are 01..06 and distinct.
+        let mut suffixes: Vec<String> = frames
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_owned()))
+            .collect();
+        suffixes.sort();
+        let suffixes_unique: std::collections::HashSet<_> = suffixes.iter().cloned().collect();
+        assert_eq!(suffixes_unique.len(), PREVIEW_FRAME_COUNT);
+    }
+
+    #[test]
+    fn preview_frame_paths_colocate_with_thumbnail_flat() {
+        // Flat layout's thumbnail sits under `.thumbs/`; previews
+        // should land there too rather than spilling into the video
+        // folder.
+        let vod = vod_fixture();
+        let v = with_streamer(&vod);
+        let layout = FlatLayout;
+        let frames = layout.preview_frame_paths(&v);
+        assert_eq!(frames.len(), PREVIEW_FRAME_COUNT);
+        let thumb_dir = layout.thumbnail_path(&v).parent().unwrap().to_path_buf();
+        for f in &frames {
+            assert_eq!(f.parent().unwrap(), thumb_dir);
+        }
+        let parts = components(&frames[0]);
+        assert!(parts.iter().any(|p| p == ".thumbs"), "got {parts:?}");
     }
 }

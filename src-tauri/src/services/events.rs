@@ -39,6 +39,11 @@ pub const EV_STREAMER_UNFAVORITED: &str = "streamer:unfavorited";
 pub const EV_APP_TRAY_ACTION: &str = "app:tray_action";
 pub const EV_APP_SHUTDOWN_REQUESTED: &str = "app:shutdown_requested";
 
+// --- Phase 5: watch progress ---
+pub const EV_WATCH_PROGRESS_UPDATED: &str = "watch:progress_updated";
+pub const EV_WATCH_STATE_CHANGED: &str = "watch:state_changed";
+pub const EV_WATCH_COMPLETED: &str = "watch:completed";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppReadyEvent {
@@ -206,4 +211,29 @@ pub struct AppTrayActionEvent {
 pub struct AppShutdownRequestedEvent {
     /// Deadline in unix-seconds — the services flush by this time.
     pub deadline_at: i64,
+}
+
+// --- Phase 5 event payloads ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchProgressUpdatedEvent {
+    pub vod_id: String,
+    pub position_seconds: f64,
+    /// Mirrors `WatchState` db strings.
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchStateChangedEvent {
+    pub vod_id: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchCompletedEvent {
+    pub vod_id: String,
 }

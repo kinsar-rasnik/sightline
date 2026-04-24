@@ -22,6 +22,7 @@ use crate::commands;
 /// exposes. The same instance is used at runtime (as the `invoke_handler`
 /// source) and offline (to regenerate bindings).
 pub fn ipc_builder() -> Builder<Wry> {
+    use crate::services::autostart::AutostartStatus;
     use crate::services::events::{
         AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CredentialsChangedEvent,
         DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
@@ -29,7 +30,8 @@ pub fn ipc_builder() -> Builder<Wry> {
         LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
         StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerFavoritedEvent,
         StreamerRemovedEvent, StreamerUnfavoritedEvent, TimelineIndexRebuildingEvent,
-        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent,
+        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent,
+        WatchProgressUpdatedEvent, WatchStateChangedEvent,
     };
     use crate::services::notifications::NotificationPayload;
 
@@ -76,6 +78,19 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::app::list_shortcuts,
             commands::app::set_shortcut,
             commands::app::reset_shortcuts,
+            // Phase 5
+            commands::media::get_vod_assets,
+            commands::media::regenerate_vod_thumbnail,
+            commands::media::get_video_source,
+            commands::media::request_remux,
+            commands::watch::get_watch_progress,
+            commands::watch::update_watch_progress,
+            commands::watch::mark_watched,
+            commands::watch::mark_unwatched,
+            commands::watch::list_continue_watching,
+            commands::watch::get_watch_stats,
+            commands::autostart::get_autostart_status,
+            commands::autostart::set_autostart,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -106,6 +121,11 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<AppTrayActionEvent>()
         .typ::<AppShutdownRequestedEvent>()
         .typ::<NotificationPayload>()
+        // Phase 5
+        .typ::<AutostartStatus>()
+        .typ::<WatchProgressUpdatedEvent>()
+        .typ::<WatchStateChangedEvent>()
+        .typ::<WatchCompletedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace
