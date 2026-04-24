@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
-import type { PollStatusRow, StreamerSummary } from "@/ipc";
+import { commands, type PollStatusRow, type StreamerSummary } from "@/ipc";
 import { formatRelative, formatUnixSeconds } from "@/lib/format";
 import { useIsPolling } from "@/stores/active-polls-store";
 
@@ -137,6 +138,7 @@ function StreamerRow({
       )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
+          <FavoriteToggle streamerId={s.twitchUserId} favorite={s.favorite ?? false} />
           <span className="font-medium">{s.displayName}</span>
           <span className="text-xs text-[--color-muted] font-mono">
             {s.login}
@@ -172,6 +174,37 @@ function StreamerRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+function FavoriteToggle({
+  streamerId,
+  favorite,
+}: {
+  streamerId: string;
+  favorite: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => commands.toggleStreamerFavorite({ streamerId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["streamers"] });
+    },
+  });
+  return (
+    <button
+      type="button"
+      aria-pressed={favorite}
+      aria-label={favorite ? "Remove from favorites" : "Add to favorites"}
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      title={favorite ? "Favorite — notifies on new VODs" : "Mark as favorite"}
+      className={`text-base transition-colors ${
+        favorite ? "text-yellow-400" : "text-[--color-subtle] hover:text-[--color-muted]"
+      }`}
+    >
+      {favorite ? "★" : "☆"}
+    </button>
   );
 }
 

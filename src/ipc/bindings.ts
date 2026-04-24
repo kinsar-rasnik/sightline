@@ -204,7 +204,7 @@ export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
  */
 export type CoStream = {
 	interval: Interval,
-	overlap_seconds: number,
+	overlapSeconds: number,
 };
 
 export type CredentialsChangedEvent = {
@@ -318,10 +318,10 @@ export type IngestStatus = "pending" | "chapters_fetched" | "eligible" | "skippe
  *  DB layer (CHECK) and by `Interval::new`.
  */
 export type Interval = {
-	vod_id: string,
-	streamer_id: string,
-	start_at: number,
-	end_at: number,
+	vodId: string,
+	streamerId: string,
+	startAt: number,
+	endAt: number,
 };
 
 export type LastPollSummary = {

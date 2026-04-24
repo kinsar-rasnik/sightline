@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type NavPage = "library" | "streamers" | "downloads" | "settings";
+export type NavPage = "library" | "timeline" | "streamers" | "downloads" | "settings";
 
 interface NavState {
   page: NavPage;

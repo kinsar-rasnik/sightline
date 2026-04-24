@@ -22,6 +22,7 @@ use specta::Type;
 /// unix seconds; the invariant `start_at <= end_at` is enforced at the
 /// DB layer (CHECK) and by `Interval::new`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Interval {
     pub vod_id: String,
     pub streamer_id: String,
@@ -113,6 +114,7 @@ pub fn bucket_by_day<'a>(intervals: &'a [Interval]) -> BTreeMap<i64, Vec<&'a Int
 /// Co-stream hit: another interval overlapping a reference, paired
 /// with the number of seconds of overlap (> 0).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct CoStream {
     pub interval: Interval,
     pub overlap_seconds: i64,
