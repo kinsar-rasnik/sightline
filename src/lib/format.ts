@@ -27,3 +27,26 @@ export function formatDurationSeconds(secs: number): string {
   if (s || parts.length === 0) parts.push(`${s}s`);
   return parts.join(" ");
 }
+
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || bytes <= 0) return "–";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  const precision = idx >= 2 ? 1 : 0;
+  return `${value.toFixed(precision)} ${units[idx]}`;
+}
+
+export function formatSpeed(bps: number | null | undefined): string {
+  if (bps == null || bps <= 0) return "–";
+  return `${formatBytes(bps)}/s`;
+}
+
+export function formatEta(secs: number | null | undefined): string {
+  if (secs == null || secs < 0) return "–";
+  return formatDurationSeconds(secs);
+}

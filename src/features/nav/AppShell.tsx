@@ -1,12 +1,14 @@
 import { useHealth } from "@/hooks/use-health";
 import { useNavStore, type NavPage } from "@/stores/nav-store";
 import { LibraryPage } from "@/features/vods/LibraryPage";
+import { DownloadsPage } from "@/features/downloads/DownloadsPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { StreamersPage } from "@/features/streamers/StreamersPage";
 
 const NAV_ITEMS: Array<{ id: NavPage; label: string }> = [
   { id: "library", label: "Library" },
   { id: "streamers", label: "Streamers" },
+  { id: "downloads", label: "Downloads" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -46,6 +48,7 @@ export function AppShell() {
       <main className="flex-1 px-6 py-6 min-h-0">
         {page === "library" && <LibraryPage />}
         {page === "streamers" && <StreamersPage />}
+        {page === "downloads" && <DownloadsPage />}
         {page === "settings" && <SettingsPage />}
       </main>
     </div>

@@ -16,6 +16,9 @@ vi.mock("@/ipc", async () => {
       ...actual.commands,
       listVods: vi.fn(),
       listStreamers: vi.fn(),
+      listDownloads: vi.fn().mockResolvedValue([]),
+      enqueueDownload: vi.fn(),
+      retryDownload: vi.fn(),
     },
   };
 });
@@ -24,7 +27,10 @@ import { commands } from "@/ipc";
 
 function renderWith(ui: React.ReactElement) {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, refetchInterval: false },
+      mutations: { retry: false },
+    },
   });
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }

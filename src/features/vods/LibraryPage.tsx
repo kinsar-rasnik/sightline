@@ -1,9 +1,15 @@
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
+import {
+  useDownloads,
+  useEnqueueDownload,
+  useRetryDownload,
+} from "@/features/downloads/use-downloads";
 import { useStreamers } from "@/features/streamers/use-streamers";
 import { useVods } from "@/features/vods/use-vods";
-import type { VodWithChapters } from "@/ipc";
+import type { DownloadRow, DownloadState, VodWithChapters } from "@/ipc";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
 
 type StatusFilter = "all" | "eligible" | "skipped_game" | "skipped_sub_only" | "skipped_live" | "error";
@@ -37,6 +43,12 @@ export function LibraryPage() {
   );
 
   const vods = useVods(input);
+  const downloads = useDownloads({});
+  const downloadsById = useMemo(() => {
+    const m = new Map<string, DownloadRow>();
+    for (const row of downloads.data ?? []) m.set(row.vodId, row);
+    return m;
+  }, [downloads.data]);
 
   return (
     <div className="flex gap-6 h-full">
@@ -91,6 +103,7 @@ export function LibraryPage() {
               <VodRow
                 key={v.vod.twitchVideoId}
                 row={v}
+                download={downloadsById.get(v.vod.twitchVideoId) ?? null}
                 selected={selected === v.vod.twitchVideoId}
                 onSelect={() => setSelected(v.vod.twitchVideoId)}
               />
@@ -115,38 +128,122 @@ export function LibraryPage() {
 
 function VodRow({
   row,
+  download,
   selected,
   onSelect,
 }: {
   row: VodWithChapters;
+  download: DownloadRow | null;
   selected: boolean;
   onSelect: () => void;
 }) {
   const v = row.vod;
   return (
     <li>
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={selected ? "true" : undefined}
-        className={`w-full text-left px-4 py-3 hover:bg-[--color-bg] focus:outline focus:outline-2 focus:outline-[--color-accent] ${
-          selected ? "bg-[--color-bg]" : ""
-        }`}
+      <div
+        className={`flex items-start gap-4 px-4 py-3 ${selected ? "bg-[--color-bg]" : "hover:bg-[--color-bg]"}`}
       >
-        <div className="flex items-baseline justify-between gap-4">
-          <span className="font-medium truncate">{v.title}</span>
-          <span className="text-[10px] uppercase tracking-wider text-[--color-muted] whitespace-nowrap">
-            {v.ingestStatus}
-          </span>
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-current={selected ? "true" : undefined}
+          className="flex-1 text-left focus:outline focus:outline-2 focus:outline-[--color-accent]"
+        >
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="font-medium truncate">{v.title}</span>
+            <span className="text-[10px] uppercase tracking-wider text-[--color-muted] whitespace-nowrap">
+              {v.ingestStatus}
+            </span>
+          </div>
+          <div className="text-xs text-[--color-muted] mt-1 flex gap-4 items-center">
+            <span>{row.streamerDisplayName}</span>
+            <span>{formatUnixSeconds(v.streamStartedAt)}</span>
+            <span>{formatDurationSeconds(v.durationSeconds)}</span>
+            <span>
+              {row.chapters.length} chapter{row.chapters.length === 1 ? "" : "s"}
+            </span>
+            {download && <DownloadBadge state={download.state} />}
+          </div>
+        </button>
+        <div className="shrink-0 pt-1">
+          <DownloadAction vodId={v.twitchVideoId} download={download} />
         </div>
-        <div className="text-xs text-[--color-muted] mt-1 flex gap-4">
-          <span>{row.streamerDisplayName}</span>
-          <span>{formatUnixSeconds(v.streamStartedAt)}</span>
-          <span>{formatDurationSeconds(v.durationSeconds)}</span>
-          <span>{row.chapters.length} chapter{row.chapters.length === 1 ? "" : "s"}</span>
-        </div>
-      </button>
+      </div>
     </li>
+  );
+}
+
+function DownloadBadge({ state }: { state: DownloadState }) {
+  const label: Record<DownloadState, string> = {
+    queued: "Queued",
+    downloading: "Downloading",
+    paused: "Paused",
+    completed: "Downloaded",
+    failed_retryable: "Retrying",
+    failed_permanent: "Failed",
+  };
+  const palette: Record<DownloadState, string> = {
+    queued: "bg-[--color-surface] text-[--color-muted]",
+    downloading: "bg-blue-500/20 text-blue-300",
+    paused: "bg-amber-500/20 text-amber-300",
+    completed: "bg-emerald-500/20 text-emerald-300",
+    failed_retryable: "bg-orange-500/20 text-orange-300",
+    failed_permanent: "bg-red-500/20 text-red-400",
+  };
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${palette[state]}`}
+    >
+      {label[state]}
+    </span>
+  );
+}
+
+function DownloadAction({
+  vodId,
+  download,
+}: {
+  vodId: string;
+  download: DownloadRow | null;
+}) {
+  const enqueue = useEnqueueDownload();
+  const retry = useRetryDownload();
+  if (!download) {
+    return (
+      <Button
+        variant="primary"
+        onClick={() => enqueue.mutate(vodId)}
+        disabled={enqueue.isPending}
+      >
+        Download
+      </Button>
+    );
+  }
+  if (download.state === "completed") {
+    return (
+      <Button variant="secondary" disabled title="Player lands in Phase 5">
+        Watch
+      </Button>
+    );
+  }
+  if (
+    download.state === "failed_retryable" ||
+    download.state === "failed_permanent"
+  ) {
+    return (
+      <Button
+        variant="primary"
+        onClick={() => retry.mutate(vodId)}
+        disabled={retry.isPending}
+      >
+        Retry
+      </Button>
+    );
+  }
+  return (
+    <Button variant="secondary" disabled>
+      In queue
+    </Button>
   );
 }
 
