@@ -6,6 +6,7 @@ pub mod app;
 pub mod credentials;
 pub mod downloads;
 pub mod health;
+pub mod media;
 pub mod poll;
 pub mod settings;
 pub mod storage;

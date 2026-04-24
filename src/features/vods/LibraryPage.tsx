@@ -9,10 +9,17 @@ import {
 } from "@/features/downloads/use-downloads";
 import { useStreamers } from "@/features/streamers/use-streamers";
 import { useVods } from "@/features/vods/use-vods";
-import type { DownloadRow, DownloadState, VodWithChapters } from "@/ipc";
+import { VodCard } from "@/features/vods/VodCard";
+import type { DownloadRow, VodWithChapters } from "@/ipc";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
 
-type StatusFilter = "all" | "eligible" | "skipped_game" | "skipped_sub_only" | "skipped_live" | "error";
+type StatusFilter =
+  | "all"
+  | "eligible"
+  | "skipped_game"
+  | "skipped_sub_only"
+  | "skipped_live"
+  | "error";
 
 const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
   { key: "all", label: "All" },
@@ -52,8 +59,15 @@ export function LibraryPage() {
 
   return (
     <div className="flex gap-6 h-full">
-      <div className="flex-1 min-w-0 space-y-4">
-        <div className="flex flex-wrap gap-2" role="toolbar" aria-label="VOD filters">
+      <section
+        className="flex-1 min-w-0 space-y-4"
+        aria-label="Library grid"
+      >
+        <div
+          className="flex flex-wrap gap-2"
+          role="toolbar"
+          aria-label="VOD filters"
+        >
           {STATUS_OPTIONS.map((opt) => (
             <button
               key={opt.key}
@@ -77,7 +91,10 @@ export function LibraryPage() {
           >
             <option value="">All streamers</option>
             {streamers.data?.map((s) => (
-              <option key={s.streamer.twitchUserId} value={s.streamer.twitchUserId}>
+              <option
+                key={s.streamer.twitchUserId}
+                value={s.streamer.twitchUserId}
+              >
                 {s.streamer.displayName}
               </option>
             ))}
@@ -98,19 +115,23 @@ export function LibraryPage() {
         )}
 
         {vods.data && vods.data.length > 0 && (
-          <ul className="divide-y divide-[--color-border] rounded border border-[--color-border] bg-[--color-surface] max-h-[calc(100vh-200px)] overflow-y-auto">
+          <ul
+            className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 max-h-[calc(100vh-200px)] overflow-y-auto pr-1"
+            aria-label={`Library — ${vods.data.length} VODs`}
+          >
             {vods.data.map((v) => (
-              <VodRow
-                key={v.vod.twitchVideoId}
-                row={v}
-                download={downloadsById.get(v.vod.twitchVideoId) ?? null}
-                selected={selected === v.vod.twitchVideoId}
-                onSelect={() => setSelected(v.vod.twitchVideoId)}
-              />
+              <li key={v.vod.twitchVideoId}>
+                <VodCard
+                  row={v}
+                  download={downloadsById.get(v.vod.twitchVideoId) ?? null}
+                  selected={selected === v.vod.twitchVideoId}
+                  onSelect={() => setSelected(v.vod.twitchVideoId)}
+                />
+              </li>
             ))}
           </ul>
         )}
-      </div>
+      </section>
 
       <aside
         className="w-96 shrink-0 border-l border-[--color-border] pl-6"
@@ -120,134 +141,22 @@ export function LibraryPage() {
           vod={
             vods.data?.find((v) => v.vod.twitchVideoId === selected) ?? null
           }
+          download={selected ? downloadsById.get(selected) ?? null : null}
         />
       </aside>
     </div>
   );
 }
 
-function VodRow({
-  row,
-  download,
-  selected,
-  onSelect,
-}: {
-  row: VodWithChapters;
-  download: DownloadRow | null;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const v = row.vod;
-  return (
-    <li>
-      <div
-        className={`flex items-start gap-4 px-4 py-3 ${selected ? "bg-[--color-bg]" : "hover:bg-[--color-bg]"}`}
-      >
-        <button
-          type="button"
-          onClick={onSelect}
-          aria-current={selected ? "true" : undefined}
-          className="flex-1 text-left focus:outline focus:outline-2 focus:outline-[--color-accent]"
-        >
-          <div className="flex items-baseline justify-between gap-4">
-            <span className="font-medium truncate">{v.title}</span>
-            <span className="text-[10px] uppercase tracking-wider text-[--color-muted] whitespace-nowrap">
-              {v.ingestStatus}
-            </span>
-          </div>
-          <div className="text-xs text-[--color-muted] mt-1 flex gap-4 items-center">
-            <span>{row.streamerDisplayName}</span>
-            <span>{formatUnixSeconds(v.streamStartedAt)}</span>
-            <span>{formatDurationSeconds(v.durationSeconds)}</span>
-            <span>
-              {row.chapters.length} chapter{row.chapters.length === 1 ? "" : "s"}
-            </span>
-            {download && <DownloadBadge state={download.state} />}
-          </div>
-        </button>
-        <div className="shrink-0 pt-1">
-          <DownloadAction vodId={v.twitchVideoId} download={download} />
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function DownloadBadge({ state }: { state: DownloadState }) {
-  const label: Record<DownloadState, string> = {
-    queued: "Queued",
-    downloading: "Downloading",
-    paused: "Paused",
-    completed: "Downloaded",
-    failed_retryable: "Retrying",
-    failed_permanent: "Failed",
-  };
-  const palette: Record<DownloadState, string> = {
-    queued: "bg-[--color-surface] text-[--color-muted]",
-    downloading: "bg-blue-500/20 text-blue-300",
-    paused: "bg-amber-500/20 text-amber-300",
-    completed: "bg-emerald-500/20 text-emerald-300",
-    failed_retryable: "bg-orange-500/20 text-orange-300",
-    failed_permanent: "bg-red-500/20 text-red-400",
-  };
-  return (
-    <span
-      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${palette[state]}`}
-    >
-      {label[state]}
-    </span>
-  );
-}
-
-function DownloadAction({
-  vodId,
+function VodDetail({
+  vod,
   download,
 }: {
-  vodId: string;
+  vod: VodWithChapters | null;
   download: DownloadRow | null;
 }) {
   const enqueue = useEnqueueDownload();
   const retry = useRetryDownload();
-  if (!download) {
-    return (
-      <Button
-        variant="primary"
-        onClick={() => enqueue.mutate(vodId)}
-        disabled={enqueue.isPending}
-      >
-        Download
-      </Button>
-    );
-  }
-  if (download.state === "completed") {
-    return (
-      <Button variant="secondary" disabled title="Player lands in Phase 5">
-        Watch
-      </Button>
-    );
-  }
-  if (
-    download.state === "failed_retryable" ||
-    download.state === "failed_permanent"
-  ) {
-    return (
-      <Button
-        variant="primary"
-        onClick={() => retry.mutate(vodId)}
-        disabled={retry.isPending}
-      >
-        Retry
-      </Button>
-    );
-  }
-  return (
-    <Button variant="secondary" disabled>
-      In queue
-    </Button>
-  );
-}
-
-function VodDetail({ vod }: { vod: VodWithChapters | null }) {
   if (!vod) {
     return (
       <p className="text-sm text-[--color-muted]">
@@ -264,6 +173,42 @@ function VodDetail({ vod }: { vod: VodWithChapters | null }) {
           {vod.streamerDisplayName} · {formatUnixSeconds(v.streamStartedAt)}
         </p>
       </div>
+
+      <div className="flex flex-wrap gap-2">
+        {!download && (
+          <Button
+            variant="primary"
+            onClick={() => enqueue.mutate(v.twitchVideoId)}
+            disabled={enqueue.isPending}
+          >
+            Download
+          </Button>
+        )}
+        {download?.state === "completed" && (
+          <Button variant="secondary" disabled title="Player lands in Phase 5">
+            Watch
+          </Button>
+        )}
+        {(download?.state === "failed_retryable" ||
+          download?.state === "failed_permanent") && (
+          <Button
+            variant="primary"
+            onClick={() => retry.mutate(v.twitchVideoId)}
+            disabled={retry.isPending}
+          >
+            Retry
+          </Button>
+        )}
+        {download &&
+          !["completed", "failed_retryable", "failed_permanent"].includes(
+            download.state
+          ) && (
+            <Button variant="secondary" disabled>
+              In queue
+            </Button>
+          )}
+      </div>
+
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         <dt className="text-[--color-muted]">Status</dt>
         <dd>{v.ingestStatus}</dd>

@@ -76,6 +76,9 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::app::list_shortcuts,
             commands::app::set_shortcut,
             commands::app::reset_shortcuts,
+            // Phase 5
+            commands::media::get_vod_assets,
+            commands::media::regenerate_vod_thumbnail,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS

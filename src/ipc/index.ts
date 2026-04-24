@@ -72,6 +72,8 @@ import {
   type TrayActionInput,
   type TrayActionKind,
   type TriggerPollInput,
+  type VodAssets,
+  type VodAssetsInput,
   type VodIdInput,
   type VodIngestedEvent,
   type VodUpdatedEvent,
@@ -142,6 +144,8 @@ export type {
   TrayActionInput,
   TrayActionKind,
   TriggerPollInput,
+  VodAssets,
+  VodAssetsInput,
   VodIdInput,
   VodIngestedEvent,
   VodUpdatedEvent,
@@ -301,6 +305,12 @@ export const commands = {
     unwrap(await generatedCommands.setShortcut(input)),
   resetShortcuts: async (): Promise<Shortcut[]> =>
     unwrap(await generatedCommands.resetShortcuts()),
+  // --- Phase 5 ---
+  getVodAssets: async (input: VodAssetsInput): Promise<VodAssets> =>
+    unwrap(await generatedCommands.getVodAssets(input)),
+  regenerateVodThumbnail: async (input: VodAssetsInput): Promise<void> => {
+    unwrap(await generatedCommands.regenerateVodThumbnail(input));
+  },
 };
 
 /**

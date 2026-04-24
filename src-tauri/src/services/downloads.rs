@@ -42,7 +42,9 @@ use crate::domain::sanitize::sanitize_component;
 use crate::error::AppError;
 use crate::infra::clock::Clock;
 use crate::infra::db::Db;
-use crate::infra::ffmpeg::{RemuxSpec, SharedFfmpeg, ThumbnailSpec, already_mp4};
+use crate::infra::ffmpeg::{
+    PREVIEW_FRAME_PERCENTS, PreviewFramesSpec, RemuxSpec, SharedFfmpeg, ThumbnailSpec, already_mp4,
+};
 use crate::infra::fs::move_::atomic_move;
 use crate::infra::fs::space::{FreeSpaceProbe, check_preflight};
 use crate::infra::throttle::GlobalRate;
@@ -776,6 +778,38 @@ impl DownloadQueueService {
             debug!(error = %e, "thumbnail extraction failed; continuing without one");
         }
 
+        // Preview frames for the library grid hover shimmer (Phase 5).
+        // We extract to staging and move each file into the library
+        // alongside the thumbnail. If any frame fails we delete the
+        // partial set — the renderer falls back to the single thumb.
+        let preview_abs_paths: Vec<std::path::PathBuf> = layout
+            .preview_frame_paths(&view)
+            .into_iter()
+            .map(|p| library_root.join(p))
+            .collect();
+        let preview_staging: Vec<std::path::PathBuf> = (1..=PREVIEW_FRAME_PERCENTS.len())
+            .map(|i| staging_root.join(format!("{stem}-preview-{i:02}.jpg")))
+            .collect();
+        let preview_frames: Vec<(f64, std::path::PathBuf)> = PREVIEW_FRAME_PERCENTS
+            .iter()
+            .copied()
+            .zip(preview_staging.iter().cloned())
+            .collect();
+        if let Err(e) = self
+            .ffmpeg
+            .extract_preview_frames(&PreviewFramesSpec {
+                source: mp4_staging.clone(),
+                duration_seconds: vod.vod.duration_seconds,
+                frames: preview_frames,
+            })
+            .await
+        {
+            debug!(error = %e, "preview frame extraction failed; falling back to single thumb");
+            for p in &preview_staging {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        }
+
         // Atomic move of the mp4 into the library.
         atomic_move(&mp4_staging, &final_path)
             .await
@@ -785,6 +819,18 @@ impl DownloadQueueService {
             })?;
         if thumb_staging.exists() {
             let _ = atomic_move(&thumb_staging, &thumbnail_abs).await;
+        }
+        // Move preview frames if all were produced; a partial set is
+        // discarded to keep the rendering contract simple.
+        let all_frames_written = preview_staging.iter().all(|p| p.exists());
+        if all_frames_written && preview_staging.len() == preview_abs_paths.len() {
+            for (src, dst) in preview_staging.iter().zip(preview_abs_paths.iter()) {
+                let _ = atomic_move(src, dst).await;
+            }
+        } else {
+            for p in &preview_staging {
+                let _ = tokio::fs::remove_file(p).await;
+            }
         }
 
         // Sidecars — NFO for the plex layout.

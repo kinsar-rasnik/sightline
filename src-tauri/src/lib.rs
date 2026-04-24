@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::infra::clock::{Clock, SystemClock};
 use crate::infra::db::Db;
@@ -40,6 +40,7 @@ use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
     LibraryMigrationEvent, LibraryMigratorService, MigrationSink,
 };
+use crate::services::media_assets::MediaAssetsService;
 use crate::services::notifications::NotificationService;
 use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
@@ -70,6 +71,8 @@ pub struct AppState {
     pub timeline: Arc<TimelineIndexerService>,
     pub shortcuts: Arc<ShortcutsService>,
     pub notifications: Arc<NotificationService>,
+    // --- Phase 5 ---
+    pub media_assets: Arc<MediaAssetsService>,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -224,7 +227,7 @@ pub fn run() {
                     db.clone(),
                     clock.clone(),
                     ytdlp,
-                    ffmpeg,
+                    ffmpeg.clone(),
                     space_probe,
                     rate,
                     SettingsService::new(db.clone(), clock.clone()),
@@ -245,6 +248,25 @@ pub fn run() {
                 let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Phase 5: media-asset resolver (shared by the player
+                // route + the grid's hover preview) + preview-frame
+                // backfill for pre-Phase-5 downloads.
+                let media_assets_svc = Arc::new(MediaAssetsService::new(
+                    db.clone(),
+                    ffmpeg.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+                {
+                    let backfill = media_assets_svc.clone();
+                    tokio::spawn(async move {
+                        match backfill.backfill_preview_frames().await {
+                            Ok(n) if n > 0 => info!(count = n, "preview backfill complete"),
+                            Ok(_) => debug!("preview backfill: nothing to do"),
+                            Err(e) => warn!(error = ?e, "preview backfill failed"),
+                        }
+                    });
+                }
 
                 // Seed the close-behavior atomic from the persisted
                 // setting so `on_window_event` can read it synchronously.
@@ -481,6 +503,7 @@ pub fn run() {
                     timeline: timeline_svc,
                     shortcuts: shortcuts_svc,
                     notifications: notifications_svc,
+                    media_assets: media_assets_svc,
                     close_behavior,
                     app_handle: handle.clone(),
                 });

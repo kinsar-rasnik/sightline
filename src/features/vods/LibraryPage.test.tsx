@@ -19,6 +19,12 @@ vi.mock("@/ipc", async () => {
       listDownloads: vi.fn().mockResolvedValue([]),
       enqueueDownload: vi.fn(),
       retryDownload: vi.fn(),
+      getVodAssets: vi.fn().mockResolvedValue({
+        vodId: "v1",
+        videoPath: null,
+        thumbnailPath: null,
+        previewFramePaths: [],
+      }),
     },
   };
 });
@@ -78,37 +84,48 @@ describe("LibraryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(commands.listStreamers).mockResolvedValue([]);
+    vi.mocked(commands.getVodAssets).mockResolvedValue({
+      vodId: "v1",
+      videoPath: null,
+      thumbnailPath: null,
+      previewFramePaths: [],
+    });
   });
 
   test("shows empty state when no VODs match", async () => {
     vi.mocked(commands.listVods).mockResolvedValue([]);
     renderWith(<LibraryPage />);
     await waitFor(() =>
-      expect(screen.getByText(/no vods match these filters/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/no vods match these filters/i)
+      ).toBeInTheDocument()
     );
   });
 
-  test("renders VOD rows with title + streamer + chapter count", async () => {
+  test("renders a VOD card with title and streamer", async () => {
     vi.mocked(commands.listVods).mockResolvedValue([stubVod()]);
     renderWith(<LibraryPage />);
     await waitFor(() =>
       expect(screen.getByText("Fake VOD")).toBeInTheDocument()
     );
     expect(screen.getAllByText(/Sampler/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/1 chapter/i)).toBeInTheDocument();
   });
 
-  test("clicking a row opens the detail drawer", async () => {
+  test("clicking a card opens the detail drawer with chapters", async () => {
     vi.mocked(commands.listVods).mockResolvedValue([stubVod()]);
     renderWith(<LibraryPage />);
     await waitFor(() =>
       expect(screen.getByText("Fake VOD")).toBeInTheDocument()
     );
-    await userEvent.click(screen.getByRole("button", { name: /fake vod/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /open details for fake vod/i })
+    );
     await waitFor(() =>
       expect(screen.getByText(/Grand Theft Auto V/i)).toBeInTheDocument()
     );
-    expect(screen.getByRole("link", { name: /open on twitch/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /open on twitch/i })
+    ).toBeInTheDocument();
   });
 
   test("status filter chip narrows the query", async () => {

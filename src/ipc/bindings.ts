@@ -66,6 +66,20 @@ export const commands = {
 	listShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("list_shortcuts")),
 	setShortcut: (input: SetShortcutInput) => typedError<Shortcut[], AppError>(__TAURI_INVOKE("set_shortcut", { input })),
 	resetShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("reset_shortcuts")),
+	/**
+	 *  Fetch the asset bundle for a single VOD. Returns a struct with
+	 *  every `Option<String>` field set to `None` if the VOD has no
+	 *  completed download — that's the expected state for a VOD the user
+	 *  hasn't enqueued yet, not an error.
+	 */
+	getVodAssets: (input: VodAssetsInput) => typedError<VodAssets, AppError>(__TAURI_INVOKE("get_vod_assets", { input })),
+	/**
+	 *  Force-regenerate the single-frame thumbnail for a VOD. Useful for
+	 *  pre-Phase-5 rows that were downloaded before the preview pipeline
+	 *  existed and the thumbnail is missing. Returns when ffmpeg exits
+	 *  (success or failure — failure surfaces as `AppError::Sidecar`).
+	 */
+	regenerateVodThumbnail: (input: VodAssetsInput) => typedError<null, AppError>(__TAURI_INVOKE("regenerate_vod_thumbnail", { input })),
 };
 
 /* Types */
@@ -677,6 +691,32 @@ export type Vod = {
 	statusReason: string,
 	firstSeenAt: number,
 	lastSeenAt: number,
+};
+
+/**
+ *  Renderer-facing bundle of per-VOD asset paths. Every `path` is an
+ *  absolute filesystem string; the frontend passes each through
+ *  `convertFileSrc`.
+ */
+export type VodAssets = {
+	vodId: string,
+	/**
+	 *  Path to the `.mp4` under the library root if the download has
+	 *  completed; `None` otherwise.
+	 */
+	videoPath: string | null,
+	// Single-frame thumbnail from the Phase-3 pipeline.
+	thumbnailPath: string | null,
+	/**
+	 *  Ordered list of six hover-preview frames. Empty if the preview
+	 *  set is missing (pre-Phase-5 download that hasn't been backfilled
+	 *  yet, or an ffmpeg failure).
+	 */
+	previewFramePaths: string[],
+};
+
+export type VodAssetsInput = {
+	vodId: string,
 };
 
 /**

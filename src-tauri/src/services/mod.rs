@@ -8,6 +8,7 @@ pub mod events;
 pub mod health;
 pub mod ingest;
 pub mod library_migrator;
+pub mod media_assets;
 pub mod notifications;
 pub mod poller;
 pub mod settings;
