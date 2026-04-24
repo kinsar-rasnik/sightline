@@ -11,6 +11,7 @@ pub mod ipc;
 pub mod services;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager};
@@ -39,10 +40,13 @@ use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
     LibraryMigrationEvent, LibraryMigratorService, MigrationSink,
 };
+use crate::services::notifications::NotificationService;
 use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
+use crate::services::shortcuts::ShortcutsService;
 use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
+use crate::services::timeline_indexer::TimelineIndexerService;
 use crate::services::vods::VodReadService;
 
 /// Shared application state. One instance is constructed during
@@ -62,7 +66,35 @@ pub struct AppState {
     pub library_migrator: Arc<LibraryMigratorService>,
     pub library_migration_sink: MigrationSink,
     pub storage: Arc<StorageService>,
+    // --- Phase 4 ---
+    pub timeline: Arc<TimelineIndexerService>,
+    pub shortcuts: Arc<ShortcutsService>,
+    pub notifications: Arc<NotificationService>,
+    /// Sync mirror of `app_settings.window_close_behavior` so
+    /// `on_window_event` can read the current preference without
+    /// touching the async settings service. 0 = hide, 1 = quit.
+    /// Updated by `cmd_set_window_close_behavior`.
+    pub close_behavior: Arc<AtomicU8>,
     pub app_handle: tauri::AppHandle,
+}
+
+/// Encode a [`crate::services::settings::WindowCloseBehavior`] as a u8
+/// for atomic storage on `AppState`.
+pub fn encode_close_behavior(b: crate::services::settings::WindowCloseBehavior) -> u8 {
+    match b {
+        crate::services::settings::WindowCloseBehavior::Hide => 0,
+        crate::services::settings::WindowCloseBehavior::Quit => 1,
+    }
+}
+
+/// Counterpart of [`encode_close_behavior`]. Any value other than 1 is
+/// treated as `Hide` so an uninitialised / corrupt atomic value can
+/// never cause a surprising quit.
+pub fn decode_close_behavior(v: u8) -> crate::services::settings::WindowCloseBehavior {
+    match v {
+        1 => crate::services::settings::WindowCloseBehavior::Quit,
+        _ => crate::services::settings::WindowCloseBehavior::Hide,
+    }
 }
 
 impl AppState {
@@ -207,11 +239,67 @@ pub fn run() {
                 ));
                 let storage_svc = Arc::new(StorageService::new(Arc::new(SystemFreeSpace)));
 
+                // Phase 4 services.
+                let timeline_svc =
+                    Arc::new(TimelineIndexerService::new(db.clone(), clock.clone()));
+                let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
+                let notifications_svc =
+                    Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Seed the close-behavior atomic from the persisted
+                // setting so `on_window_event` can read it synchronously.
+                let initial_settings = settings_svc.get().await.ok();
+                let close_behavior = Arc::new(AtomicU8::new(encode_close_behavior(
+                    initial_settings
+                        .as_ref()
+                        .map(|s| s.window_close_behavior)
+                        .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide),
+                )));
+
+                // Opportunistic backfill: if we have VODs but no intervals,
+                // populate the index in the background so the timeline UI
+                // renders quickly after upgrade.
+                {
+                    let timeline = timeline_svc.clone();
+                    let handle_backfill = handle.clone();
+                    tokio::spawn(async move {
+                        if matches!(timeline.is_empty().await, Ok(true)) {
+                            let sink: crate::services::timeline_indexer::IndexerEventSink = Arc::new(
+                                move |ev| match ev {
+                                    crate::services::timeline_indexer::IndexerEvent::Rebuilding { processed, total } => {
+                                        let progress = if total == 0 {
+                                            1.0
+                                        } else {
+                                            (processed as f64) / (total as f64)
+                                        };
+                                        let _ = handle_backfill.emit(
+                                            crate::services::events::EV_TIMELINE_INDEX_REBUILDING,
+                                            crate::services::events::TimelineIndexRebuildingEvent {
+                                                progress,
+                                                processed,
+                                                total,
+                                            },
+                                        );
+                                    }
+                                    crate::services::timeline_indexer::IndexerEvent::Rebuilt { total } => {
+                                        let _ = handle_backfill.emit(
+                                            crate::services::events::EV_TIMELINE_INDEX_REBUILT,
+                                            crate::services::events::TimelineIndexRebuiltEvent { total },
+                                        );
+                                    }
+                                },
+                            );
+                            let _ = timeline.rebuild_all(sink).await;
+                        }
+                    });
+                }
+
                 // Event sink: dispatch each PollerEvent variant to the
                 // matching Tauri topic. Keeping all event construction
                 // in one closure makes it trivial to trace the surface
                 // the webview actually sees.
                 let sink_handle = handle.clone();
+                let sink_timeline = timeline_svc.clone();
                 let sink = Arc::new(move |ev: PollerEvent| match ev {
                     PollerEvent::PollStarted {
                         twitch_user_id,
@@ -252,12 +340,38 @@ pub fn run() {
                         let _ = sink_handle.emit(
                             EV_VOD_INGESTED,
                             VodIngestedEvent {
-                                twitch_video_id,
-                                twitch_user_id,
+                                twitch_video_id: twitch_video_id.clone(),
+                                twitch_user_id: twitch_user_id.clone(),
                                 ingest_status,
                                 stream_started_at,
                             },
                         );
+                        // Phase 4: keep the timeline index in sync.
+                        let timeline = sink_timeline.clone();
+                        tokio::spawn(async move {
+                            // Resolve duration from vods row. We use a
+                            // separate query rather than threading the
+                            // value through IngestEvent so the event
+                            // surface stays narrow. Any error is
+                            // swallowed — the timeline-rebuild command
+                            // is the user-facing recovery path.
+                            if let Ok(row) = sqlx::query_scalar::<_, i64>(
+                                "SELECT duration_seconds FROM vods WHERE twitch_video_id = ?",
+                            )
+                            .bind(&twitch_video_id)
+                            .fetch_one(timeline.pool())
+                            .await
+                            {
+                                let _ = timeline
+                                    .upsert_from_vod(
+                                        &twitch_video_id,
+                                        &twitch_user_id,
+                                        stream_started_at,
+                                        row,
+                                    )
+                                    .await;
+                            }
+                        });
                     }
                     PollerEvent::Ingest(IngestEvent::VodUpdated {
                         twitch_video_id,
@@ -364,6 +478,10 @@ pub fn run() {
                     library_migrator,
                     library_migration_sink,
                     storage: storage_svc,
+                    timeline: timeline_svc,
+                    shortcuts: shortcuts_svc,
+                    notifications: notifications_svc,
+                    close_behavior,
                     app_handle: handle.clone(),
                 });
 
@@ -380,11 +498,36 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event
-                && let Some(state) = window.try_state::<AppState>()
-            {
-                state.poller_handle.shutdown();
-                state.downloads_handle.shutdown();
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Phase 4: default close button → hide window. Tokio
+                // services keep running. Explicit Quit (tray menu,
+                // Cmd/Ctrl+Q, File > Quit → cmd_request_shutdown) is
+                // what actually stops the poller/queue and exits the
+                // process.
+                //
+                // SECURITY: read the behavior from a synchronous atomic
+                // mirror rather than `block_on`-ing the async settings
+                // service — a `block_on` inside a Tokio worker thread
+                // deadlocks the multi-threaded scheduler and prevents
+                // the graceful-shutdown path below from running. The
+                // atomic is seeded at startup and kept in sync by
+                // `cmd_set_window_close_behavior`.
+                let behavior = match window.try_state::<AppState>() {
+                    Some(state) => decode_close_behavior(state.close_behavior.load(Ordering::Acquire)),
+                    None => crate::services::settings::WindowCloseBehavior::Hide,
+                };
+                match behavior {
+                    crate::services::settings::WindowCloseBehavior::Hide => {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
+                    crate::services::settings::WindowCloseBehavior::Quit => {
+                        if let Some(state) = window.try_state::<AppState>() {
+                            state.poller_handle.shutdown();
+                            state.downloads_handle.shutdown();
+                        }
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())
@@ -413,25 +556,38 @@ fn unix_now() -> i64 {
 /// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's
 /// resolver can't find it — callers fall back to the binary on PATH
 /// (dev workflow) or surface a Sidecar error to the user.
+///
+/// Tauri's `bundle.externalBin` convention places binaries at
+/// `binaries/<name>-<target-triple>[.exe]`. `TARGET_TRIPLE` is baked in
+/// at compile time via `build.rs`, matching the filenames produced by
+/// `scripts/bundle-sidecars.sh` (ADR-0013).
 fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::PathBuf> {
     use tauri::path::BaseDirectory;
-    // Tauri bundles sidecars under `binaries/<name>-<target-triple>`.
-    // Naming matches the `src-tauri/binaries/` convention set by
-    // ADR-0003 and `scripts/bundle-sidecars.sh`.
-    let triple = std::env::consts::ARCH;
-    // Just a simple attempt — the sidecar manager in Phase 3 housekeeping
-    // will get fancier. We only need `yt-dlp` and `ffmpeg` to be
-    // available on PATH during `pnpm tauri dev`; CI packages the
-    // bundle.
-    for candidate in [
+    let triple = env!("TARGET_TRIPLE");
+    let ext = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    // Try the canonical bundled path first, then the repo's `src-tauri/binaries`
+    // (covers `pnpm tauri dev` before a `tauri build` has copied resources).
+    let candidates = [
+        format!("binaries/{name}-{triple}{ext}"),
+        format!("binaries/{name}{ext}"),
         format!("binaries/{name}"),
-        format!("binaries/{name}-{triple}"),
-    ] {
-        if let Ok(path) = handle.path().resolve(&candidate, BaseDirectory::Resource)
+    ];
+    for candidate in &candidates {
+        if let Ok(path) = handle.path().resolve(candidate, BaseDirectory::Resource)
             && path.exists()
         {
             return Some(path);
         }
+    }
+    // Dev fallback: look relative to the repo.
+    let repo_candidate =
+        std::path::PathBuf::from("src-tauri/binaries").join(format!("{name}-{triple}{ext}"));
+    if repo_candidate.exists() {
+        return Some(repo_candidate);
     }
     None
 }

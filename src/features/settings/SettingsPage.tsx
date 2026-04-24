@@ -53,7 +53,188 @@ export function SettingsPage() {
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}
       />
+      <AppearanceSection />
+      <NotificationsSection
+        settings={data}
+        onUpdate={(patch) => update.mutate(patch)}
+      />
+      <AdvancedSection
+        settings={data}
+        onUpdate={(patch) => update.mutate(patch)}
+      />
     </div>
+  );
+}
+
+function AppearanceSection() {
+  return (
+    <section
+      aria-labelledby="appearance-heading"
+      className="space-y-2 border-t border-[--color-border] pt-6"
+    >
+      <h3 id="appearance-heading" className="text-base font-medium">
+        Appearance
+      </h3>
+      <p className="text-xs text-[--color-muted] max-w-prose">
+        Sightline follows your OS light/dark preference. See{" "}
+        <a
+          className="underline text-[--color-accent]"
+          href="../../docs/design-tokens.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          design tokens
+        </a>{" "}
+        for the palette and motion variables.
+      </p>
+    </section>
+  );
+}
+
+function NotificationsSection({
+  settings,
+  onUpdate,
+}: {
+  settings: AppSettings;
+  onUpdate: (patch: SettingsPatch) => void;
+}) {
+  return (
+    <section
+      aria-labelledby="notifications-heading"
+      className="space-y-3 border-t border-[--color-border] pt-6"
+    >
+      <h3 id="notifications-heading" className="text-base font-medium">
+        Notifications
+      </h3>
+      <p className="text-xs text-[--color-muted] max-w-prose">
+        Download and ingest alerts. Rate-limited: a burst of new VODs
+        from favorites collapses to a single banner.
+      </p>
+      <div className="grid grid-cols-1 gap-2 max-w-md">
+        <Toggle
+          label="Enable notifications (master)"
+          checked={settings.notificationsEnabled}
+          onChange={(v) => onUpdate({ notificationsEnabled: v })}
+        />
+        <Toggle
+          label="Download completed"
+          checked={settings.notifyDownloadComplete}
+          onChange={(v) => onUpdate({ notifyDownloadComplete: v })}
+          disabled={!settings.notificationsEnabled}
+        />
+        <Toggle
+          label="Download failed (always recommended)"
+          checked={settings.notifyDownloadFailed}
+          onChange={(v) => onUpdate({ notifyDownloadFailed: v })}
+          disabled={!settings.notificationsEnabled}
+        />
+        <Toggle
+          label="New VODs from favorite streamers"
+          checked={settings.notifyFavoritesIngest}
+          onChange={(v) => onUpdate({ notifyFavoritesIngest: v })}
+          disabled={!settings.notificationsEnabled}
+        />
+        <Toggle
+          label="Storage low warning"
+          checked={settings.notifyStorageLow}
+          onChange={(v) => onUpdate({ notifyStorageLow: v })}
+          disabled={!settings.notificationsEnabled}
+        />
+      </div>
+    </section>
+  );
+}
+
+function AdvancedSection({
+  settings,
+  onUpdate,
+}: {
+  settings: AppSettings;
+  onUpdate: (patch: SettingsPatch) => void;
+}) {
+  return (
+    <section
+      aria-labelledby="advanced-heading"
+      className="space-y-3 border-t border-[--color-border] pt-6"
+    >
+      <h3 id="advanced-heading" className="text-base font-medium">
+        Advanced
+      </h3>
+
+      <fieldset className="space-y-2">
+        <legend className="text-xs text-[--color-muted]">
+          When the window close button is clicked
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ["hide", "Hide to tray (keep polling)"],
+              ["quit", "Quit"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={settings.windowCloseBehavior === value}
+              onClick={() => onUpdate({ windowCloseBehavior: value })}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                settings.windowCloseBehavior === value
+                  ? "bg-[--color-accent] text-white border-transparent"
+                  : "bg-transparent text-[--color-fg] border-[--color-border] hover:bg-[--color-surface]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      <Toggle
+        label="Start Sightline at login (opt-in)"
+        checked={settings.startAtLogin}
+        onChange={(v) => onUpdate({ startAtLogin: v })}
+      />
+      <Toggle
+        label="Show dock icon on macOS (if hidden, use the menu bar)"
+        checked={settings.showDockIcon}
+        onChange={(v) => onUpdate({ showDockIcon: v })}
+      />
+
+      <div className="pt-2 text-xs text-[--color-muted] max-w-prose">
+        <p>
+          Keyboard shortcuts can be customised — press <kbd>?</kbd> from
+          anywhere to see the current bindings. A settings UI for custom
+          keys lands alongside the Phase 4 polish follow-up.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        className="accent-[--color-accent]"
+      />
+      <span className={disabled ? "text-[--color-subtle]" : undefined}>
+        {label}
+      </span>
+    </label>
   );
 }
 

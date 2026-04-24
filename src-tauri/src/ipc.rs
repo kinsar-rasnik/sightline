@@ -23,12 +23,15 @@ use crate::commands;
 /// source) and offline (to regenerate bindings).
 pub fn ipc_builder() -> Builder<Wry> {
     use crate::services::events::{
-        AppReadyEvent, CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent,
-        DownloadProgressEvent, DownloadStateChangedEvent, LibraryMigratingEvent,
-        LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
-        PollStartedEvent, StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerRemovedEvent,
-        VodIngestedEvent, VodUpdatedEvent,
+        AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CredentialsChangedEvent,
+        DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
+        DownloadStateChangedEvent, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
+        LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
+        StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerFavoritedEvent,
+        StreamerRemovedEvent, StreamerUnfavoritedEvent, TimelineIndexRebuildingEvent,
+        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent,
     };
+    use crate::services::notifications::NotificationPayload;
 
     Builder::<Wry>::new()
         .commands(collect_commands![
@@ -58,6 +61,21 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::storage::get_library_info,
             commands::storage::migrate_library,
             commands::storage::get_migration_status,
+            // Phase 4
+            commands::timeline::list_timeline,
+            commands::timeline::get_co_streams,
+            commands::timeline::get_timeline_stats,
+            commands::timeline::rebuild_timeline_index,
+            commands::app::get_app_summary,
+            commands::app::pause_all_downloads,
+            commands::app::resume_all_downloads,
+            commands::app::set_window_close_behavior,
+            commands::app::toggle_streamer_favorite,
+            commands::app::request_shutdown,
+            commands::app::emit_tray_action,
+            commands::app::list_shortcuts,
+            commands::app::set_shortcut,
+            commands::app::reset_shortcuts,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -80,6 +98,14 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<LibraryMigrationCompletedEvent>()
         .typ::<LibraryMigrationFailedEvent>()
         .typ::<StorageLowDiskWarningEvent>()
+        // Phase 4
+        .typ::<TimelineIndexRebuildingEvent>()
+        .typ::<TimelineIndexRebuiltEvent>()
+        .typ::<StreamerFavoritedEvent>()
+        .typ::<StreamerUnfavoritedEvent>()
+        .typ::<AppTrayActionEvent>()
+        .typ::<AppShutdownRequestedEvent>()
+        .typ::<NotificationPayload>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace

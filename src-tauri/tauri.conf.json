@@ -36,6 +36,10 @@
       "icons/128x128@2x.png",
       "icons/icon.png"
     ],
+    "externalBin": [
+      "binaries/yt-dlp",
+      "binaries/ffmpeg"
+    ],
     "category": "Entertainment",
     "shortDescription": "Multi-streamer GTA-RP VOD viewer.",
     "longDescription": "Aggregate VODs from every streamer you follow, order them by stream start time, and watch them in sync."

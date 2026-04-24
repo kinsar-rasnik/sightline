@@ -31,6 +31,14 @@ pub const EV_LIBRARY_MIGRATION_FAILED: &str = "library:migration_failed";
 
 pub const EV_STORAGE_LOW_DISK_WARNING: &str = "storage:low_disk_warning";
 
+// --- Phase 4: timeline + tray + shutdown + favorites ---
+pub const EV_TIMELINE_INDEX_REBUILDING: &str = "timeline:index_rebuilding";
+pub const EV_TIMELINE_INDEX_REBUILT: &str = "timeline:index_rebuilt";
+pub const EV_STREAMER_FAVORITED: &str = "streamer:favorited";
+pub const EV_STREAMER_UNFAVORITED: &str = "streamer:unfavorited";
+pub const EV_APP_TRAY_ACTION: &str = "app:tray_action";
+pub const EV_APP_SHUTDOWN_REQUESTED: &str = "app:shutdown_requested";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppReadyEvent {
@@ -153,4 +161,49 @@ pub struct LibraryMigrationFailedEvent {
 pub struct StorageLowDiskWarningEvent {
     pub path: String,
     pub free_bytes: i64,
+}
+
+// --- Phase 4 event payloads ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineIndexRebuildingEvent {
+    /// Fraction complete in [0.0, 1.0].
+    pub progress: f64,
+    pub processed: i64,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineIndexRebuiltEvent {
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamerFavoritedEvent {
+    pub twitch_user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamerUnfavoritedEvent {
+    pub twitch_user_id: String,
+}
+
+/// Tray menu → webview coordination signal. The tray handler emits a
+/// specific `kind` string; the frontend narrows on it to route UI
+/// state (e.g. focus the Downloads route, surface a pause toast).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppTrayActionEvent {
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppShutdownRequestedEvent {
+    /// Deadline in unix-seconds — the services flush by this time.
+    pub deadline_at: i64,
 }

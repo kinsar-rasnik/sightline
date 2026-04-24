@@ -52,6 +52,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 wiremock = "0.6"
 pretty_assertions = "1"
 filetime = "0.2"
+proptest = "1"
 
 [features]
 # Exposes test helpers (e.g. `prime_token_for_tests`) so integration tests

@@ -203,17 +203,153 @@ player and watch-progress arrive in Phase 5.
 
 ---
 
-## Phase 4 — Library UI, settings, tray
+## Phase 4 — Tray daemon, timeline foundation, UI polish, sidecar bundling
 
-**Goal.** The app is usable: a library grid ordered by `stream_started_at`, a settings dialog for credentials and preferences, and a menu-bar / system-tray mode that keeps polling alive with the window closed.
+**Goal.** The app is usable headlessly, has a first-cut chronological
+timeline across streamers, ships a polished Plex-grade library grid +
+detail drawer, and — finally — bundles real yt-dlp + ffmpeg binaries
+with verified hashes. Scope deliberately stops short of the player
+(Phase 5) and multi-view sync engine (Phase 6).
+
+### Housekeeping first
+
+- [x] Dependabot sweep (no open PRs — Phase 3 cleaned the backlog).
+- [x] Real sidecar bundling: pinned URL + SHA-256 per platform in
+  `scripts/sidecars.lock`; bash + PowerShell scripts that verify hash
+  BEFORE extraction; `scripts/verify-sidecars.sh` used by pre-push +
+  CI + runtime; `tauri.conf.json` `externalBin` + `build.rs`
+  `TARGET_TRIPLE`; CI matrix step that runs real binaries on all
+  three OS; end-to-end smoke test in `tests/sidecar_smoke.rs`;
+  [ADR-0013](adr/0013-sidecar-bundling.md) documents the design,
+  source choices, alternatives, and refresh procedure.
+- [x] `scripts/verify.sh` now invokes `verify-sidecars.sh` as the
+  first gate step (`--no-sidecars` flag for fresh clones).
 
 ### Acceptance criteria
 
-- [ ] Library grid with virtualized rows, sorted by `stream_started_at` descending.
-- [ ] Streamer follow/unfollow flow.
-- [ ] Settings panel: Twitch credentials, game whitelist, polling interval, download defaults.
-- [ ] Tray icon with actions: open, pause all, quit. Close-to-tray on all platforms.
-- [ ] Accessibility: keyboard navigation for library and settings, screen-reader labels, prefers-reduced-motion honored.
+#### Tray / menu-bar daemon mode
+
+- [ ] Tauri tray plugin wired on all three OS. Menu: summary row +
+  Open Sightline, Pause all, Resume all, Quit.
+- [ ] Close button hides the window; the Tokio services (poller +
+  download queue) keep running. A one-time toast on the first close
+  explains the new behavior and offers "quit on close" override.
+- [ ] `cmd_set_window_close_behavior` persists `hide | quit`.
+- [ ] Explicit Quit: broadcasts `app:shutdown_requested`, poller
+  stops mid-cycle, download queue signals workers to pause + flush
+  progress, 10 s timeout, then process exits cleanly. Integration
+  test kills mid-download and verifies DB consistency on restart.
+- [ ] Optional `startAtLogin` setting (default off) registers via
+  Tauri's autostart plugin (LaunchAgent / Registry / XDG).
+
+#### Timeline foundation
+
+- [ ] Migration 0006: `stream_intervals` table with vod/streamer
+  FKs, start/end, and range + streamer indexes. `PRAGMA user_version = 6`.
+- [ ] `domain/timeline.rs` — pure: `Interval`,
+  `overlapping(a, b) -> Option<Interval>`, `bucket_by_day`,
+  `find_co_streams(around, all)`. Property-tested with proptest over
+  thousands of random intervals.
+- [ ] `services/timeline_indexer.rs` — subscribes to `vod:ingested`
+  and upserts. First-launch backfill (full rebuild when
+  `stream_intervals` empty but `vods` populated) with progress events.
+- [ ] `cmd_list_timeline` / `cmd_get_co_streams` /
+  `cmd_get_timeline_stats` / `cmd_rebuild_timeline_index`. Events:
+  `timeline:index_rebuilding` / `timeline:index_rebuilt`.
+
+#### Favorites (migration 0007)
+
+- [ ] `streamers.favorite` column (default 0).
+- [ ] `cmd_toggle_streamer_favorite({ streamer_id })`. Events
+  `streamer:favorited` / `streamer:unfavorited`.
+
+#### Library / home screen polish
+
+- [ ] `/library` flips from list → virtualized grid (16:9 cards).
+  Thumbnail, title, streamer + date, status badge, hover preview
+  cycling the 6 extracted frames. Quick-action overlay for
+  Play (disabled pending Phase 5), Mark watched (disabled pending
+  Phase 5's watch-progress), Open detail, More menu.
+- [ ] Slide-in detail drawer from the right: hero, full metadata,
+  chapters-as-timeline with GTA V highlighted, co-streams panel
+  (uses `cmd_get_co_streams`), download state + actions.
+- [ ] Filter/sort bar: chip-style streamer + status + game + date
+  range; sort: stream_start desc/asc, added desc, duration.
+  Fuzzy search over title + streamer.
+- [ ] URL-synced filter state (query params).
+- [ ] Design tokens documented in `docs/design-tokens.md`. Dark-mode
+  first with a fully-implemented light theme.
+- [ ] First-run empty state (3-step checklist).
+
+#### Timeline UI
+
+- [ ] `/timeline` horizontal time-axis view, zoomable
+  (day / week / month). Streamer lanes; overlaps visually obvious.
+  Click a bar → detail popover with jump buttons to overlapping
+  VODs. Filter chips. Keyboard-shortcuts. Virtualised viewport
+  (budget: 5 years × 20 streamers scrolls at 60 fps).
+
+#### Settings reorganization
+
+- [ ] Sections: Twitch, Polling, Downloads & Storage, Library,
+  Appearance (tokens), Advanced (shortcuts + autostart +
+  window-close behavior + diagnostics).
+- [ ] Shortcut customization UI. `cmd_set_shortcut`,
+  `cmd_reset_shortcuts`.
+
+#### Accessibility + keyboard navigation
+
+- [ ] Visible focus rings on every interactive element.
+- [ ] ARIA landmarks + live regions for polling/download updates.
+- [ ] Global shortcuts (customizable): `g l` / `g t` / `g d` /
+  `g s` / `g ,`, `/` focus search, `n` add streamer, `p` pause all,
+  `?` shortcut help overlay, `Cmd/Ctrl+Q` quit.
+- [ ] `@axe-core/react` in dev + `pnpm a11y` script.
+
+#### Notifications
+
+- [ ] Tauri notification plugin wired. Categories: download
+  completed, download failed (always), new VODs from favorites,
+  storage low.
+- [ ] Coalesce per-category rate limiting — a 20-VOD ingest
+  produces one notification, not 20.
+- [ ] Global + per-category toggles in Settings.
+
+#### Observability
+
+- [ ] Startup timing breakdown logged at `debug` (migrate, poller,
+  queue, indexer warmup, window show).
+- [ ] Performance marks via the Performance API on heavy routes.
+
+#### Security review
+
+- [ ] Subagent pass on tray menu actions, autostart registration,
+  shortcut customization JSON, and sidecar download scripts
+  (checksum-before-execute is non-negotiable — no code runs from
+  the downloaded binary before hash verification).
+
+#### ADRs
+
+- [x] [ADR-0013](adr/0013-sidecar-bundling.md) — sidecar bundling.
+- [ ] ADR-0014 — tray / daemon architecture.
+- [ ] ADR-0015 — timeline data model + indexer.
+
+#### Docs
+
+- [ ] `docs/user-guide/getting-started.md` refresh.
+- [ ] `docs/user-guide/timeline.md`.
+- [ ] `docs/user-guide/tray-mode.md`.
+- [ ] `docs/design-tokens.md`.
+- [ ] README Roadmap flips Tray / Timeline / UI polish / Sidecars
+  to ✅.
+- [ ] `docs/session-reports/phase-04.md`.
+
+### Out of scope (stays for later phases)
+
+- Player, resume-from-position, watch progress — Phase 5.
+- Multi-view sync engine — Phase 6.
+- Auto-cleanup, sub-only handling, release signing — Phase 7.
+- Localization beyond English — post-1.0.
 
 ---
 

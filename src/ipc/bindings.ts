@@ -42,6 +42,30 @@ export const commands = {
 	getLibraryInfo: () => typedError<LibraryInfo, AppError>(__TAURI_INVOKE("get_library_info")),
 	migrateLibrary: (input: MigrateLibraryInput) => typedError<MigrateLibraryOutput, AppError>(__TAURI_INVOKE("migrate_library", { input })),
 	getMigrationStatus: (input: MigrationIdInput) => typedError<MigrationRow, AppError>(__TAURI_INVOKE("get_migration_status", { input })),
+	listTimeline: (input: ListTimelineInput) => typedError<Interval[], AppError>(__TAURI_INVOKE("list_timeline", { input })),
+	getCoStreams: (input: GetCoStreamsInput) => typedError<CoStream[], AppError>(__TAURI_INVOKE("get_co_streams", { input })),
+	getTimelineStats: () => typedError<TimelineStats, AppError>(__TAURI_INVOKE("get_timeline_stats")),
+	rebuildTimelineIndex: () => typedError<TimelineStats, AppError>(__TAURI_INVOKE("rebuild_timeline_index")),
+	getAppSummary: () => typedError<AppSummary, AppError>(__TAURI_INVOKE("get_app_summary")),
+	pauseAllDownloads: () => typedError<number, AppError>(__TAURI_INVOKE("pause_all_downloads")),
+	resumeAllDownloads: () => typedError<number, AppError>(__TAURI_INVOKE("resume_all_downloads")),
+	setWindowCloseBehavior: (input: SetWindowCloseBehaviorInput) => typedError<null, AppError>(__TAURI_INVOKE("set_window_close_behavior", { input })),
+	toggleStreamerFavorite: (input: ToggleFavoriteInput) => typedError<boolean, AppError>(__TAURI_INVOKE("toggle_streamer_favorite", { input })),
+	/**
+	 *  Broadcast a shutdown request with a 10 s drain deadline. Services
+	 *  subscribe to this event via their existing `.shutdown()` handles;
+	 *  the webview can show a "saving state…" toast until the process
+	 *  actually exits.
+	 */
+	requestShutdown: () => typedError<null, AppError>(__TAURI_INVOKE("request_shutdown")),
+	/**
+	 *  Called by the tray menu handlers to emit a uniform webview event.
+	 *  Always succeeds — emission errors are logged and swallowed.
+	 */
+	emitTrayAction: (input: TrayActionInput) => typedError<null, AppError>(__TAURI_INVOKE("emit_tray_action", { input })),
+	listShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("list_shortcuts")),
+	setShortcut: (input: SetShortcutInput) => typedError<Shortcut[], AppError>(__TAURI_INVOKE("set_shortcut", { input })),
+	resetShortcuts: () => typedError<Shortcut[], AppError>(__TAURI_INVOKE("reset_shortcuts")),
 };
 
 /* Types */
@@ -126,6 +150,42 @@ export type AppSettings = {
 	bandwidthLimitBps: number | null,
 	qualityPreset: QualityPreset,
 	autoUpdateYtDlp: boolean,
+	windowCloseBehavior: WindowCloseBehavior,
+	startAtLogin: boolean,
+	showDockIcon: boolean,
+	notificationsEnabled: boolean,
+	notifyDownloadComplete: boolean,
+	notifyDownloadFailed: boolean,
+	notifyFavoritesIngest: boolean,
+	notifyStorageLow: boolean,
+};
+
+export type AppShutdownRequestedEvent = {
+	// Deadline in unix-seconds — the services flush by this time.
+	deadlineAt: number,
+};
+
+// Snapshot used by the tray popover + menu-bar tooltip.
+export type AppSummary = {
+	activeDownloads: number,
+	queuedDownloads: number,
+	bandwidthBps: number,
+	/**
+	 *  `None` when no streamer is due yet (empty roster). Seconds to
+	 *  the next scheduled poll for any streamer.
+	 */
+	nextPollEtaSeconds: number | null,
+	// `None` when the user has no streamers yet.
+	streamerCount: number,
+};
+
+/**
+ *  Tray menu → webview coordination signal. The tray handler emits a
+ *  specific `kind` string; the frontend narrows on it to route UI
+ *  state (e.g. focus the Downloads route, surface a pause toast).
+ */
+export type AppTrayActionEvent = {
+	kind: string,
 };
 
 export type Chapter = {
@@ -137,6 +197,15 @@ export type Chapter = {
 };
 
 export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
+
+/**
+ *  Co-stream hit: another interval overlapping a reference, paired
+ *  with the number of seconds of overlap (> 0).
+ */
+export type CoStream = {
+	interval: Interval,
+	overlapSeconds: number,
+};
 
 export type CredentialsChangedEvent = {
 	configured: boolean,
@@ -219,6 +288,10 @@ export type EnqueueDownloadInput = {
 	priority?: number | null,
 };
 
+export type GetCoStreamsInput = {
+	vodId: string,
+};
+
 export type GetVodInput = {
 	twitchVideoId: string,
 };
@@ -238,6 +311,18 @@ export type HealthReport = {
 
 // Ingest lifecycle. Matches the `CHECK` constraint on `vods.ingest_status`.
 export type IngestStatus = "pending" | "chapters_fetched" | "eligible" | "skipped_game" | "skipped_sub_only" | "skipped_live" | "error";
+
+/**
+ *  A single stream's wall-clock lifetime. `start_at` / `end_at` are UTC
+ *  unix seconds; the invariant `start_at <= end_at` is enforced at the
+ *  DB layer (CHECK) and by `Interval::new`.
+ */
+export type Interval = {
+	vodId: string,
+	streamerId: string,
+	startAt: number,
+	endAt: number,
+};
 
 export type LastPollSummary = {
 	startedAt: number,
@@ -287,6 +372,10 @@ export type ListDownloadsInput = {
 	filters?: DownloadFilters | null,
 };
 
+export type ListTimelineInput = {
+	filters?: TimelineFilters | null,
+};
+
 export type ListVodsInput = {
 	filters: VodFilters,
 	sort: VodSort,
@@ -321,6 +410,29 @@ export type MigrationRow = {
 export type MutedSegment = {
 	offsetSeconds: number,
 	durationSeconds: number,
+};
+
+// Notification category. Maps 1:1 to a per-user setting toggle.
+export type NotificationCategory = "download_complete" | "download_failed" | "favorites_ingest" | "storage_low";
+
+/**
+ *  Payload emitted on the generic `notification:show` topic. The
+ *  category-specific topic also receives a mirror so callers that
+ *  care about just one category can subscribe narrowly.
+ */
+export type NotificationPayload = {
+	category: NotificationCategory,
+	title: string,
+	body: string,
+	/**
+	 *  Optional deep-link / routing hint. The frontend interprets it
+	 *  (e.g. `"/downloads?vod=…"` to focus a specific row).
+	 */
+	link?: string | null,
+	// Count coalesced into this notification (>= 1).
+	coalesced: number,
+	// Emission timestamp (unix seconds UTC).
+	emittedAt: number,
 };
 
 export type PollFinishedEvent = {
@@ -361,6 +473,11 @@ export type ReprioritizeInput = {
 	priority: number,
 };
 
+export type SetShortcutInput = {
+	actionId: string,
+	keys: string,
+};
+
 /**
  *  Input payload for `set_twitch_credentials`. The IPC boundary is
  *  the only place the Client Secret crosses from the webview into
@@ -370,6 +487,10 @@ export type ReprioritizeInput = {
 export type SetTwitchCredentialsInput = {
 	clientId: string,
 	clientSecret: string,
+};
+
+export type SetWindowCloseBehaviorInput = {
+	behavior: WindowCloseBehavior,
 };
 
 /**
@@ -398,6 +519,26 @@ export type SettingsPatch = {
 	bandwidthLimitBps?: number | null,
 	qualityPreset?: QualityPreset | null,
 	autoUpdateYtDlp?: boolean | null,
+	windowCloseBehavior?: WindowCloseBehavior | null,
+	startAtLogin?: boolean | null,
+	showDockIcon?: boolean | null,
+	notificationsEnabled?: boolean | null,
+	notifyDownloadComplete?: boolean | null,
+	notifyDownloadFailed?: boolean | null,
+	notifyFavoritesIngest?: boolean | null,
+	notifyStorageLow?: boolean | null,
+};
+
+/**
+ *  Freeform key → keystroke map. The frontend owns the canonical list
+ *  of action IDs (e.g. `library`, `timeline`, `focus_search`, …); the
+ *  backend just persists the chosen keystrokes so they survive
+ *  restarts. We store the serialized map as a JSON string under a
+ *  single row in a dedicated table.
+ */
+export type Shortcut = {
+	actionId: string,
+	keys: string,
 };
 
 export type StagingInfo = {
@@ -424,11 +565,20 @@ export type Streamer = {
 	lastPolledAt: number | null,
 	nextPollAt: number | null,
 	lastLiveAt: number | null,
+	/**
+	 *  Phase 4: user-flagged favourite, drives the "new VODs from
+	 *  favorites" notification category.
+	 */
+	favorite?: boolean,
 };
 
 export type StreamerAddedEvent = {
 	twitchUserId: string,
 	login: string,
+};
+
+export type StreamerFavoritedEvent = {
+	twitchUserId: string,
 };
 
 export type StreamerRemovedEvent = {
@@ -443,6 +593,62 @@ export type StreamerSummary = {
 	liveNow: boolean,
 	nextPollEtaSeconds: number | null,
 };
+
+export type StreamerUnfavoritedEvent = {
+	twitchUserId: string,
+};
+
+/**
+ *  Filter predicate for the `list_timeline` read. Each field is
+ *  independently optional; `None` means "no filter on this axis".
+ */
+export type TimelineFilters = {
+	since?: number | null,
+	until?: number | null,
+	streamerIds?: string[] | null,
+};
+
+export type TimelineIndexRebuildingEvent = {
+	// Fraction complete in [0.0, 1.0].
+	progress: number,
+	processed: number,
+	total: number,
+};
+
+export type TimelineIndexRebuiltEvent = {
+	total: number,
+};
+
+// Timeline stats for the header of the `/timeline` route.
+export type TimelineStats = {
+	totalIntervals: number,
+	earliestStartAt: number | null,
+	latestEndAt: number | null,
+	largestOverlapGroup: number,
+};
+
+export type ToggleFavoriteInput = {
+	streamerId: string,
+};
+
+export type TrayActionInput = {
+	/**
+	 *  Closed-set action identifier. Rejected at deserialization if the
+	 *  caller supplies an unknown value.
+	 */
+	kind: TrayActionKind,
+};
+
+/**
+ *  Closed set of tray menu actions. Adding a new action means:
+ *    1. Add a variant here.
+ *    2. Handle it in the frontend `AppShell`'s `app:tray_action` switch.
+ *    3. Wire the tray menu item to call `emit_tray_action({ kind })`.
+ * 
+ *  Serialized as snake_case over IPC so the JSON wire form is stable
+ *  against Rust-side renames.
+ */
+export type TrayActionKind = "open_sightline" | "open_library" | "open_timeline" | "open_downloads" | "open_settings" | "pause_all" | "resume_all";
 
 export type TriggerPollInput = {
 	// If omitted, the poller re-evaluates every due streamer on its next tick.
@@ -514,6 +720,16 @@ export type VodWithChapters = {
 	streamerDisplayName: string,
 	streamerLogin: string,
 };
+
+/**
+ *  What happens when the user clicks the window close button.
+ * 
+ *  - `Hide` (default, new Phase-4 behaviour): the window is hidden,
+ *    poller + download queue keep running, tray stays on.
+ *  - `Quit`: explicit quit. Tokio services drain gracefully and the
+ *    process exits.
+ */
+export type WindowCloseBehavior = "hide" | "quit";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

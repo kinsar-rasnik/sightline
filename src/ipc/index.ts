@@ -14,6 +14,10 @@ import {
   type AppError,
   type AppSettings,
   type AppReadyEvent,
+  type AppShutdownRequestedEvent,
+  type AppSummary,
+  type AppTrayActionEvent,
+  type CoStream,
   type CredentialsChangedEvent,
   type CredentialsStatus,
   type DownloadCompletedEvent,
@@ -24,37 +28,55 @@ import {
   type DownloadState,
   type DownloadStateChangedEvent,
   type EnqueueDownloadInput,
+  type GetCoStreamsInput,
   type GetVodInput,
   type HealthReport,
+  type Interval,
   type LibraryInfo,
   type LibraryLayoutKind,
   type LibraryMigratingEvent,
   type LibraryMigrationCompletedEvent,
   type LibraryMigrationFailedEvent,
   type ListDownloadsInput,
+  type ListTimelineInput,
   type ListVodsInput,
   type MigrateLibraryInput,
   type MigrateLibraryOutput,
   type MigrationIdInput,
   type MigrationRow,
+  type NotificationCategory,
+  type NotificationPayload,
   type PollFinishedEvent,
   type PollStartedEvent,
   type PollStatusRow,
   type QualityPreset,
   type RemoveStreamerInput,
   type ReprioritizeInput,
+  type SetShortcutInput,
   type SetTwitchCredentialsInput,
+  type SetWindowCloseBehaviorInput,
   type SettingsPatch,
+  type Shortcut,
   type StagingInfo,
   type StorageLowDiskWarningEvent,
   type StreamerAddedEvent,
+  type StreamerFavoritedEvent,
   type StreamerRemovedEvent,
+  type StreamerUnfavoritedEvent,
   type StreamerSummary,
+  type TimelineFilters,
+  type TimelineIndexRebuildingEvent,
+  type TimelineIndexRebuiltEvent,
+  type TimelineStats,
+  type ToggleFavoriteInput,
+  type TrayActionInput,
+  type TrayActionKind,
   type TriggerPollInput,
   type VodIdInput,
   type VodIngestedEvent,
   type VodUpdatedEvent,
   type VodWithChapters,
+  type WindowCloseBehavior,
 } from "@/ipc/bindings";
 
 export type {
@@ -62,6 +84,10 @@ export type {
   AppError,
   AppSettings,
   AppReadyEvent,
+  AppShutdownRequestedEvent,
+  AppSummary,
+  AppTrayActionEvent,
+  CoStream,
   CredentialsChangedEvent,
   CredentialsStatus,
   DownloadCompletedEvent,
@@ -72,37 +98,55 @@ export type {
   DownloadState,
   DownloadStateChangedEvent,
   EnqueueDownloadInput,
+  GetCoStreamsInput,
   GetVodInput,
   HealthReport,
+  Interval,
   LibraryInfo,
   LibraryLayoutKind,
   LibraryMigratingEvent,
   LibraryMigrationCompletedEvent,
   LibraryMigrationFailedEvent,
   ListDownloadsInput,
+  ListTimelineInput,
   ListVodsInput,
   MigrateLibraryInput,
   MigrateLibraryOutput,
   MigrationIdInput,
   MigrationRow,
+  NotificationCategory,
+  NotificationPayload,
   PollFinishedEvent,
   PollStartedEvent,
   PollStatusRow,
   QualityPreset,
   RemoveStreamerInput,
   ReprioritizeInput,
+  SetShortcutInput,
   SetTwitchCredentialsInput,
+  SetWindowCloseBehaviorInput,
   SettingsPatch,
+  Shortcut,
   StagingInfo,
   StorageLowDiskWarningEvent,
   StreamerAddedEvent,
+  StreamerFavoritedEvent,
   StreamerRemovedEvent,
+  StreamerUnfavoritedEvent,
   StreamerSummary,
+  TimelineFilters,
+  TimelineIndexRebuildingEvent,
+  TimelineIndexRebuiltEvent,
+  TimelineStats,
+  ToggleFavoriteInput,
+  TrayActionInput,
+  TrayActionKind,
   TriggerPollInput,
   VodIdInput,
   VodIngestedEvent,
   VodUpdatedEvent,
   VodWithChapters,
+  WindowCloseBehavior,
 };
 
 /**
@@ -134,6 +178,8 @@ export const events = {
   credentialsChanged: "credentials:changed",
   streamerAdded: "streamer:added",
   streamerRemoved: "streamer:removed",
+  streamerFavorited: "streamer:favorited",
+  streamerUnfavorited: "streamer:unfavorited",
   vodIngested: "vod:ingested",
   vodUpdated: "vod:updated",
   pollStarted: "poll:started",
@@ -146,6 +192,11 @@ export const events = {
   libraryMigrationCompleted: "library:migration_completed",
   libraryMigrationFailed: "library:migration_failed",
   storageLowDiskWarning: "storage:low_disk_warning",
+  timelineIndexRebuilding: "timeline:index_rebuilding",
+  timelineIndexRebuilt: "timeline:index_rebuilt",
+  appTrayAction: "app:tray_action",
+  appShutdownRequested: "app:shutdown_requested",
+  notificationShow: "notification:show",
 } as const;
 
 /**
@@ -214,6 +265,42 @@ export const commands = {
     unwrap(await generatedCommands.migrateLibrary(input)),
   getMigrationStatus: async (input: MigrationIdInput): Promise<MigrationRow> =>
     unwrap(await generatedCommands.getMigrationStatus(input)),
+  // --- Phase 4 ---
+  listTimeline: async (input: ListTimelineInput): Promise<Interval[]> =>
+    unwrap(await generatedCommands.listTimeline(input)),
+  getCoStreams: async (input: GetCoStreamsInput): Promise<CoStream[]> =>
+    unwrap(await generatedCommands.getCoStreams(input)),
+  getTimelineStats: async (): Promise<TimelineStats> =>
+    unwrap(await generatedCommands.getTimelineStats()),
+  rebuildTimelineIndex: async (): Promise<TimelineStats> =>
+    unwrap(await generatedCommands.rebuildTimelineIndex()),
+  getAppSummary: async (): Promise<AppSummary> =>
+    unwrap(await generatedCommands.getAppSummary()),
+  pauseAllDownloads: async (): Promise<number> =>
+    unwrap(await generatedCommands.pauseAllDownloads()),
+  resumeAllDownloads: async (): Promise<number> =>
+    unwrap(await generatedCommands.resumeAllDownloads()),
+  setWindowCloseBehavior: async (
+    input: SetWindowCloseBehaviorInput
+  ): Promise<void> => {
+    unwrap(await generatedCommands.setWindowCloseBehavior(input));
+  },
+  toggleStreamerFavorite: async (
+    input: ToggleFavoriteInput
+  ): Promise<boolean> =>
+    unwrap(await generatedCommands.toggleStreamerFavorite(input)),
+  requestShutdown: async (): Promise<void> => {
+    unwrap(await generatedCommands.requestShutdown());
+  },
+  emitTrayAction: async (input: TrayActionInput): Promise<void> => {
+    unwrap(await generatedCommands.emitTrayAction(input));
+  },
+  listShortcuts: async (): Promise<Shortcut[]> =>
+    unwrap(await generatedCommands.listShortcuts()),
+  setShortcut: async (input: SetShortcutInput): Promise<Shortcut[]> =>
+    unwrap(await generatedCommands.setShortcut(input)),
+  resetShortcuts: async (): Promise<Shortcut[]> =>
+    unwrap(await generatedCommands.resetShortcuts()),
 };
 
 /**

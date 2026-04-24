@@ -95,6 +95,15 @@ pub struct DownloadFilters {
     pub streamer_id: Option<String>,
 }
 
+/// Aggregate counts used by the tray summary tooltip.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadsSummary {
+    pub active_count: i64,
+    pub queued_count: i64,
+    pub bandwidth_bps: i64,
+}
+
 /// Events the queue emits. The commands layer translates these into
 /// Tauri event topics.
 #[derive(Debug, Clone)]
@@ -314,6 +323,60 @@ impl DownloadQueueService {
             .execute(self.db.pool())
             .await?;
         self.get(vod_id).await?.ok_or(AppError::NotFound)
+    }
+
+    /// Pause every row in `downloading` or `queued`. Used by the tray
+    /// "Pause all" action.
+    pub async fn pause_all(&self) -> Result<i64, AppError> {
+        let now = self.clock.unix_seconds();
+        let affected = sqlx::query(
+            "UPDATE downloads
+             SET state = 'paused',
+                 pause_requested = 1,
+                 last_error_at = ?
+             WHERE state IN ('queued', 'downloading')",
+        )
+        .bind(now)
+        .execute(self.db.pool())
+        .await?;
+        Ok(affected.rows_affected() as i64)
+    }
+
+    /// Resume every paused row. Counterpart of `pause_all`.
+    pub async fn resume_all(&self) -> Result<i64, AppError> {
+        let now = self.clock.unix_seconds();
+        let affected = sqlx::query(
+            "UPDATE downloads
+             SET state = 'queued', pause_requested = 0, started_at = NULL,
+                 speed_bps = NULL, eta_seconds = NULL, last_error = NULL,
+                 last_error_at = NULL, queued_at = ?
+             WHERE state = 'paused'",
+        )
+        .bind(now)
+        .execute(self.db.pool())
+        .await?;
+        Ok(affected.rows_affected() as i64)
+    }
+
+    /// Tiny summary for the tray tooltip: counts + aggregate speed.
+    pub async fn summary(&self) -> Result<DownloadsSummary, AppError> {
+        let row = sqlx::query(
+            "SELECT
+               SUM(CASE WHEN state = 'downloading' THEN 1 ELSE 0 END) AS active_count,
+               SUM(CASE WHEN state = 'queued' THEN 1 ELSE 0 END)       AS queued_count,
+               COALESCE(SUM(CASE WHEN state = 'downloading' THEN speed_bps ELSE 0 END), 0) AS bandwidth_bps
+             FROM downloads",
+        )
+        .fetch_one(self.db.pool())
+        .await?;
+        let active: Option<i64> = row.try_get("active_count").ok();
+        let queued: Option<i64> = row.try_get("queued_count").ok();
+        let bandwidth: Option<i64> = row.try_get("bandwidth_bps").ok();
+        Ok(DownloadsSummary {
+            active_count: active.unwrap_or(0),
+            queued_count: queued.unwrap_or(0),
+            bandwidth_bps: bandwidth.unwrap_or(0),
+        })
     }
 
     /// State-machine-checked transition. The `new_error` closure

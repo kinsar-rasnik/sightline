@@ -3,7 +3,7 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>Status: Phase 3 — download engine + library layout. Pre-alpha. No binaries yet.</em>
+  <em>Status: Phase 4 — tray daemon, timeline, UI polish, real sidecar bundling. Pre-alpha. No binaries yet.</em>
 </p>
 
 ---
@@ -81,10 +81,15 @@ machine:
 - **ffmpeg** — container-swap from `.ts` → `.mp4` and thumbnail
   extraction only. Never re-encodes.
 
-Both are pinned to specific versions by checksum in
-`scripts/sidecars.lock`. They are vendored as part of the installer
-so you don't need a separate install step. ADR-0003 covers the
-update flow.
+Both are pinned to specific versions by SHA-256 in
+`scripts/sidecars.lock`. `scripts/bundle-sidecars.sh` (macOS / Linux /
+CI) and `scripts/bundle-sidecars.ps1` (Windows) fetch them, verify
+the hash **before** anything is executed or extracted, and install
+them under `src-tauri/binaries/<tool>-<target-triple>[.exe]` so the
+Tauri bundler picks them up as `externalBin`. A mismatch aborts with
+exit 3 — no compromised binary ever runs. See [ADR-0013](docs/adr/0013-sidecar-bundling.md)
+for the design and refresh procedure; [ADR-0003](docs/adr/0003-pinned-sidecar-binaries.md)
+covers the original decision.
 
 ---
 
@@ -180,8 +185,8 @@ Deep dives:
 | 1     | Foundation (repo, workforce, docs, code skeleton, CI)  | ✅             |
 | 2     | Twitch API client, streamer + VOD ingestion, polling   | ✅             |
 | 3     | Download engine (yt-dlp orchestration, queue, throttle, library layout) | ✅             |
-| 4     | Library UI, settings, tray mode                        | **Next**      |
-| 5     | Player + watch-progress                                | Planned       |
+| 4     | Tray daemon, timeline foundation, UI polish, sidecar bundling | ✅             |
+| 5     | Player + watch-progress                                | **Next**      |
 | 6     | Multi-View Sync                                        | Planned       |
 | 7     | Auto-cleanup, sub-only handling, polish, v1.0          | Planned       |
 

@@ -11,4 +11,5 @@ pub mod poll_schedule;
 pub mod quality_preset;
 pub mod sanitize;
 pub mod streamer;
+pub mod timeline;
 pub mod vod;

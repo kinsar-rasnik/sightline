@@ -50,6 +50,7 @@ function stubStreamer(overrides: Partial<StreamerSummary["streamer"]> = {}): Str
       lastPolledAt: 1_700_000_100,
       nextPollAt: 1_700_000_700,
       lastLiveAt: null,
+      favorite: false,
       ...overrides,
     },
     vodCount: 10,
