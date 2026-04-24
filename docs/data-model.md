@@ -160,26 +160,87 @@ The Phase 3 downstream states (`queued → downloading → downloaded → watche
 
 ---
 
-## Phase 3 — Downloads
+## Phase 3 — Downloads + library migration
+
+Phase 3 lands schema version **5** via migrations `0004_downloads.sql`
+and `0005_library_migrations.sql`. The shipping shape:
 
 ```sql
--- 0003_downloads.sql (draft — lands in Phase 3)
-
-CREATE TABLE download_tasks (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  twitch_video_id  TEXT    NOT NULL UNIQUE REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
-  file_path        TEXT,
-  quality_preset   TEXT    NOT NULL,
-  requested_at     INTEGER NOT NULL,
-  started_at       INTEGER,
-  completed_at     INTEGER,
-  failed_at        INTEGER,
-  failure_reason   TEXT,
-  bytes_total      INTEGER,
-  bytes_downloaded INTEGER NOT NULL DEFAULT 0,
-  attempt_count    INTEGER NOT NULL DEFAULT 0
+-- 0004_downloads.sql — persistent download queue.
+CREATE TABLE downloads (
+    vod_id           TEXT    PRIMARY KEY REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
+    state            TEXT    NOT NULL CHECK (state IN (
+        'queued','downloading','paused','completed','failed_retryable','failed_permanent'
+    )),
+    priority         INTEGER NOT NULL DEFAULT 100,
+    quality_preset   TEXT    NOT NULL CHECK (quality_preset IN ('source','1080p60','720p60','480p')),
+    quality_resolved TEXT,
+    staging_path     TEXT,
+    final_path       TEXT,
+    bytes_total      INTEGER,
+    bytes_done       INTEGER NOT NULL DEFAULT 0,
+    speed_bps        INTEGER,
+    eta_seconds      INTEGER,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_error       TEXT,
+    last_error_at    INTEGER,
+    queued_at        INTEGER NOT NULL,
+    started_at       INTEGER,
+    finished_at      INTEGER,
+    pause_requested  INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX idx_downloads_state    ON downloads(state);
+CREATE INDEX idx_downloads_priority ON downloads(priority DESC, queued_at ASC);
+
+-- app_settings gains the library + download knobs:
+ALTER TABLE app_settings ADD COLUMN library_root             TEXT;
+ALTER TABLE app_settings ADD COLUMN library_layout           TEXT    NOT NULL DEFAULT 'plex';
+ALTER TABLE app_settings ADD COLUMN staging_path             TEXT;
+ALTER TABLE app_settings ADD COLUMN max_concurrent_downloads INTEGER NOT NULL DEFAULT 2;
+ALTER TABLE app_settings ADD COLUMN bandwidth_limit_bps      INTEGER;        -- NULL = unlimited
+ALTER TABLE app_settings ADD COLUMN quality_preset           TEXT    NOT NULL DEFAULT 'source';
+ALTER TABLE app_settings ADD COLUMN auto_update_yt_dlp       INTEGER NOT NULL DEFAULT 1;
 ```
+
+```sql
+-- 0005_library_migrations.sql — audit trail for layout switches.
+CREATE TABLE library_migrations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at  INTEGER NOT NULL,
+    finished_at INTEGER,
+    from_layout TEXT    NOT NULL,
+    to_layout   TEXT    NOT NULL,
+    moved       INTEGER NOT NULL DEFAULT 0,
+    errors      INTEGER NOT NULL DEFAULT 0,
+    status      TEXT    NOT NULL CHECK (status IN ('running','completed','failed','cancelled'))
+);
+-- At most one running migration at a time.
+CREATE UNIQUE INDEX idx_library_migrations_one_running
+    ON library_migrations(status) WHERE status = 'running';
+```
+
+### State machine for `downloads.state`
+
+```
+  queued
+    │  worker picks row → yt-dlp download into staging_path
+    ▼
+  downloading ──────────► paused  (cmd_pause_download sets pause_requested)
+    │  │                    │
+    │  │                    └──► downloading  (cmd_resume_download)
+    │  ▼
+    │ failed_retryable ─► queued (attempts < 5, exponential backoff)
+    │                 └─► failed_permanent (attempts == 5 OR reason is DISK_FULL / SUB_ONLY)
+    ▼
+  completed (terminal; final_path set; NFO / thumbnail written for plex layout)
+```
+
+`cmd_cancel_download` transitions from any non-terminal state to
+`failed_permanent` with reason `USER_CANCELLED`. On process start-up
+any row still in `downloading` is reset to `queued` — the staging
+file is treated as garbage and the download is retried from scratch
+(yt-dlp's resume flag is not trusted across process restarts on
+Proton Drive / network filesystems).
 
 ---
 
