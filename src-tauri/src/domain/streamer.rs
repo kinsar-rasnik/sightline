@@ -57,6 +57,10 @@ pub struct Streamer {
     pub last_polled_at: Option<i64>,
     pub next_poll_at: Option<i64>,
     pub last_live_at: Option<i64>,
+    /// Phase 4: user-flagged favourite, drives the "new VODs from
+    /// favorites" notification category.
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 impl Streamer {
@@ -132,6 +136,7 @@ mod tests {
             last_polled_at: None,
             next_poll_at: None,
             last_live_at: None,
+            favorite: false,
         };
         assert!(s.is_active());
         let deleted = Streamer {

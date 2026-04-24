@@ -145,6 +145,37 @@ impl StreamerService {
         Ok(())
     }
 
+    /// Toggle the `favorite` flag on a streamer. Returns the fresh
+    /// summary so the caller can update its cache. The boolean newly
+    /// persisted is returned alongside for event fan-out.
+    pub async fn set_favorite(
+        &self,
+        twitch_user_id: &str,
+        favorite: bool,
+    ) -> Result<StreamerSummary, AppError> {
+        let rows = sqlx::query("UPDATE streamers SET favorite = ? WHERE twitch_user_id = ?")
+            .bind(if favorite { 1 } else { 0 })
+            .bind(twitch_user_id)
+            .execute(self.db.pool())
+            .await?;
+        if rows.rows_affected() == 0 {
+            return Err(AppError::NotFound);
+        }
+        self.summary(twitch_user_id).await
+    }
+
+    /// Toggle whichever state the streamer is currently in. Returns
+    /// (new_summary, new_favorite_flag).
+    pub async fn toggle_favorite(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<(StreamerSummary, bool), AppError> {
+        let current = self.summary(twitch_user_id).await?;
+        let next = !current.streamer.favorite;
+        let updated = self.set_favorite(twitch_user_id, next).await?;
+        Ok((updated, next))
+    }
+
     /// List streamer IDs due for polling, respecting the `next_poll_at`
     /// index. Callers (the poller) apply the concurrency cap.
     pub async fn due_for_poll(&self, limit: i64) -> Result<Vec<String>, AppError> {
@@ -165,17 +196,18 @@ impl StreamerService {
             .collect()
     }
 
-    async fn summary(&self, twitch_user_id: &str) -> Result<StreamerSummary, AppError> {
+    pub async fn summary(&self, twitch_user_id: &str) -> Result<StreamerSummary, AppError> {
         let row = sqlx::query(
             "SELECT twitch_user_id, login, display_name, profile_image_url,
                     broadcaster_type, twitch_created_at, added_at, deleted_at,
-                    last_polled_at, next_poll_at, last_live_at
+                    last_polled_at, next_poll_at, last_live_at, favorite
              FROM streamers WHERE twitch_user_id = ?",
         )
         .bind(twitch_user_id)
         .fetch_one(self.db.pool())
         .await?;
 
+        let favorite_raw: i64 = row.try_get(11).unwrap_or(0);
         let streamer = Streamer {
             twitch_user_id: row.try_get(0)?,
             login: row.try_get(1)?,
@@ -188,6 +220,7 @@ impl StreamerService {
             last_polled_at: row.try_get(8)?,
             next_poll_at: row.try_get(9)?,
             last_live_at: row.try_get(10)?,
+            favorite: favorite_raw != 0,
         };
 
         let vod_count: i64 =
@@ -251,6 +284,7 @@ mod tests {
             last_polled_at: None,
             next_poll_at: None,
             last_live_at: None,
+            favorite: false,
         };
         let h = streamer_to_helix_user(&s);
         assert_eq!(h.login, "vader");

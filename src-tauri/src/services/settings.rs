@@ -37,6 +37,45 @@ pub struct AppSettings {
     pub bandwidth_limit_bps: Option<i64>,
     pub quality_preset: QualityPreset,
     pub auto_update_yt_dlp: bool,
+
+    // --- Phase 4: tray daemon + notifications. ---
+    pub window_close_behavior: WindowCloseBehavior,
+    pub start_at_login: bool,
+    pub show_dock_icon: bool,
+    pub notifications_enabled: bool,
+    pub notify_download_complete: bool,
+    pub notify_download_failed: bool,
+    pub notify_favorites_ingest: bool,
+    pub notify_storage_low: bool,
+}
+
+/// What happens when the user clicks the window close button.
+///
+/// - `Hide` (default, new Phase-4 behaviour): the window is hidden,
+///   poller + download queue keep running, tray stays on.
+/// - `Quit`: explicit quit. Tokio services drain gracefully and the
+///   process exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowCloseBehavior {
+    Hide,
+    Quit,
+}
+
+impl WindowCloseBehavior {
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            WindowCloseBehavior::Hide => "hide",
+            WindowCloseBehavior::Quit => "quit",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "quit" => WindowCloseBehavior::Quit,
+            _ => WindowCloseBehavior::Hide,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -86,6 +125,24 @@ pub struct SettingsPatch {
     pub quality_preset: Option<QualityPreset>,
     #[specta(optional)]
     pub auto_update_yt_dlp: Option<bool>,
+
+    // --- Phase 4 fields. ---
+    #[specta(optional)]
+    pub window_close_behavior: Option<WindowCloseBehavior>,
+    #[specta(optional)]
+    pub start_at_login: Option<bool>,
+    #[specta(optional)]
+    pub show_dock_icon: Option<bool>,
+    #[specta(optional)]
+    pub notifications_enabled: Option<bool>,
+    #[specta(optional)]
+    pub notify_download_complete: Option<bool>,
+    #[specta(optional)]
+    pub notify_download_failed: Option<bool>,
+    #[specta(optional)]
+    pub notify_favorites_ingest: Option<bool>,
+    #[specta(optional)]
+    pub notify_storage_low: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -106,7 +163,11 @@ impl SettingsService {
                     poll_ceiling_seconds, concurrency_cap, first_backfill_limit,
                     library_root, library_layout, staging_path,
                     max_concurrent_downloads, bandwidth_limit_bps,
-                    quality_preset, auto_update_yt_dlp
+                    quality_preset, auto_update_yt_dlp,
+                    window_close_behavior, start_at_login, show_dock_icon,
+                    notifications_enabled, notify_download_complete,
+                    notify_download_failed, notify_favorites_ingest,
+                    notify_storage_low
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -125,6 +186,15 @@ impl SettingsService {
         let quality_preset =
             QualityPreset::from_db_str(&quality_preset_str).unwrap_or(QualityPreset::Source);
         let auto_update_raw: i64 = row.try_get(12)?;
+        let close_behavior_str: String = row.try_get(13)?;
+        let window_close_behavior = WindowCloseBehavior::from_db_str(&close_behavior_str);
+        let start_at_login: i64 = row.try_get(14)?;
+        let show_dock_icon: i64 = row.try_get(15)?;
+        let notifications_enabled: i64 = row.try_get(16)?;
+        let notify_download_complete: i64 = row.try_get(17)?;
+        let notify_download_failed: i64 = row.try_get(18)?;
+        let notify_favorites_ingest: i64 = row.try_get(19)?;
+        let notify_storage_low: i64 = row.try_get(20)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -141,6 +211,14 @@ impl SettingsService {
             bandwidth_limit_bps: row.try_get(10)?,
             quality_preset,
             auto_update_yt_dlp: auto_update_raw != 0,
+            window_close_behavior,
+            start_at_login: start_at_login != 0,
+            show_dock_icon: show_dock_icon != 0,
+            notifications_enabled: notifications_enabled != 0,
+            notify_download_complete: notify_download_complete != 0,
+            notify_download_failed: notify_download_failed != 0,
+            notify_favorites_ingest: notify_favorites_ingest != 0,
+            notify_storage_low: notify_storage_low != 0,
         })
     }
 
@@ -210,6 +288,27 @@ impl SettingsService {
             .auto_update_yt_dlp
             .unwrap_or(current.auto_update_yt_dlp);
 
+        let window_close_behavior = patch
+            .window_close_behavior
+            .unwrap_or(current.window_close_behavior);
+        let start_at_login = patch.start_at_login.unwrap_or(current.start_at_login);
+        let show_dock_icon = patch.show_dock_icon.unwrap_or(current.show_dock_icon);
+        let notifications_enabled = patch
+            .notifications_enabled
+            .unwrap_or(current.notifications_enabled);
+        let notify_download_complete = patch
+            .notify_download_complete
+            .unwrap_or(current.notify_download_complete);
+        let notify_download_failed = patch
+            .notify_download_failed
+            .unwrap_or(current.notify_download_failed);
+        let notify_favorites_ingest = patch
+            .notify_favorites_ingest
+            .unwrap_or(current.notify_favorites_ingest);
+        let notify_storage_low = patch
+            .notify_storage_low
+            .unwrap_or(current.notify_storage_low);
+
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
 
@@ -228,6 +327,14 @@ impl SettingsService {
                  bandwidth_limit_bps = ?,
                  quality_preset = ?,
                  auto_update_yt_dlp = ?,
+                 window_close_behavior = ?,
+                 start_at_login = ?,
+                 show_dock_icon = ?,
+                 notifications_enabled = ?,
+                 notify_download_complete = ?,
+                 notify_download_failed = ?,
+                 notify_favorites_ingest = ?,
+                 notify_storage_low = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -244,6 +351,14 @@ impl SettingsService {
         .bind(bandwidth_limit_bps)
         .bind(quality_preset.as_db_str())
         .bind(if auto_update_yt_dlp { 1 } else { 0 })
+        .bind(window_close_behavior.as_db_str())
+        .bind(if start_at_login { 1 } else { 0 })
+        .bind(if show_dock_icon { 1 } else { 0 })
+        .bind(if notifications_enabled { 1 } else { 0 })
+        .bind(if notify_download_complete { 1 } else { 0 })
+        .bind(if notify_download_failed { 1 } else { 0 })
+        .bind(if notify_favorites_ingest { 1 } else { 0 })
+        .bind(if notify_storage_low { 1 } else { 0 })
         .bind(now)
         .execute(self.db.pool())
         .await?;

@@ -39,10 +39,13 @@ use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
     LibraryMigrationEvent, LibraryMigratorService, MigrationSink,
 };
+use crate::services::notifications::NotificationService;
 use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
+use crate::services::shortcuts::ShortcutsService;
 use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
+use crate::services::timeline_indexer::TimelineIndexerService;
 use crate::services::vods::VodReadService;
 
 /// Shared application state. One instance is constructed during
@@ -62,6 +65,10 @@ pub struct AppState {
     pub library_migrator: Arc<LibraryMigratorService>,
     pub library_migration_sink: MigrationSink,
     pub storage: Arc<StorageService>,
+    // --- Phase 4 ---
+    pub timeline: Arc<TimelineIndexerService>,
+    pub shortcuts: Arc<ShortcutsService>,
+    pub notifications: Arc<NotificationService>,
     pub app_handle: tauri::AppHandle,
 }
 
@@ -207,11 +214,57 @@ pub fn run() {
                 ));
                 let storage_svc = Arc::new(StorageService::new(Arc::new(SystemFreeSpace)));
 
+                // Phase 4 services.
+                let timeline_svc =
+                    Arc::new(TimelineIndexerService::new(db.clone(), clock.clone()));
+                let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
+                let notifications_svc =
+                    Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Opportunistic backfill: if we have VODs but no intervals,
+                // populate the index in the background so the timeline UI
+                // renders quickly after upgrade.
+                {
+                    let timeline = timeline_svc.clone();
+                    let handle_backfill = handle.clone();
+                    tokio::spawn(async move {
+                        if matches!(timeline.is_empty().await, Ok(true)) {
+                            let sink: crate::services::timeline_indexer::IndexerEventSink = Arc::new(
+                                move |ev| match ev {
+                                    crate::services::timeline_indexer::IndexerEvent::Rebuilding { processed, total } => {
+                                        let progress = if total == 0 {
+                                            1.0
+                                        } else {
+                                            (processed as f64) / (total as f64)
+                                        };
+                                        let _ = handle_backfill.emit(
+                                            crate::services::events::EV_TIMELINE_INDEX_REBUILDING,
+                                            crate::services::events::TimelineIndexRebuildingEvent {
+                                                progress,
+                                                processed,
+                                                total,
+                                            },
+                                        );
+                                    }
+                                    crate::services::timeline_indexer::IndexerEvent::Rebuilt { total } => {
+                                        let _ = handle_backfill.emit(
+                                            crate::services::events::EV_TIMELINE_INDEX_REBUILT,
+                                            crate::services::events::TimelineIndexRebuiltEvent { total },
+                                        );
+                                    }
+                                },
+                            );
+                            let _ = timeline.rebuild_all(sink).await;
+                        }
+                    });
+                }
+
                 // Event sink: dispatch each PollerEvent variant to the
                 // matching Tauri topic. Keeping all event construction
                 // in one closure makes it trivial to trace the surface
                 // the webview actually sees.
                 let sink_handle = handle.clone();
+                let sink_timeline = timeline_svc.clone();
                 let sink = Arc::new(move |ev: PollerEvent| match ev {
                     PollerEvent::PollStarted {
                         twitch_user_id,
@@ -252,12 +305,38 @@ pub fn run() {
                         let _ = sink_handle.emit(
                             EV_VOD_INGESTED,
                             VodIngestedEvent {
-                                twitch_video_id,
-                                twitch_user_id,
+                                twitch_video_id: twitch_video_id.clone(),
+                                twitch_user_id: twitch_user_id.clone(),
                                 ingest_status,
                                 stream_started_at,
                             },
                         );
+                        // Phase 4: keep the timeline index in sync.
+                        let timeline = sink_timeline.clone();
+                        tokio::spawn(async move {
+                            // Resolve duration from vods row. We use a
+                            // separate query rather than threading the
+                            // value through IngestEvent so the event
+                            // surface stays narrow. Any error is
+                            // swallowed — the timeline-rebuild command
+                            // is the user-facing recovery path.
+                            if let Ok(row) = sqlx::query_scalar::<_, i64>(
+                                "SELECT duration_seconds FROM vods WHERE twitch_video_id = ?",
+                            )
+                            .bind(&twitch_video_id)
+                            .fetch_one(timeline.pool())
+                            .await
+                            {
+                                let _ = timeline
+                                    .upsert_from_vod(
+                                        &twitch_video_id,
+                                        &twitch_user_id,
+                                        stream_started_at,
+                                        row,
+                                    )
+                                    .await;
+                            }
+                        });
                     }
                     PollerEvent::Ingest(IngestEvent::VodUpdated {
                         twitch_video_id,
@@ -364,6 +443,9 @@ pub fn run() {
                     library_migrator,
                     library_migration_sink,
                     storage: storage_svc,
+                    timeline: timeline_svc,
+                    shortcuts: shortcuts_svc,
+                    notifications: notifications_svc,
                     app_handle: handle.clone(),
                 });
 
@@ -380,11 +462,32 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event
-                && let Some(state) = window.try_state::<AppState>()
-            {
-                state.poller_handle.shutdown();
-                state.downloads_handle.shutdown();
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Phase 4: default close button → hide window. Tokio
+                // services keep running. Explicit Quit (tray menu,
+                // Cmd/Ctrl+Q, File > Quit → cmd_request_shutdown) is
+                // what actually stops the poller/queue and exits the
+                // process.
+                let behavior = window
+                    .try_state::<AppState>()
+                    .and_then(|state| {
+                        tauri::async_runtime::block_on(async move { state.settings.get().await })
+                            .ok()
+                            .map(|s| s.window_close_behavior)
+                    })
+                    .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide);
+                match behavior {
+                    crate::services::settings::WindowCloseBehavior::Hide => {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
+                    crate::services::settings::WindowCloseBehavior::Quit => {
+                        if let Some(state) = window.try_state::<AppState>() {
+                            state.poller_handle.shutdown();
+                            state.downloads_handle.shutdown();
+                        }
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())
