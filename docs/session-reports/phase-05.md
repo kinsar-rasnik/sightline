@@ -326,11 +326,13 @@ kickoff steps:
 ## CI run
 
 - PR: [#14 — Phase 5: player, watch progress, continue watching + housekeeping](https://github.com/kinsar-rasnik/sightline/pull/14)
-- Last completed CI run on this branch: [`run 24905043416`](https://github.com/kinsar-rasnik/sightline/actions/runs/24905043416) — green across all five jobs (checks + audit + macos + ubuntu + windows), 5m28s wall-clock.
-- Post-security-fix CI run: queued at the time of this commit; URL to be appended in the PR review once complete.
+- Head-commit CI run: [`run 24906982316`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906982316) — all five jobs green: `checks (fmt · lint · typecheck)`, `audit (cargo · pnpm)`, `test (macos-latest)`, `test (ubuntu-latest)`, `test (windows-latest)`.
+- Preceding runs (same PR, earlier commits):
+  - [`run 24905043416`](https://github.com/kinsar-rasnik/sightline/actions/runs/24905043416) — green, pre-security-fix snapshot.
+  - [`run 24906838079`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906838079) — cancelled by the concurrency policy when the session-report commit superseded it (expected; not a failure).
 
-Per the Rules of Engagement, `phase-5-complete` tag is NOT applied
-until the CI matrix lands green on the head commit. The CTO-sign-off
+Per the Rules of Engagement, the `phase-5-complete` tag is NOT applied
+yet — it lands only after the PR merges to `main`. The CTO-sign-off
 gate is the PR merge; the tag lands after the fast-forward merge.
 
 ---
