@@ -195,8 +195,15 @@ the branch tip passes the full gate.
 ## PR and CI
 
 **PR:** [#13 — fix(ci): three Phase-4 defects surfaced by cross-platform CI](https://github.com/kinsar-rasnik/sightline/pull/13)
-**First CI run (red):** [run 24901165984](https://github.com/kinsar-rasnik/sightline/actions/runs/24901165984)
-**Green CI run:** _filled in after the fallout fixes push_
+**First CI run (red, revealed trap leak + CRLF fallout):**
+  [run 24901165984](https://github.com/kinsar-rasnik/sightline/actions/runs/24901165984)
+**Second CI run (all 5 jobs green):**
+  [run 24901674257](https://github.com/kinsar-rasnik/sightline/actions/runs/24901674257)
+  - `audit (cargo · pnpm)` → pass, 3m14s
+  - `checks (fmt · lint · typecheck)` → pass, 4m24s
+  - `test (macos-latest)` → pass, 2m34s
+  - `test (ubuntu-latest)` → pass, 2m17s
+  - `test (windows-latest)` → pass, 5m47s
 
 ## Fallout: two more defects exposed by CI on the first push
 
