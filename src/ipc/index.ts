@@ -17,6 +17,7 @@ import {
   type AppShutdownRequestedEvent,
   type AppSummary,
   type AppTrayActionEvent,
+  type AutostartStatus,
   type CoStream,
   type CredentialsChangedEvent,
   type CredentialsStatus,
@@ -52,6 +53,7 @@ import {
   type QualityPreset,
   type RemoveStreamerInput,
   type ReprioritizeInput,
+  type SetAutostartInput,
   type SetShortcutInput,
   type SetTwitchCredentialsInput,
   type SetWindowCloseBehaviorInput,
@@ -89,6 +91,7 @@ export type {
   AppShutdownRequestedEvent,
   AppSummary,
   AppTrayActionEvent,
+  AutostartStatus,
   CoStream,
   CredentialsChangedEvent,
   CredentialsStatus,
@@ -124,6 +127,7 @@ export type {
   QualityPreset,
   RemoveStreamerInput,
   ReprioritizeInput,
+  SetAutostartInput,
   SetShortcutInput,
   SetTwitchCredentialsInput,
   SetWindowCloseBehaviorInput,
@@ -311,6 +315,10 @@ export const commands = {
   regenerateVodThumbnail: async (input: VodAssetsInput): Promise<void> => {
     unwrap(await generatedCommands.regenerateVodThumbnail(input));
   },
+  getAutostartStatus: async (): Promise<AutostartStatus> =>
+    unwrap(await generatedCommands.getAutostartStatus()),
+  setAutostart: async (input: SetAutostartInput): Promise<AutostartStatus> =>
+    unwrap(await generatedCommands.setAutostart(input)),
 };
 
 /**

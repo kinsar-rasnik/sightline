@@ -80,6 +80,8 @@ export const commands = {
 	 *  (success or failure — failure surfaces as `AppError::Sidecar`).
 	 */
 	regenerateVodThumbnail: (input: VodAssetsInput) => typedError<null, AppError>(__TAURI_INVOKE("regenerate_vod_thumbnail", { input })),
+	getAutostartStatus: () => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("get_autostart_status")),
+	setAutostart: (input: SetAutostartInput) => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("set_autostart", { input })),
 };
 
 /* Types */
@@ -200,6 +202,17 @@ export type AppSummary = {
  */
 export type AppTrayActionEvent = {
 	kind: string,
+};
+
+/**
+ *  Mostly-data struct returned by the `cmd_get_autostart_status`
+ *  command. Separate from `AppSettings.start_at_login` because the
+ *  OS-observed value can diverge if the user toggled the OS setting
+ *  outside Sightline.
+ */
+export type AutostartStatus = {
+	osEnabled: boolean,
+	dbEnabled: boolean,
 };
 
 export type Chapter = {
@@ -485,6 +498,10 @@ export type RemoveStreamerInput = {
 export type ReprioritizeInput = {
 	vodId: string,
 	priority: number,
+};
+
+export type SetAutostartInput = {
+	enabled: boolean,
 };
 
 export type SetShortcutInput = {

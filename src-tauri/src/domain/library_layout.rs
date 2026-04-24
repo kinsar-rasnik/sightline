@@ -396,15 +396,10 @@ mod tests {
         // Index suffixes are 01..06 and distinct.
         let mut suffixes: Vec<String> = frames
             .iter()
-            .filter_map(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_owned())
-            })
+            .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_owned()))
             .collect();
         suffixes.sort();
-        let suffixes_unique: std::collections::HashSet<_> =
-            suffixes.iter().cloned().collect();
+        let suffixes_unique: std::collections::HashSet<_> = suffixes.iter().cloned().collect();
         assert_eq!(suffixes_unique.len(), PREVIEW_FRAME_COUNT);
     }
 

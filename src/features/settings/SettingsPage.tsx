@@ -7,6 +7,10 @@ import {
   useLibraryInfo,
   useStagingInfo,
 } from "@/features/downloads/use-downloads";
+import {
+  useAutostartStatus,
+  useSetAutostart,
+} from "@/features/settings/use-autostart";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
 import { commands } from "@/ipc";
 import type {
@@ -152,6 +156,17 @@ function AdvancedSection({
   settings: AppSettings;
   onUpdate: (patch: SettingsPatch) => void;
 }) {
+  const autostart = useAutostartStatus();
+  const setAutostart = useSetAutostart();
+  // The OS value is authoritative when available; fall back to the
+  // DB value on the first render before the query resolves so the
+  // toggle never flickers.
+  const autostartChecked =
+    autostart.data?.osEnabled ?? settings.startAtLogin;
+  const autostartDiverged =
+    autostart.data != null &&
+    autostart.data.osEnabled !== autostart.data.dbEnabled;
+
   return (
     <section
       aria-labelledby="advanced-heading"
@@ -191,9 +206,16 @@ function AdvancedSection({
 
       <Toggle
         label="Start Sightline at login (opt-in)"
-        checked={settings.startAtLogin}
-        onChange={(v) => onUpdate({ startAtLogin: v })}
+        checked={autostartChecked}
+        onChange={(v) => setAutostart.mutate(v)}
+        disabled={setAutostart.isPending}
       />
+      {autostartDiverged && (
+        <p className="text-xs text-amber-400">
+          The OS-level autostart setting was changed outside Sightline.
+          Click the toggle to resync.
+        </p>
+      )}
       <Toggle
         label="Show dock icon on macOS (if hidden, use the menu bar)"
         checked={settings.showDockIcon}

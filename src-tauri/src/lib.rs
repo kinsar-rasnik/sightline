@@ -144,6 +144,15 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            // LaunchAgent is the standard macOS approach and works
+            // without Developer ID signing (AppleScript would prompt
+            // the user on first start — we prefer the silent plist
+            // path). Windows uses HKCU\Run and Linux uses XDG
+            // autostart; MacosLauncher controls only the macOS variant.
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
@@ -514,6 +523,26 @@ pub fn run() {
                 if let Err(e) = install_tray(&handle) {
                     warn!(error = %e, "tray icon install skipped");
                 }
+
+                // Phase 5 housekeeping: reconcile the autostart
+                // setting against the OS. If the user enabled "Start
+                // at login" in a previous session but disabled it in
+                // System Settings, we pick up the OS state and update
+                // the DB; if the DB says on and the OS says off, we
+                // re-register. This runs after `manage` so the
+                // reconcile's SettingsService handle is identical to
+                // what `cmd_set_autostart` will later see.
+                let settings_for_reconcile =
+                    handle.state::<AppState>().settings.clone();
+                let autostart_svc = crate::services::autostart::AutostartService::new(
+                    handle.clone(),
+                    settings_for_reconcile,
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = autostart_svc.reconcile().await {
+                        warn!(error = ?e, "autostart reconcile failed");
+                    }
+                });
 
                 handle
                     .emit("app:ready", serde_json::json!({ "startedAt": started_at }))

@@ -33,12 +33,12 @@ use specta::Type;
 use sqlx::Row;
 use tracing::{debug, warn};
 
-use crate::domain::library_layout::{
-    PREVIEW_FRAME_COUNT, VodWithStreamer, layout as build_layout,
-};
+use crate::domain::library_layout::{PREVIEW_FRAME_COUNT, VodWithStreamer, layout as build_layout};
 use crate::error::AppError;
 use crate::infra::db::Db;
-use crate::infra::ffmpeg::{PREVIEW_FRAME_PERCENTS, PreviewFramesSpec, SharedFfmpeg, ThumbnailSpec};
+use crate::infra::ffmpeg::{
+    PREVIEW_FRAME_PERCENTS, PreviewFramesSpec, SharedFfmpeg, ThumbnailSpec,
+};
 use crate::services::settings::SettingsService;
 
 /// Renderer-facing bundle of per-VOD asset paths. Every `path` is an
@@ -255,10 +255,7 @@ impl MediaAssetsService {
         Ok(PathBuf::from(root))
     }
 
-    async fn lookup(
-        &self,
-        vod_id: &str,
-    ) -> Result<Option<(PathBuf, MinimalVod, bool)>, AppError> {
+    async fn lookup(&self, vod_id: &str) -> Result<Option<(PathBuf, MinimalVod, bool)>, AppError> {
         let row_opt = sqlx::query(
             "SELECT d.state, d.final_path, v.twitch_user_id, v.title, v.stream_started_at,
                     v.duration_seconds, s.display_name, s.login

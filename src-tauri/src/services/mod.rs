@@ -2,6 +2,7 @@
 //! `infra` adapters. Services are the only place that combine multiple
 //! infra sources; commands should never do so directly.
 
+pub mod autostart;
 pub mod credentials;
 pub mod downloads;
 pub mod events;

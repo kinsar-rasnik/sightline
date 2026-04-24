@@ -3,6 +3,7 @@
 //! binding generation flow and `.claude/skills/add-tauri-command/`.
 
 pub mod app;
+pub mod autostart;
 pub mod credentials;
 pub mod downloads;
 pub mod health;

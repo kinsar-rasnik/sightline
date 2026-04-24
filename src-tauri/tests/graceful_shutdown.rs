@@ -35,7 +35,7 @@ use std::time::Duration;
 use sightline_lib::infra::clock::{Clock, FixedClock};
 use sightline_lib::infra::db::Db;
 use sightline_lib::infra::ffmpeg::fake::{FfmpegFake, FfmpegScript};
-use sightline_lib::infra::ffmpeg::{SharedFfmpeg, Ffmpeg};
+use sightline_lib::infra::ffmpeg::{Ffmpeg, SharedFfmpeg};
 use sightline_lib::infra::fs::space::FakeFreeSpace;
 use sightline_lib::infra::throttle::GlobalRate;
 use sightline_lib::infra::ytdlp::DownloadProgress;
@@ -86,10 +86,10 @@ fn long_running_script() -> FakeScript {
     // inside the ~300 ms window; the service's cooperative cancel
     // path should flip the row to a safe state by the time the
     // shutdown broadcast completes.
-    let ticks = (1..=6)
+    let ticks = (1u64..=6)
         .map(|i| DownloadProgress {
             progress: Some((i as f64) / 6.0),
-            bytes_done: i as u64 * 1024,
+            bytes_done: i * 1024,
             bytes_total: Some(6 * 1024),
             speed_bps: Some(1024),
             eta_seconds: Some(6 - i),
@@ -219,24 +219,21 @@ async fn restart_after_shutdown_recovers_via_crash_path() {
     let ytdlp: SharedYtDlp = Arc::new(YtDlpFake::new(FakeScript::default()));
     let ffmpeg: SharedFfmpeg = Arc::new(FfmpegFake::new(FfmpegScript::default()));
     let queue = make_queue(&db, ytdlp, ffmpeg, staging);
-    let (tx, _rx) = tokio::sync::mpsc::channel::<sightline_lib::services::downloads::DownloadEvent>(
-        16,
-    );
-    let sink: sightline_lib::services::downloads::DownloadEventSink =
-        Arc::new(move |event| {
-            let _ = tx.try_send(event);
-        });
+    let (tx, _rx) =
+        tokio::sync::mpsc::channel::<sightline_lib::services::downloads::DownloadEvent>(16);
+    let sink: sightline_lib::services::downloads::DownloadEventSink = Arc::new(move |event| {
+        let _ = tx.try_send(event);
+    });
     let spawn = queue.clone().spawn(sink);
     // Give the manager loop a beat to run crash_recover — it runs
     // before the first select!, so one tokio::yield is usually enough,
     // but a short sleep is more robust across OSes.
     tokio::time::sleep(Duration::from_millis(80)).await;
 
-    let state: String =
-        sqlx::query_scalar("SELECT state FROM downloads WHERE vod_id = 'v1'")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM downloads WHERE vod_id = 'v1'")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     assert_eq!(
         state, "queued",
         "crash_recover should reset `downloading` to `queued` on startup"
@@ -244,11 +241,10 @@ async fn restart_after_shutdown_recovers_via_crash_path() {
 
     // bytes_done should have been reset so the next worker starts
     // from scratch — yt-dlp's resume flag isn't trusted.
-    let bytes: i64 =
-        sqlx::query_scalar("SELECT bytes_done FROM downloads WHERE vod_id = 'v1'")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let bytes: i64 = sqlx::query_scalar("SELECT bytes_done FROM downloads WHERE vod_id = 'v1'")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     assert_eq!(bytes, 0);
 
     spawn.handle.shutdown();

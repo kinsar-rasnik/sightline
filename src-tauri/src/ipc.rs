@@ -22,6 +22,7 @@ use crate::commands;
 /// exposes. The same instance is used at runtime (as the `invoke_handler`
 /// source) and offline (to regenerate bindings).
 pub fn ipc_builder() -> Builder<Wry> {
+    use crate::services::autostart::AutostartStatus;
     use crate::services::events::{
         AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CredentialsChangedEvent,
         DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
@@ -79,6 +80,8 @@ pub fn ipc_builder() -> Builder<Wry> {
             // Phase 5
             commands::media::get_vod_assets,
             commands::media::regenerate_vod_thumbnail,
+            commands::autostart::get_autostart_status,
+            commands::autostart::set_autostart,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -109,6 +112,8 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<AppTrayActionEvent>()
         .typ::<AppShutdownRequestedEvent>()
         .typ::<NotificationPayload>()
+        // Phase 5
+        .typ::<AutostartStatus>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace
