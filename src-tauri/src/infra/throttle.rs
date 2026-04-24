@@ -247,9 +247,8 @@ mod tests {
     #[test]
     fn bucket_rejects_over_capacity_and_reports_wait() {
         let b = TokenBucket::new(1000, 2);
-        let _ = b.try_consume(2000, 0).unwrap();
-        let result = b.try_consume(500, 0);
-        let wait = result.expect_err("should report wait");
+        b.try_consume(2000, 0).unwrap();
+        let wait = b.try_consume(500, 0).unwrap_err();
         // 500 missing tokens / 1000 per second = 0.5 seconds.
         assert!(wait.0.as_millis() >= 500);
     }
@@ -258,7 +257,7 @@ mod tests {
     fn bucket_refills_over_time() {
         let b = TokenBucket::new(1000, 2);
         // Drain.
-        let _ = b.try_consume(2000, 0).unwrap();
+        b.try_consume(2000, 0).unwrap();
         // 1 second later, 1000 tokens have re-accrued.
         assert!((b.tokens(1_000) - 1000.0).abs() < 1e-6);
         assert!(b.try_consume(800, 1_000).is_ok());
@@ -269,7 +268,7 @@ mod tests {
     fn bucket_clamps_to_capacity() {
         let b = TokenBucket::new(1000, 2);
         // Already full; spending 500 then letting 10s pass should cap.
-        let _ = b.try_consume(500, 0).unwrap();
+        b.try_consume(500, 0).unwrap();
         let tokens = b.tokens(10_000);
         assert!((tokens - 2000.0).abs() < 1.0);
     }

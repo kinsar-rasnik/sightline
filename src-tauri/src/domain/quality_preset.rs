@@ -106,10 +106,8 @@ impl QualityPreset {
 pub fn resolve(requested: QualityPreset, source_height: u32, source_fps: u32) -> QualityPreset {
     let mut current = requested;
     loop {
-        let height_ok = current
-            .max_height()
-            .map_or(true, |cap| source_height >= cap);
-        let fps_ok = current.max_fps().map_or(true, |cap| source_fps >= cap);
+        let height_ok = current.max_height().is_none_or(|cap| source_height >= cap);
+        let fps_ok = current.max_fps().is_none_or(|cap| source_fps >= cap);
         // If the preset's ceiling is *higher* than the source can
         // provide, we need to downgrade. `Source` always stays —
         // yt-dlp will simply take the best the source has.
@@ -159,7 +157,10 @@ mod tests {
     #[test]
     fn source_never_downgrades() {
         // Source always stays Source, even if the numbers look tiny.
-        assert_eq!(resolve(QualityPreset::Source, 360, 24), QualityPreset::Source);
+        assert_eq!(
+            resolve(QualityPreset::Source, 360, 24),
+            QualityPreset::Source
+        );
     }
 
     #[test]

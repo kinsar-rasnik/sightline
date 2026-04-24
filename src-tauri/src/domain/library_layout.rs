@@ -108,9 +108,7 @@ impl LibraryLayout for PlexLayout {
         let streamer_dir = sanitize_component(v.streamer_display_name);
         let (season_dir, date) = plex_season_and_date(v.vod.stream_started_at);
         let filename = plex_filename(v, &date, "mp4");
-        PathBuf::from(streamer_dir)
-            .join(season_dir)
-            .join(filename)
+        PathBuf::from(streamer_dir).join(season_dir).join(filename)
     }
 
     fn sidecars_for(&self, v: &VodWithStreamer) -> Vec<SidecarFile> {
@@ -214,11 +212,7 @@ fn flat_filename(v: &VodWithStreamer, date: &str, ext: &str) -> String {
     let stem = if s.is_empty() {
         format!("{date}_{id}", id = v.vod.twitch_video_id)
     } else {
-        format!(
-            "{date}_{id}_{s}",
-            id = v.vod.twitch_video_id,
-            s = s
-        )
+        format!("{date}_{id}_{s}", id = v.vod.twitch_video_id, s = s)
     };
     // Filename-safe by construction (date + numeric id + slug) but run
     // through the component sanitizer for belt+braces.
@@ -326,8 +320,14 @@ mod tests {
 
     #[test]
     fn kind_roundtrips_db_strings() {
-        assert_eq!(LibraryLayoutKind::from_db_str("plex"), Some(LibraryLayoutKind::Plex));
-        assert_eq!(LibraryLayoutKind::from_db_str("flat"), Some(LibraryLayoutKind::Flat));
+        assert_eq!(
+            LibraryLayoutKind::from_db_str("plex"),
+            Some(LibraryLayoutKind::Plex)
+        );
+        assert_eq!(
+            LibraryLayoutKind::from_db_str("flat"),
+            Some(LibraryLayoutKind::Flat)
+        );
         assert_eq!(LibraryLayoutKind::from_db_str("other"), None);
     }
 

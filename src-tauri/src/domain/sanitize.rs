@@ -30,21 +30,18 @@ pub const MAX_COMPONENT_LEN: usize = 200;
 /// as a literal to make the test corpus inspection-friendly — see
 /// the grep-run notes in `phase-01.md` about filter avoidance.
 const ILLEGAL_CHARS: &[char] = &[
-    '<', '>', ':', '"', '/', '\\', '|', '?', '*',
-    // NUL + common control chars:
-    '\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}', '\u{0004}', '\u{0005}', '\u{0006}',
-    '\u{0007}', '\u{0008}', '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}',
-    '\u{000e}', '\u{000f}', '\u{0010}', '\u{0011}', '\u{0012}', '\u{0013}', '\u{0014}',
-    '\u{0015}', '\u{0016}', '\u{0017}', '\u{0018}', '\u{0019}', '\u{001a}', '\u{001b}',
-    '\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}',
+    '<', '>', ':', '"', '/', '\\', '|', '?', '*', // NUL + common control chars:
+    '\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}', '\u{0004}', '\u{0005}', '\u{0006}', '\u{0007}',
+    '\u{0008}', '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{000e}', '\u{000f}',
+    '\u{0010}', '\u{0011}', '\u{0012}', '\u{0013}', '\u{0014}', '\u{0015}', '\u{0016}', '\u{0017}',
+    '\u{0018}', '\u{0019}', '\u{001a}', '\u{001b}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}',
 ];
 
 /// Windows reserved names. Case-insensitive; may appear with an
 /// extension (e.g. `CON.txt` is still reserved).
 const RESERVED_WINDOWS_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// Sanitize a single path component. Never returns an empty string —
@@ -243,7 +240,7 @@ mod tests {
         let fixtures = [
             "normal title",
             "?colon:colons:everywhere?",
-            "多byte 日本語 title",                    // multi-byte UTF-8
+            "多byte 日本語 title", // multi-byte UTF-8
             "trailing space    ",
             "```backticks```",
             "/etc/passwd",

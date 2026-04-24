@@ -63,7 +63,31 @@ export type AppError = { kind: "db"; detail: string } | { kind: "io"; detail: st
 // VOD ingest pipeline failure (persistence, chapter merge, etc.).
 { kind: "ingest"; detail: string } | 
 // Parser failure — duration, chapter payload, ISO timestamp.
-{ kind: "parse"; detail: string };
+{ kind: "parse"; detail: string } | 
+/**
+ *  A download-queue operation failed (state-machine violation,
+ *  row not found, invalid priority, etc.). Subprocess failures
+ *  surface as [`AppError::Sidecar`] instead.
+ */
+{ kind: "download"; detail: string } | 
+/**
+ *  A bundled sidecar (`yt-dlp`, `ffmpeg`) returned a non-zero exit
+ *  code or couldn't be located / spawned. `tool` distinguishes the
+ *  two for UI routing.
+ */
+{ kind: "sidecar"; tool: string; detail: string } | 
+/**
+ *  Disk-space preflight failed — either the staging or library
+ *  partition had too little free space for the estimated download
+ *  size. The frontend surfaces this with a "free up space" CTA.
+ */
+{ kind: "disk_full"; path: string } | 
+/**
+ *  Library-layout migration failed at the filesystem level (move,
+ *  copy+verify, or sidecar write). Individual per-file errors are
+ *  logged; this variant reports the overall failure to the user.
+ */
+{ kind: "library_migration"; detail: string };
 
 export type AppReadyEvent = {
 	startedAt: number,

@@ -70,7 +70,10 @@ impl DownloadState {
     /// up again on its own. `FailedRetryable` is NOT terminal — the
     /// queue scheduler puts it back into `Queued` after the backoff.
     pub fn is_terminal(self) -> bool {
-        matches!(self, DownloadState::Completed | DownloadState::FailedPermanent)
+        matches!(
+            self,
+            DownloadState::Completed | DownloadState::FailedPermanent
+        )
     }
 }
 
@@ -125,7 +128,10 @@ pub mod reason {
     /// Non-retryable reason → the state machine jumps straight to
     /// `FailedPermanent` without passing through `FailedRetryable`.
     pub fn is_permanent(reason: &str) -> bool {
-        matches!(reason, DISK_FULL | SUB_ONLY | USER_CANCELLED | MAX_ATTEMPTS_REACHED)
+        matches!(
+            reason,
+            DISK_FULL | SUB_ONLY | USER_CANCELLED | MAX_ATTEMPTS_REACHED
+        )
     }
 }
 
@@ -149,7 +155,12 @@ pub fn apply(from: DownloadState, t: Transition) -> Result<DownloadState, Transi
         (DownloadState::FailedRetryable, Retry) => Queued,
         (DownloadState::FailedPermanent, Retry) => Queued,
         // Everything else is illegal.
-        (from, t) => return Err(TransitionError { from, transition: t }),
+        (from, t) => {
+            return Err(TransitionError {
+                from,
+                transition: t,
+            });
+        }
     };
     Ok(to)
 }
@@ -165,8 +176,7 @@ impl std::fmt::Display for TransitionError {
         write!(
             f,
             "illegal download transition {:?} from {:?}",
-            self.transition,
-            self.from
+            self.transition, self.from
         )
     }
 }
@@ -259,7 +269,10 @@ mod tests {
             DownloadState::Paused,
             DownloadState::FailedRetryable,
         ] {
-            assert_eq!(apply(start, Transition::Cancel).unwrap(), DownloadState::FailedPermanent);
+            assert_eq!(
+                apply(start, Transition::Cancel).unwrap(),
+                DownloadState::FailedPermanent
+            );
         }
     }
 
@@ -269,7 +282,10 @@ mod tests {
             DownloadState::FailedRetryable,
             DownloadState::FailedPermanent,
         ] {
-            assert_eq!(apply(start, Transition::Retry).unwrap(), DownloadState::Queued);
+            assert_eq!(
+                apply(start, Transition::Retry).unwrap(),
+                DownloadState::Queued
+            );
         }
     }
 
@@ -334,7 +350,12 @@ mod tests {
 
     #[test]
     fn permanent_reasons_skip_retry() {
-        for r in [reason::DISK_FULL, reason::SUB_ONLY, reason::USER_CANCELLED, reason::MAX_ATTEMPTS_REACHED] {
+        for r in [
+            reason::DISK_FULL,
+            reason::SUB_ONLY,
+            reason::USER_CANCELLED,
+            reason::MAX_ATTEMPTS_REACHED,
+        ] {
             assert!(reason::is_permanent(r), "{r} should be permanent");
         }
         for r in [reason::NETWORK, reason::UNKNOWN, reason::YTDLP_EXIT] {

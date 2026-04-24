@@ -35,12 +35,20 @@ pub fn generate(input: &NfoInput<'_>) -> String {
     write_tag(&mut out, "originaltitle", &input.vod.title);
     write_tag(&mut out, "plot", &input.vod.description);
     write_tag(&mut out, "studio", "Twitch");
-    write_tag(&mut out, "runtime", &runtime_minutes(input.vod.duration_seconds));
+    write_tag(
+        &mut out,
+        "runtime",
+        &runtime_minutes(input.vod.duration_seconds),
+    );
 
     let premiered = iso_date(input.vod.stream_started_at);
     write_tag(&mut out, "premiered", &premiered);
     write_tag(&mut out, "year", premiered.get(..4).unwrap_or("0"));
-    write_tag(&mut out, "dateadded", &iso_datetime(input.vod.first_seen_at));
+    write_tag(
+        &mut out,
+        "dateadded",
+        &iso_datetime(input.vod.first_seen_at),
+    );
 
     // director / actor — we stretch "director" to mean "streamer" so
     // Infuse / Plex display the streamer's name on the details panel.
@@ -336,7 +344,7 @@ mod tests {
         let nfo = generate(&NfoInput {
             vod: &v,
             chapters: &c,
-            streamer_display_name: "Sampler".into(),
+            streamer_display_name: "Sampler",
         });
         let mut depth: i32 = 0;
         let mut in_tag = false;

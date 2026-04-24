@@ -25,7 +25,7 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "process", "io-util", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
@@ -42,12 +42,16 @@ async-trait = "0.1"
 url = "2"
 futures = "0.3"
 governor = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+sysinfo = { version = "0.32", default-features = false, features = ["disk"] }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
 wiremock = "0.6"
 pretty_assertions = "1"
+filetime = "0.2"
 
 [features]
 # Exposes test helpers (e.g. `prime_token_for_tests`) so integration tests

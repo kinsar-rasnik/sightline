@@ -62,6 +62,31 @@ pub enum AppError {
     /// Parser failure — duration, chapter payload, ISO timestamp.
     #[error("parse error: {detail}")]
     Parse { detail: String },
+
+    // --- Phase 3: download engine + sidecars + storage. ---
+    /// A download-queue operation failed (state-machine violation,
+    /// row not found, invalid priority, etc.). Subprocess failures
+    /// surface as [`AppError::Sidecar`] instead.
+    #[error("download error: {detail}")]
+    Download { detail: String },
+
+    /// A bundled sidecar (`yt-dlp`, `ffmpeg`) returned a non-zero exit
+    /// code or couldn't be located / spawned. `tool` distinguishes the
+    /// two for UI routing.
+    #[error("{tool} sidecar error: {detail}")]
+    Sidecar { tool: String, detail: String },
+
+    /// Disk-space preflight failed — either the staging or library
+    /// partition had too little free space for the estimated download
+    /// size. The frontend surfaces this with a "free up space" CTA.
+    #[error("insufficient disk space at {path}")]
+    DiskFull { path: String },
+
+    /// Library-layout migration failed at the filesystem level (move,
+    /// copy+verify, or sidecar write). Individual per-file errors are
+    /// logged; this variant reports the overall failure to the user.
+    #[error("library migration error: {detail}")]
+    LibraryMigration { detail: String },
 }
 
 impl From<sqlx::Error> for AppError {
