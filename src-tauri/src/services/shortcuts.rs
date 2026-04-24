@@ -56,14 +56,37 @@ impl ShortcutsService {
 
     /// Set a single action_id → keys mapping. An empty `keys` clears
     /// the override (falls back to the frontend default).
+    ///
+    /// Validates length and character set so a malicious / buggy caller
+    /// can't balloon `shortcuts_json` via unbounded strings (tracked
+    /// under the Phase 4 security review). `action_id` is an internal
+    /// identifier: lowercase ASCII letters, digits, and underscores,
+    /// up to 64 chars. `keys` is a keystroke or chord string: printable
+    /// ASCII up to 32 chars.
     pub async fn set(&self, action_id: &str, keys: &str) -> Result<(), AppError> {
-        if action_id.trim().is_empty() {
+        let action_id = action_id.trim();
+        if action_id.is_empty() {
             return Err(AppError::InvalidInput {
                 detail: "action_id is empty".into(),
             });
         }
-        let mut map = self.read_json().await?;
+        if action_id.len() > 64 || !action_id.chars().all(is_valid_action_char) {
+            return Err(AppError::InvalidInput {
+                detail: "action_id must be 1-64 lowercase-ASCII / digits / underscore".into(),
+            });
+        }
         let keys = keys.trim();
+        if keys.len() > 32 {
+            return Err(AppError::InvalidInput {
+                detail: "keys must be <= 32 characters".into(),
+            });
+        }
+        if !keys.chars().all(is_valid_key_char) {
+            return Err(AppError::InvalidInput {
+                detail: "keys must be printable ASCII".into(),
+            });
+        }
+        let mut map = self.read_json().await?;
         if keys.is_empty() {
             map.remove(action_id);
         } else {
@@ -76,6 +99,15 @@ impl ShortcutsService {
     pub async fn reset(&self) -> Result<(), AppError> {
         self.write_json(&BTreeMap::new()).await
     }
+}
+
+fn is_valid_action_char(c: char) -> bool {
+    matches!(c, 'a'..='z' | '0'..='9' | '_')
+}
+
+fn is_valid_key_char(c: char) -> bool {
+    // Printable ASCII + space + the two modifier separators we use (`+`, ` `).
+    (c.is_ascii_graphic() || c == ' ') && !c.is_control()
 }
 
 #[cfg(test)]
@@ -123,5 +155,35 @@ mod tests {
         svc.set("timeline", "g t").await.unwrap();
         svc.reset().await.unwrap();
         assert!(svc.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejects_overlong_action_id() {
+        let svc = fixture().await;
+        let long = "a".repeat(65);
+        let err = svc.set(&long, "g l").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_overlong_keys() {
+        let svc = fixture().await;
+        let long_keys = "a".repeat(33);
+        let err = svc.set("library", &long_keys).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_non_printable_keys() {
+        let svc = fixture().await;
+        let err = svc.set("library", "g\u{0007}l").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_non_snake_action_id() {
+        let svc = fixture().await;
+        let err = svc.set("Library", "g l").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 }

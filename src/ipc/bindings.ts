@@ -633,11 +633,22 @@ export type ToggleFavoriteInput = {
 
 export type TrayActionInput = {
 	/**
-	 *  Freely-formed action identifier. See `commands/tray_actions.ts`
-	 *  on the frontend for the closed set.
+	 *  Closed-set action identifier. Rejected at deserialization if the
+	 *  caller supplies an unknown value.
 	 */
-	kind: string,
+	kind: TrayActionKind,
 };
+
+/**
+ *  Closed set of tray menu actions. Adding a new action means:
+ *    1. Add a variant here.
+ *    2. Handle it in the frontend `AppShell`'s `app:tray_action` switch.
+ *    3. Wire the tray menu item to call `emit_tray_action({ kind })`.
+ * 
+ *  Serialized as snake_case over IPC so the JSON wire form is stable
+ *  against Rust-side renames.
+ */
+export type TrayActionKind = "open_sightline" | "open_library" | "open_timeline" | "open_downloads" | "open_settings" | "pause_all" | "resume_all";
 
 export type TriggerPollInput = {
 	// If omitted, the poller re-evaluates every due streamer on its next tick.

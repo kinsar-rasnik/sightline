@@ -1,19 +1,25 @@
 # scripts/sidecars.lock — pinned sidecar binaries. See ADR-0013.
 #
 # Format: pipe-delimited, one row per (tool, target-triple).
-#   name | triple | url | sha256 | binary_name | archive_kind | archive_entry
+#   name | triple | url | sha256 | binary_name | archive_kind | archive_entry | extracted_sha256
 #
-# - `name`          : logical sidecar name (yt-dlp, ffmpeg).
-# - `triple`        : Rust target triple — matches Tauri's externalBin naming.
-# - `url`           : HTTPS download URL. MUST be an immutable release asset.
-# - `sha256`        : hex SHA-256 of the downloaded file. Verified BEFORE
-#                     extraction or execution — a mismatch aborts bundling.
-# - `binary_name`   : expected entrypoint name inside the archive (or the
-#                     filename of the download when archive_kind is empty).
-# - `archive_kind`  : one of {zip, tar.xz} when the download is an archive;
-#                     empty when the download is the binary itself.
-# - `archive_entry` : path inside the archive to the executable we want
-#                     (relative). Empty when archive_kind is empty.
+# - `name`             : logical sidecar name (yt-dlp, ffmpeg).
+# - `triple`           : Rust target triple — matches Tauri's externalBin naming.
+# - `url`              : HTTPS download URL. MUST be an immutable release asset.
+# - `sha256`           : hex SHA-256 of the downloaded file. Verified BEFORE
+#                        extraction or execution — a mismatch aborts bundling.
+# - `binary_name`      : expected entrypoint name inside the archive (or the
+#                        filename of the download when archive_kind is empty).
+# - `archive_kind`     : one of {zip, tar.xz} when the download is an archive;
+#                        empty when the download is the binary itself.
+# - `archive_entry`    : path inside the archive to the executable we want
+#                        (relative, no `..`). Empty when archive_kind is empty.
+# - `extracted_sha256` : hex SHA-256 of the installed binary that comes out of
+#                        the archive (or empty if not yet pinned — see below).
+#                        Enables a fast cache-hit path that verifies an
+#                        already-installed binary without re-extracting.
+#                        When empty, the script re-extracts from the verified
+#                        cached archive on every run (slow but safe).
 #
 # Comments start with `#`. Blank lines allowed.
 #
@@ -23,24 +29,23 @@
 # --- yt-dlp 2026.03.17 -------------------------------------------------------
 # Hashes copied from the upstream SHA2-256SUMS file:
 #   https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/SHA2-256SUMS
-yt-dlp|aarch64-apple-darwin|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_macos|e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5|yt-dlp_macos||
-yt-dlp|x86_64-apple-darwin|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_macos|e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5|yt-dlp_macos||
-yt-dlp|x86_64-unknown-linux-gnu|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux|c2b0189f581fe4a2ddd41954f1bcb7d327db04b07ed0dea97e4f1b3e09b5dd8e|yt-dlp_linux||
-yt-dlp|aarch64-unknown-linux-gnu|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux_aarch64|6bfa19736181da9e2e066f9c767da2f24fdcc5e148fa5034d1feb09132f89ad5|yt-dlp_linux_aarch64||
-yt-dlp|x86_64-pc-windows-msvc|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp.exe|3db811b366b2da47337d2fcfdfe5bbd9a258dad3f350c54974f005df115a1545|yt-dlp.exe||
+# yt-dlp ships as a raw binary (no archive) — `extracted_sha256` unused.
+yt-dlp|aarch64-apple-darwin|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_macos|e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5|yt-dlp_macos|||
+yt-dlp|x86_64-apple-darwin|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_macos|e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5|yt-dlp_macos|||
+yt-dlp|x86_64-unknown-linux-gnu|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux|c2b0189f581fe4a2ddd41954f1bcb7d327db04b07ed0dea97e4f1b3e09b5dd8e|yt-dlp_linux|||
+yt-dlp|aarch64-unknown-linux-gnu|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux_aarch64|6bfa19736181da9e2e066f9c767da2f24fdcc5e148fa5034d1feb09132f89ad5|yt-dlp_linux_aarch64|||
+yt-dlp|x86_64-pc-windows-msvc|https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp.exe|3db811b366b2da47337d2fcfdfe5bbd9a258dad3f350c54974f005df115a1545|yt-dlp.exe|||
 
 # --- ffmpeg ------------------------------------------------------------------
-# macOS: osxexperts.net (linked from the ffmpeg.org download page as the
-# canonical static-build publisher for macOS). Hashes were computed by
-# streaming the upstream binary on 2026-04-24 (see ADR-0013 for the exact
-# `curl -sL URL | shasum -a 256` transcript).
-#   - aarch64 (Apple Silicon): ffmpeg 8.1
-#   - x86_64  (Intel):         ffmpeg 8.0   (8.1 Intel not currently published)
-ffmpeg|aarch64-apple-darwin|https://www.osxexperts.net/ffmpeg81arm.zip|ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad|ffmpeg|zip|ffmpeg
-ffmpeg|x86_64-apple-darwin|https://www.osxexperts.net/ffmpeg80intel.zip|2d24d22db78c87f394a5822867acd5c5dc5e762cd261a44bd26923f3a5af3e07|ffmpeg|zip|ffmpeg
+# macOS: osxexperts.net. `extracted_sha256` populated for aarch64 from the
+# host that produced the first successful bundle; other entries are empty
+# and re-extract on every run until a developer on that platform records
+# the value (the script prints the hash after extraction to make this easy).
+ffmpeg|aarch64-apple-darwin|https://www.osxexperts.net/ffmpeg81arm.zip|ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad|ffmpeg|zip|ffmpeg|9a08d61f9328e8164ba560ee7a79958e357307fcfeea6fe626b7d66cdc287028
+ffmpeg|x86_64-apple-darwin|https://www.osxexperts.net/ffmpeg80intel.zip|2d24d22db78c87f394a5822867acd5c5dc5e762cd261a44bd26923f3a5af3e07|ffmpeg|zip|ffmpeg|
 
 # Linux + Windows: BtbN/FFmpeg-Builds, autobuild tag 2026-04-24-13-18. Hashes
 # copied from the upstream `checksums.sha256` asset on the release.
-ffmpeg|x86_64-unknown-linux-gnu|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-linux64-gpl.tar.xz|e15ef955f9036a8ca354df76e179bcca68dc7968625958db16d13cdf893cdbad|ffmpeg|tar.xz|ffmpeg-N-124093-g5134b0aceb-linux64-gpl/bin/ffmpeg
-ffmpeg|aarch64-unknown-linux-gnu|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-linuxarm64-gpl.tar.xz|7f5e4e446b0a6fcf74b09c27fe6880e68628cc02639f3b2a7e22db37a00ed933|ffmpeg|tar.xz|ffmpeg-N-124093-g5134b0aceb-linuxarm64-gpl/bin/ffmpeg
-ffmpeg|x86_64-pc-windows-msvc|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-win64-gpl.zip|940e72ab2f36192592f3bb7a80f716bdf46b32abcc6d3f2884c0cd6e374bec3d|ffmpeg.exe|zip|ffmpeg-N-124093-g5134b0aceb-win64-gpl/bin/ffmpeg.exe
+ffmpeg|x86_64-unknown-linux-gnu|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-linux64-gpl.tar.xz|e15ef955f9036a8ca354df76e179bcca68dc7968625958db16d13cdf893cdbad|ffmpeg|tar.xz|ffmpeg-N-124093-g5134b0aceb-linux64-gpl/bin/ffmpeg|
+ffmpeg|aarch64-unknown-linux-gnu|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-linuxarm64-gpl.tar.xz|7f5e4e446b0a6fcf74b09c27fe6880e68628cc02639f3b2a7e22db37a00ed933|ffmpeg|tar.xz|ffmpeg-N-124093-g5134b0aceb-linuxarm64-gpl/bin/ffmpeg|
+ffmpeg|x86_64-pc-windows-msvc|https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-04-24-13-18/ffmpeg-N-124093-g5134b0aceb-win64-gpl.zip|940e72ab2f36192592f3bb7a80f716bdf46b32abcc6d3f2884c0cd6e374bec3d|ffmpeg.exe|zip|ffmpeg-N-124093-g5134b0aceb-win64-gpl/bin/ffmpeg.exe|

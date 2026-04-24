@@ -11,6 +11,7 @@ pub mod ipc;
 pub mod services;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager};
@@ -69,7 +70,31 @@ pub struct AppState {
     pub timeline: Arc<TimelineIndexerService>,
     pub shortcuts: Arc<ShortcutsService>,
     pub notifications: Arc<NotificationService>,
+    /// Sync mirror of `app_settings.window_close_behavior` so
+    /// `on_window_event` can read the current preference without
+    /// touching the async settings service. 0 = hide, 1 = quit.
+    /// Updated by `cmd_set_window_close_behavior`.
+    pub close_behavior: Arc<AtomicU8>,
     pub app_handle: tauri::AppHandle,
+}
+
+/// Encode a [`crate::services::settings::WindowCloseBehavior`] as a u8
+/// for atomic storage on `AppState`.
+pub fn encode_close_behavior(b: crate::services::settings::WindowCloseBehavior) -> u8 {
+    match b {
+        crate::services::settings::WindowCloseBehavior::Hide => 0,
+        crate::services::settings::WindowCloseBehavior::Quit => 1,
+    }
+}
+
+/// Counterpart of [`encode_close_behavior`]. Any value other than 1 is
+/// treated as `Hide` so an uninitialised / corrupt atomic value can
+/// never cause a surprising quit.
+pub fn decode_close_behavior(v: u8) -> crate::services::settings::WindowCloseBehavior {
+    match v {
+        1 => crate::services::settings::WindowCloseBehavior::Quit,
+        _ => crate::services::settings::WindowCloseBehavior::Hide,
+    }
 }
 
 impl AppState {
@@ -220,6 +245,16 @@ pub fn run() {
                 let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Seed the close-behavior atomic from the persisted
+                // setting so `on_window_event` can read it synchronously.
+                let initial_settings = settings_svc.get().await.ok();
+                let close_behavior = Arc::new(AtomicU8::new(encode_close_behavior(
+                    initial_settings
+                        .as_ref()
+                        .map(|s| s.window_close_behavior)
+                        .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide),
+                )));
 
                 // Opportunistic backfill: if we have VODs but no intervals,
                 // populate the index in the background so the timeline UI
@@ -446,6 +481,7 @@ pub fn run() {
                     timeline: timeline_svc,
                     shortcuts: shortcuts_svc,
                     notifications: notifications_svc,
+                    close_behavior,
                     app_handle: handle.clone(),
                 });
 
@@ -468,14 +504,18 @@ pub fn run() {
                 // Cmd/Ctrl+Q, File > Quit → cmd_request_shutdown) is
                 // what actually stops the poller/queue and exits the
                 // process.
-                let behavior = window
-                    .try_state::<AppState>()
-                    .and_then(|state| {
-                        tauri::async_runtime::block_on(async move { state.settings.get().await })
-                            .ok()
-                            .map(|s| s.window_close_behavior)
-                    })
-                    .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide);
+                //
+                // SECURITY: read the behavior from a synchronous atomic
+                // mirror rather than `block_on`-ing the async settings
+                // service — a `block_on` inside a Tokio worker thread
+                // deadlocks the multi-threaded scheduler and prevents
+                // the graceful-shutdown path below from running. The
+                // atomic is seeded at startup and kept in sync by
+                // `cmd_set_window_close_behavior`.
+                let behavior = match window.try_state::<AppState>() {
+                    Some(state) => decode_close_behavior(state.close_behavior.load(Ordering::Acquire)),
+                    None => crate::services::settings::WindowCloseBehavior::Hide,
+                };
                 match behavior {
                     crate::services::settings::WindowCloseBehavior::Hide => {
                         let _ = window.hide();

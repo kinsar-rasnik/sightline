@@ -76,6 +76,10 @@ function Download-File([string]$url, [string]$dest) {
 }
 
 function Extract-Entry([string]$archive, [string]$kind, [string]$entry, [string]$dest) {
+  # Defensive: reject archive_entry values that would escape the tmp dir.
+  if ($entry.StartsWith('/') -or $entry.StartsWith('\') -or $entry -match '\.\.') {
+    throw "archive_entry must be a safe relative path (got: $entry)"
+  }
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   try {
@@ -106,19 +110,21 @@ function Process-Row($row) {
   $binary  = $row.binary
   $akind   = $row.archive_kind
   $aentry  = $row.archive_entry
+  $extractedSha = $row.extracted_sha.ToLower()
 
   $suffix  = Out-Suffix $triple
   $final   = Join-Path $OutDir "$name-$triple$suffix"
 
+  # Fast cache-hit path requires a pinned hash; otherwise re-extract.
   if (-not $Force -and (Test-Path $final)) {
+    $existing = SHA256-OfFile $final
     if ([string]::IsNullOrEmpty($akind)) {
-      $existing = SHA256-OfFile $final
       if ($existing -eq $sha) {
         Write-Host "skip  $final (sha256 match)" -ForegroundColor DarkGray
         return
       }
-    } else {
-      Write-Host "skip  $final (present - pass -Force to redownload)" -ForegroundColor DarkGray
+    } elseif (-not [string]::IsNullOrEmpty($extractedSha) -and $existing -eq $extractedSha) {
+      Write-Host "skip  $final (extracted sha256 match)" -ForegroundColor DarkGray
       return
     }
   }
@@ -166,6 +172,11 @@ function Process-Row($row) {
     Extract-Entry $cached $akind $aentry $final
   }
   Write-Host "ok installed $final" -ForegroundColor Green
+
+  if (-not [string]::IsNullOrEmpty($akind) -and [string]::IsNullOrEmpty($extractedSha)) {
+    $gotExtracted = SHA256-OfFile $final
+    Write-Host ("   extracted_sha256={0} (paste into scripts/sidecars.lock to pin)" -f $gotExtracted) -ForegroundColor DarkGray
+  }
 }
 
 if (-not (Test-Path $Lockfile)) { throw "$Lockfile not found" }
@@ -177,13 +188,14 @@ foreach ($line in Get-Content $Lockfile) {
   $parts = $line.Split('|')
   if ($parts.Count -lt 7) { continue }
   $row = [pscustomobject]@{
-    name          = $parts[0]
-    triple        = $parts[1]
-    url           = $parts[2]
-    sha           = $parts[3]
-    binary        = $parts[4]
-    archive_kind  = $parts[5]
-    archive_entry = $parts[6]
+    name           = $parts[0]
+    triple         = $parts[1]
+    url            = $parts[2]
+    sha            = $parts[3]
+    binary         = $parts[4]
+    archive_kind   = $parts[5]
+    archive_entry  = $parts[6]
+    extracted_sha  = if ($parts.Count -gt 7) { $parts[7] } else { "" }
   }
   if ($All -or $row.triple -eq $Triple) { $rows += $row }
 }

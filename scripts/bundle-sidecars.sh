@@ -121,8 +121,14 @@ download() {
 }
 
 # Extract archive_entry from archive and move to final binary path.
+# The `entry` value is a trusted-by-commit lockfile field; even so we
+# reject any form with a parent-directory traversal or absolute path so
+# a malicious lockfile PR can't write outside `$dest`.
 extract_entry() {
   local archive="$1" kind="$2" entry="$3" dest="$4"
+  case "$entry" in
+    /*|*'..'*) fail "archive_entry must be a safe relative path (got: $entry)" ;;
+  esac
   local tmp
   tmp="$(mktemp -d)"
   # Ensure tmp is cleaned even on failure.
@@ -152,27 +158,30 @@ extract_entry() {
 
 # Process a single lockfile row.
 process_row() {
-  local name="$1" triple="$2" url="$3" sha="$4" binary_name="$5" archive_kind="$6" archive_entry="$7"
+  local name="$1" triple="$2" url="$3" sha="$4" binary_name="$5" archive_kind="$6" archive_entry="$7" extracted_sha="${8-}"
   local suffix
   suffix="$(out_suffix_for "$triple")"
   local final="$OUT_DIR/${name}-${triple}${suffix}"
 
+  # Fast cache-hit path: only skip the download/extract if we can prove the
+  # installed binary matches a pinned hash. For raw binaries that's the
+  # top-level sha256; for archive entries it's `extracted_sha256` (required
+  # for a skip). The older "presence implies trusted" path is removed —
+  # see phase-04.md security review findings.
   if [ "$FORCE" -eq 0 ] && [ -f "$final" ]; then
     local existing_sha
     existing_sha="$(sha256_of "$final")"
     if [ -z "$archive_kind" ]; then
-      # Binary is the download itself — compare against lockfile hash.
       if [ "$existing_sha" = "$sha" ]; then
         dim "skip  $final (sha256 match)"
         return 0
       fi
-    else
-      # Archive case: we can't re-derive the top-level archive hash from a
-      # single extracted entry. Treat presence as success; `verify-sidecars`
-      # re-runs a smoke check.
-      dim "skip  $final (present — use --force to redownload)"
+    elif [ -n "$extracted_sha" ] && [ "$existing_sha" = "$extracted_sha" ]; then
+      dim "skip  $final (extracted sha256 match)"
       return 0
     fi
+    # Either hash mismatches or `extracted_sha256` not pinned yet — fall
+    # through to re-download/extract against the verified archive.
   fi
 
   local download_name="$binary_name"
@@ -223,16 +232,25 @@ process_row() {
     *) chmod +x "$final" ;;
   esac
   ok "installed $final"
+
+  # For archive entries, print the extracted binary's hash so a developer
+  # can pin it into the lockfile's `extracted_sha256` column. Future runs
+  # then take the fast skip path above.
+  if [ -n "$archive_kind" ] && [ -z "$extracted_sha" ]; then
+    local got_extracted
+    got_extracted="$(sha256_of "$final")"
+    dim "   extracted_sha256=$got_extracted (paste into scripts/sidecars.lock to pin)"
+  fi
 }
 
 matching_rows() {
   # Emit rows that match the requested triple (or all rows when --all).
   local target="${1:-}"
   # Strip comments and blank lines; leave pipe-delimited rows intact.
-  grep -v -E '^\s*(#|$)' "$LOCKFILE" | while IFS='|' read -r name triple url sha binary archive_kind archive_entry; do
+  grep -v -E '^\s*(#|$)' "$LOCKFILE" | while IFS='|' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
     if [ "$FETCH_ALL" -eq 1 ] || [ "$triple" = "$target" ]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry" "${extracted_sha-}"
     fi
   done
 }
@@ -242,9 +260,9 @@ if [ ! -f "$LOCKFILE" ]; then
 fi
 
 processed=0
-while IFS=$'\t' read -r name triple url sha binary archive_kind archive_entry; do
+while IFS=$'\t' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
   [ -z "$name" ] && continue
-  process_row "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry"
+  process_row "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry" "${extracted_sha-}"
   processed=$((processed + 1))
 done < <(matching_rows "$TRIPLE")
 

@@ -146,21 +146,18 @@ impl TimelineIndexerService {
         Ok(n)
     }
 
-    /// Rebuild the entire table from `vods`. Emits `Rebuilding`
-    /// roughly every 200 rows so the UI can render a progress bar
-    /// during a large backfill, then a single `Rebuilt` at the end.
+    /// Rebuild the entire table from `vods`. The truncate + insert
+    /// run inside a single transaction so partial state is never
+    /// observable (the table either holds the old rows or the new
+    /// rows, never an empty transient state). Emits `Rebuilding` +
+    /// `Rebuilt` around the write for UI progress.
     pub async fn rebuild_all(&self, sink: IndexerEventSink) -> Result<i64, AppError> {
         let total = self.eligible_vod_count().await?;
-        // Truncate first so partial state is never observed.
-        sqlx::query("DELETE FROM stream_intervals")
-            .execute(self.db.pool())
-            .await?;
-        // Insert in one statement using a SELECT — much faster than
-        // row-by-row and keeps the indexer in a consistent state at
-        // all points (the transaction either commits in full or is
-        // rolled back on error).
         let now = self.clock.unix_seconds();
         let mut tx = self.db.pool().begin().await?;
+        sqlx::query("DELETE FROM stream_intervals")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "INSERT INTO stream_intervals (vod_id, streamer_id, start_at, end_at, created_at)
              SELECT twitch_video_id, twitch_user_id, stream_started_at,

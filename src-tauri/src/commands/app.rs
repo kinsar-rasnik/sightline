@@ -1,6 +1,7 @@
 //! App-level Phase 4 commands: tray summary, shutdown coordination,
 //! window close behavior, favorites, shortcut customization.
 
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use specta::Type;
 use tauri::Emitter;
 
 use crate::AppState;
+use crate::encode_close_behavior;
 use crate::error::AppError;
 use crate::services::downloads::DownloadsSummary;
 use crate::services::events::{
@@ -84,6 +86,11 @@ pub async fn set_window_close_behavior(
             ..Default::default()
         })
         .await?;
+    // Mirror into the atomic so the (sync) window-close handler reads
+    // the new value without hitting the DB.
+    state
+        .close_behavior
+        .store(encode_close_behavior(input.behavior), Ordering::Release);
     Ok(())
 }
 
@@ -143,12 +150,45 @@ pub async fn request_shutdown(state: tauri::State<'_, AppState>) -> Result<(), A
     Ok(())
 }
 
+/// Closed set of tray menu actions. Adding a new action means:
+///   1. Add a variant here.
+///   2. Handle it in the frontend `AppShell`'s `app:tray_action` switch.
+///   3. Wire the tray menu item to call `emit_tray_action({ kind })`.
+///
+/// Serialized as snake_case over IPC so the JSON wire form is stable
+/// against Rust-side renames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayActionKind {
+    OpenSightline,
+    OpenLibrary,
+    OpenTimeline,
+    OpenDownloads,
+    OpenSettings,
+    PauseAll,
+    ResumeAll,
+}
+
+impl TrayActionKind {
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            TrayActionKind::OpenSightline => "open_sightline",
+            TrayActionKind::OpenLibrary => "open_library",
+            TrayActionKind::OpenTimeline => "open_timeline",
+            TrayActionKind::OpenDownloads => "open_downloads",
+            TrayActionKind::OpenSettings => "open_settings",
+            TrayActionKind::PauseAll => "pause_all",
+            TrayActionKind::ResumeAll => "resume_all",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TrayActionInput {
-    /// Freely-formed action identifier. See `commands/tray_actions.ts`
-    /// on the frontend for the closed set.
-    pub kind: String,
+    /// Closed-set action identifier. Rejected at deserialization if the
+    /// caller supplies an unknown value.
+    pub kind: TrayActionKind,
 }
 
 /// Called by the tray menu handlers to emit a uniform webview event.
@@ -159,9 +199,12 @@ pub async fn emit_tray_action(
     state: tauri::State<'_, AppState>,
     input: TrayActionInput,
 ) -> Result<(), AppError> {
-    let _ = state
-        .app_handle
-        .emit(EV_APP_TRAY_ACTION, AppTrayActionEvent { kind: input.kind });
+    let _ = state.app_handle.emit(
+        EV_APP_TRAY_ACTION,
+        AppTrayActionEvent {
+            kind: input.kind.as_wire_str().to_owned(),
+        },
+    );
     Ok(())
 }
 

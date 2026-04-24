@@ -84,7 +84,7 @@ errors=0
 entries="["
 sep=""
 
-while IFS='|' read -r name triple url sha binary archive_kind archive_entry; do
+while IFS='|' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
   # Skip comments / blanks.
   case "$name" in ""|\#*) continue ;; esac
   [ "$triple" = "$TRIPLE" ] || continue
@@ -97,11 +97,17 @@ while IFS='|' read -r name triple url sha binary archive_kind archive_entry; do
     detail="expected at $final"
     errors=$((errors + 1))
   else
+    got="$(sha256_of "$final")"
     if [ -z "$archive_kind" ]; then
-      got="$(sha256_of "$final")"
       if [ "$got" != "$sha" ]; then
         status="hash_mismatch"
         detail="expected $sha got $got"
+        errors=$((errors + 1))
+      fi
+    elif [ -n "$extracted_sha" ]; then
+      if [ "$got" != "$extracted_sha" ]; then
+        status="hash_mismatch"
+        detail="expected extracted $extracted_sha got $got"
         errors=$((errors + 1))
       fi
     fi
