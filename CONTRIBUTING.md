@@ -42,16 +42,44 @@ pnpm typecheck
 pnpm lint
 ```
 
-Before opening a PR, run the full quality gate:
+### Local quality gate (required before every push)
+
+Run the bundled script:
 
 ```bash
+./scripts/verify.sh            # fmt + clippy + cargo test + typecheck + lint + vitest + vite build
+./scripts/verify.sh --fast     # skip cargo test and vite build (quick sanity pass)
+./scripts/verify.sh --rust     # Rust-only
+./scripts/verify.sh --web      # frontend-only
+```
+
+It wraps the same checks CI runs:
+
+```
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm build
 ```
+
+This script must pass before every `git push` to `main`. Two recent
+hotfixes (`docs/session-reports/hotfix-camelcase.md`,
+`docs/session-reports/hotfix-ci.md`) caught defects that would have
+been obvious under a local gate but slipped past a broken CI setup —
+don't rely on CI alone.
+
+Optionally, install a pre-push hook so the gate runs automatically:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+The hook runs `verify.sh --fast` by default. Skip a single push with
+`git push --no-verify`, or across a session with `SKIP_VERIFY=1`. Run
+the complete gate via `VERIFY_MODE=full git push`.
 
 ## Branching and commits
 
