@@ -10,11 +10,24 @@ use crate::error::AppError;
 use crate::services::credentials::CredentialsInput;
 use crate::services::settings::CredentialsStatus;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+/// Input payload for `set_twitch_credentials`. The IPC boundary is
+/// the only place the Client Secret crosses from the webview into
+/// Rust; any `{:?}` downstream of that would risk logging it, so
+/// `Debug` is redacted.
+#[derive(Clone, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetTwitchCredentialsInput {
     pub client_id: String,
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for SetTwitchCredentialsInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetTwitchCredentialsInput")
+            .field("client_id_len", &self.client_id.len())
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[tauri::command]

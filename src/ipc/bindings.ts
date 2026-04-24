@@ -162,6 +162,12 @@ export type RemoveStreamerInput = {
 	twitchUserId: string,
 };
 
+/**
+ *  Input payload for `set_twitch_credentials`. The IPC boundary is
+ *  the only place the Client Secret crosses from the webview into
+ *  Rust; any `{:?}` downstream of that would risk logging it, so
+ *  `Debug` is redacted.
+ */
 export type SetTwitchCredentialsInput = {
 	clientId: string,
 	clientSecret: string,

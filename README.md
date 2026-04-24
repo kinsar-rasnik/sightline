@@ -3,7 +3,7 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>Status: Phase 1 — foundation. Pre-alpha. No binaries yet.</em>
+  <em>Status: Phase 2 — Twitch ingest + polling. Pre-alpha. No binaries yet.</em>
 </p>
 
 ---
@@ -75,11 +75,42 @@ pnpm tauri build
 
 ## Quickstart
 
-1. **Get Twitch API credentials.** Register an app at <https://dev.twitch.tv/console/apps>, grab the **Client ID** and generate a **Client Secret**. The redirect URL can be anything (we don't use OAuth — only App Access Tokens).
-2. **Launch Sightline.** On first run, open **Settings → Twitch API** and paste in the Client ID and Secret. They're stored encrypted on disk via the OS keyring.
-3. **Add streamers.** Paste in one Twitch login name per line. Sightline pulls metadata and starts polling.
-4. **Wait for the first cycle.** Newly discovered VODs appear in the Library, filtered by your game whitelist (default: GTA V only).
-5. **Download & watch.** Click a VOD to queue it, or enable auto-download per streamer. Once downloaded, click ▶ to play, or pair two with **Sync View**.
+### 1. Register a Twitch developer application
+
+Sightline uses the **App Access Token** flow (no end-user OAuth). You need your own Client ID and Client Secret:
+
+1. Sign in at [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) with any Twitch account. Sightline does not read that account — the credentials only authenticate the app itself.
+2. Click **Register Your Application**. Pick any name (e.g. *Sightline Local*).
+3. For **OAuth Redirect URLs**, enter `http://localhost` — Sightline never uses the redirect URL, but Twitch requires one.
+4. Category: **Website Integration**. Client Type: **Confidential**.
+5. After creating, open the app and copy the **Client ID**. Click **New Secret** and copy the **Client Secret**.
+
+### 2. Launch Sightline and paste credentials
+
+Run `pnpm tauri dev` (or the prebuilt binary once Phase 7 ships).
+
+- Click **Settings** in the top nav.
+- Paste the Client ID and Client Secret under *Twitch credentials*, click **Save credentials**.
+- Sightline stores them in your OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service) — never as plaintext on disk.
+- Once saved, the form shows a masked preview (`abcd••••`) and a **Replace** button. Subsequent IPC calls never re-expose the secret.
+
+### 3. Add streamers to follow
+
+- Switch to the **Streamers** tab.
+- Type a Twitch login (3–25 characters, alphanumeric + underscore) and click **Add**.
+- Sightline resolves the user via Helix, stores the avatar + display name, and schedules the streamer for adaptive polling (10 min when live, 30 min when they streamed recently, 2 h when dormant).
+- The first poll backfills up to 100 most recent VODs; subsequent polls only fetch new ones (stopping on the first already-seen VOD id).
+
+### 4. Browse the Library
+
+- The **Library** tab lists every ingested VOD ordered by stream start time, newest first.
+- Filter chips narrow by status (`Eligible`, `Sub-only`, etc.) and by streamer.
+- Click a row to see chapter breakdown, status reason, and a link back to Twitch.
+- VODs are classified automatically: a match on your game filter (default: GTA V, id `32982`) + stream ended + not sub-only → **Eligible**. Non-matching games → **Skipped — game**; sub-only VODs are flagged (tooltip explains they'll be re-checked in case the streamer unlocks them); live streams are deferred until they end.
+
+### 5. (Phase 3+) Download and watch
+
+The download queue, player, and sync view arrive in later phases — see the [Roadmap](#roadmap). Phase 2 ends once the library is populated and filter-accurate.
 
 ---
 

@@ -19,10 +19,22 @@ use crate::infra::twitch::auth::TwitchAuthenticator;
 use crate::services::settings::{CredentialsStatus, SettingsService};
 
 /// User-facing input bundle. Trimmed and validated by `set()`.
-#[derive(Debug)]
+///
+/// `Debug` is hand-implemented so a stray `{:?}` in tracing or a panic
+/// message never leaks the Client Secret — same pattern as
+/// `TwitchCredentials` in `infra::keychain`.
 pub struct CredentialsInput {
     pub client_id: String,
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for CredentialsInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialsInput")
+            .field("client_id_len", &self.client_id.len())
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug)]

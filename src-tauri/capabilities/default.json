@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability granted to the main window. Phase 1 scope: health command only.",
+  "description": "Default capability granted to the main window. As of Phase 2 this covers every in-process #[tauri::command] handler (health, credentials, streamers, vods, settings, poll). core:default grants the Tauri core APIs required by the webview; application commands are allow-listed implicitly because they are all registered in one invoke_handler with no plugin namespace.",
   "windows": ["main"],
   "permissions": [
     "core:default"

@@ -33,10 +33,24 @@ const ACCOUNT_CLIENT_SECRET: &str = "twitch_client_secret";
 
 /// Opaque bundle of Twitch App credentials. Stored in the keyring,
 /// passed by value only within the auth pipeline.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented by hand so that a stray `{:?}` never leaks the
+/// Client Secret through a tracing span or a panic message. The Client ID
+/// is public (it shows up in every Helix request header) and is masked;
+/// the Secret is redacted unconditionally.
+#[derive(Clone)]
 pub struct TwitchCredentials {
     pub client_id: String,
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for TwitchCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchCredentials")
+            .field("client_id", &masked(&self.client_id))
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl TwitchCredentials {
@@ -172,6 +186,21 @@ mod tests {
         assert_eq!(masked("abcdef"), "abcd••••");
         assert_eq!(masked("ab"), "ab••••");
         assert_eq!(masked(""), "••••");
+    }
+
+    #[test]
+    fn debug_redacts_secret_and_masks_id() {
+        let creds = TwitchCredentials {
+            client_id: "abcd1234".into(),
+            client_secret: "supersecretvalueshouldnotappear".into(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(rendered.contains("[REDACTED]"), "expected redaction marker");
+        assert!(
+            !rendered.contains("supersecretvalueshouldnotappear"),
+            "secret leaked: {rendered}"
+        );
+        assert!(rendered.contains("abcd••••"), "expected masked id");
     }
 
     #[tokio::test]
