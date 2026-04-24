@@ -38,6 +38,9 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0007](docs/adr/0007-ipc-typegen.md) — Generated TS IPC bindings via tauri-specta 2.x (operationalizes ADR-0004)
 - [ADR-0008](docs/adr/0008-chapters-via-twitch-gql.md) — VOD chapters via the public Twitch GraphQL endpoint
 - [ADR-0009](docs/adr/0009-specta-optional-fields.md) — `#[specta(optional)]` on partial-input DTOs
+- [ADR-0010](docs/adr/0010-bandwidth-throttle.md) — Bandwidth throttle via per-worker yt-dlp `--limit-rate`
+- [ADR-0011](docs/adr/0011-library-layout-pluggability.md) — Pluggable library layout (Plex / Flat)
+- [ADR-0012](docs/adr/0012-staging-atomic-move.md) — Staging + atomic-move + SHA-256 verify on cross-FS
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

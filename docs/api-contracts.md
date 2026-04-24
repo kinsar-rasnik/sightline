@@ -59,8 +59,16 @@ Errors: `AppError::NotFound`, `AppError::Db`.
 
 ### Settings
 
-- `getSettings()` → `AppSettings { enabledGameIds, pollFloorSeconds, pollRecentSeconds, pollCeilingSeconds, concurrencyCap, firstBackfillLimit, credentials }`.
-- `updateSettings(patch)` → `AppSettings`. Any subset of the top-level fields may be supplied. Intervals are normalized monotonically (`floor ≤ recent ≤ ceiling`); `concurrencyCap` clamped to [1, 16]; `firstBackfillLimit` clamped to [1, 500].
+- `getSettings()` → `AppSettings`. Extended in Phase 3 with
+  `libraryRoot`, `libraryLayout` (`plex` | `flat`), `stagingPath`,
+  `maxConcurrentDownloads`, `bandwidthLimitBps` (`null` = unlimited),
+  `qualityPreset`, `autoUpdateYtDlp`.
+- `updateSettings(patch)` → `AppSettings`. Any subset of the top-level
+  fields may be supplied. Intervals are normalized monotonically
+  (`floor ≤ recent ≤ ceiling`); `concurrencyCap` clamped to [1, 16];
+  `firstBackfillLimit` clamped to [1, 500]; `maxConcurrentDownloads`
+  clamped to [1, 5]; `bandwidthLimitBps = -1` is a sentinel for
+  "clear the cap" (stored as `null`).
 
 Errors: `AppError::Db`, `AppError::Parse`.
 
@@ -68,6 +76,51 @@ Errors: `AppError::Db`, `AppError::Parse`.
 
 - `triggerPoll({ twitchUserId? })` → `void`. If `twitchUserId` is present, polls that one streamer on the next scheduler tick; otherwise re-evaluates every due streamer. Respects the global rate limit.
 - `getPollStatus()` → `PollStatusRow[]`. Per-streamer summary: the `StreamerSummary` plus `lastPoll { startedAt, finishedAt, vodsNew, vodsUpdated, status }` if a prior poll exists.
+
+---
+
+## Phase 3 commands
+
+### Downloads
+
+- `enqueueDownload({ vodId, priority? })` → `DownloadRow`. Idempotent
+  on the vod_id — re-enqueueing a row returns the existing one
+  unchanged. Fires a wake-up to the worker pool.
+- `pauseDownload({ vodId })` → `DownloadRow`. Valid only in
+  `downloading` state. The in-flight yt-dlp child is aborted and the
+  row transitions to `paused`; a later `resumeDownload` queues a
+  fresh attempt.
+- `resumeDownload({ vodId })` → `DownloadRow`. `paused → queued`,
+  worker pool wakes up.
+- `cancelDownload({ vodId })` → `DownloadRow`. Any non-completed state
+  → `failed_permanent` with `last_error = "USER_CANCELLED"`.
+- `retryDownload({ vodId })` → `DownloadRow`. Resets `attempts`,
+  `bytes_done`, errors, and requeues. Works from either failed state.
+- `reprioritizeDownload({ vodId, priority })` → `DownloadRow`. Higher
+  priority runs first (default 100).
+- `listDownloads({ filters? })` → `DownloadRow[]`. Ordered by
+  `priority DESC, queued_at ASC`. Filters: `state?`, `streamerId?`.
+- `getDownload({ vodId })` → `DownloadRow`. `AppError::NotFound` if
+  the vod has never been enqueued.
+
+### Storage
+
+- `getStagingInfo()` → `StagingInfo { path, freeBytes, staleFileCount }`.
+- `getLibraryInfo()` → `LibraryInfo { path?, freeBytes?, fileCount }`.
+  `path` is `null` until the user picks a library root.
+
+### Library migration
+
+- `migrateLibrary({ targetLayout })` → `{ migrationId }`. Persists the
+  layout choice in `app_settings` immediately, then spawns a
+  background task that walks every `completed` download and moves
+  files. Emits `library:migrating` / `library:migration_completed` /
+  `library:migration_failed`. Errors: `AppError::LibraryMigration`
+  (target equals current, no library root configured, another
+  migration still running).
+- `getMigrationStatus({ migrationId })` → `MigrationRow { id,
+  startedAt, finishedAt?, fromLayout, toLayout, moved, errors,
+  status }`.
 
 ---
 
@@ -85,6 +138,14 @@ Events use `tauri::Emitter::emit` from the Rust side. Topics and payload types a
 | `vod:updated`           | `VodUpdatedEvent { twitchVideoId, ingestStatus }`                       | Subsequent status transitions.                   |
 | `poll:started`          | `PollStartedEvent { twitchUserId, startedAt }`                          | At the top of a per-streamer poll (Phase 3 UX).  |
 | `poll:finished`         | `PollFinishedEvent { twitchUserId, finishedAt, vodsNew, vodsUpdated, status }` | At the bottom of a per-streamer poll.           |
+| `download:state_changed` | `DownloadStateChangedEvent { vodId, state }`                          | State-machine transition on a download row.     |
+| `download:progress`      | `DownloadProgressEvent { vodId, progress, bytesDone, bytesTotal, speedBps, etaSeconds }` | yt-dlp progress tick, throttled to ≤ 2 Hz per download. |
+| `download:completed`     | `DownloadCompletedEvent { vodId, finalPath }`                         | After the atomic move into the library succeeds. |
+| `download:failed`        | `DownloadFailedEvent { vodId, reason }`                               | Retryable or permanent failure.                  |
+| `library:migrating`      | `LibraryMigratingEvent { migrationId, moved, total }`                 | Per-file tick during a layout migration.         |
+| `library:migration_completed` | `LibraryMigrationCompletedEvent { migrationId, moved, errors }`  | After a migration finishes (success or partial). |
+| `library:migration_failed`    | `LibraryMigrationFailedEvent { migrationId, reason }`            | Migration aborted before completion.            |
+| `storage:low_disk_warning`    | `StorageLowDiskWarningEvent { path, freeBytes }`                  | Fired once per threshold crossing; not continuous. |
 
 Frontend cache invalidation subscribes to these in `src/lib/event-subscriptions.ts`. Topic names live in `src/ipc/index.ts::events` and `src-tauri/src/services/events.rs` as paired constants.
 

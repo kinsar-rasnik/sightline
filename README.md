@@ -3,7 +3,7 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>Status: Phase 2 — Twitch ingest + polling. Pre-alpha. No binaries yet.</em>
+  <em>Status: Phase 3 — download engine + library layout. Pre-alpha. No binaries yet.</em>
 </p>
 
 ---
@@ -55,13 +55,13 @@ Pre-built installers (macOS `.dmg`, Windows `.msi`, Linux `.AppImage`) will be p
 ### Build from source
 
 ```bash
-# Prerequisites: Rust 1.90+, Node 20+, pnpm 9+, platform Tauri deps
+# Prerequisites: Rust 1.90+, Node 22+, pnpm 10+, platform Tauri deps
 # (see https://v2.tauri.app/start/prerequisites/)
 
 git clone https://github.com/<your-fork>/sightline.git
 cd sightline
 pnpm install
-pnpm bundle-sidecars            # downloads pinned yt-dlp + ffmpeg
+./scripts/bundle-sidecars.sh    # fetches pinned yt-dlp + ffmpeg binaries
 pnpm tauri dev
 ```
 
@@ -70,6 +70,21 @@ For a production build:
 ```bash
 pnpm tauri build
 ```
+
+#### Bundled sidecars
+
+Sightline ships with two third-party executables running on your
+machine:
+
+- **yt-dlp** — fetches the VOD bytes from Twitch. Self-updatable;
+  controlled by the "Auto-update yt-dlp" setting.
+- **ffmpeg** — container-swap from `.ts` → `.mp4` and thumbnail
+  extraction only. Never re-encodes.
+
+Both are pinned to specific versions by checksum in
+`scripts/sidecars.lock`. They are vendored as part of the installer
+so you don't need a separate install step. ADR-0003 covers the
+update flow.
 
 ---
 
@@ -108,9 +123,28 @@ Run `pnpm tauri dev` (or the prebuilt binary once Phase 7 ships).
 - Click a row to see chapter breakdown, status reason, and a link back to Twitch.
 - VODs are classified automatically: a match on your game filter (default: GTA V, id `32982`) + stream ended + not sub-only → **Eligible**. Non-matching games → **Skipped — game**; sub-only VODs are flagged (tooltip explains they'll be re-checked in case the streamer unlocks them); live streams are deferred until they end.
 
-### 5. (Phase 3+) Download and watch
+### 5. Download VODs
 
-The download queue, player, and sync view arrive in later phases — see the [Roadmap](#roadmap). Phase 2 ends once the library is populated and filter-accurate.
+- Switch to the **Downloads** tab or click **Download** on any eligible
+  library row.
+- The queue runs up to **Max concurrent downloads** workers in
+  parallel (default 2, max 5), respecting your global **Bandwidth
+  limit**.
+- Pause / Resume / Cancel / Retry each download from either the
+  Downloads page or the Library row. Failed downloads auto-retry up
+  to 5 times with exponential backoff before landing in
+  `failed_permanent`.
+- Downloads land in your **Library root** under the chosen
+  **library layout** (Plex/Jellyfin or Flat — see
+  [docs/user-guide/library-layouts.md](docs/user-guide/library-layouts.md)).
+  Switching layouts later runs a background migrator that moves
+  existing files atomically.
+
+### 6. (Phase 5+) Watch
+
+The player, watch-progress, and sync view arrive in later phases —
+see the [Roadmap](#roadmap). Phase 3 ends with a populated on-disk
+library ready for an external player or the Phase 5 built-in one.
 
 ---
 
@@ -143,10 +177,10 @@ Deep dives:
 
 | Phase | Scope                                                  | Status        |
 | ----- | ------------------------------------------------------ | ------------- |
-| 1     | Foundation (repo, workforce, docs, code skeleton, CI)  | **In progress** |
-| 2     | Twitch API client, streamer + VOD ingestion, polling   | Next          |
-| 3     | Download engine (yt-dlp orchestration, queue, throttle)| Planned       |
-| 4     | Library UI, settings, tray mode                        | Planned       |
+| 1     | Foundation (repo, workforce, docs, code skeleton, CI)  | ✅             |
+| 2     | Twitch API client, streamer + VOD ingestion, polling   | ✅             |
+| 3     | Download engine (yt-dlp orchestration, queue, throttle, library layout) | ✅             |
+| 4     | Library UI, settings, tray mode                        | **Next**      |
 | 5     | Player + watch-progress                                | Planned       |
 | 6     | Multi-View Sync                                        | Planned       |
 | 7     | Auto-cleanup, sub-only handling, polish, v1.0          | Planned       |
