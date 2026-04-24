@@ -59,6 +59,28 @@ pub struct VodAssets {
     pub preview_frame_paths: Vec<String>,
 }
 
+/// Single-choke-point answer for `<video src>`. The player uses this
+/// to decide which state to render — the happy path (`ready`), the
+/// "file moved / deleted externally" path (`missing`), or the
+/// partial-download path (`partial`, download not finished yet).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoSource {
+    pub vod_id: String,
+    /// `None` when state != "ready". Always absolute and verified to
+    /// sit inside the library root.
+    pub path: Option<String>,
+    pub state: VideoSourceState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoSourceState {
+    Ready,
+    Missing,
+    Partial,
+}
+
 #[derive(Debug)]
 pub struct MediaAssetsService {
     db: Db,
@@ -215,6 +237,122 @@ impl MediaAssetsService {
             n += 1;
         }
         Ok(n)
+    }
+
+    /// Resolve the `<video src>` for a VOD. Returns a `VideoSource`
+    /// with `state` narrowed to ready/missing/partial so the player
+    /// can render the right UI without a second round-trip. This is
+    /// the ONLY code path that should produce an asset path the
+    /// webview then feeds to `convertFileSrc`.
+    pub async fn get_video_source(&self, vod_id: &str) -> Result<VideoSource, AppError> {
+        let library_root = match self.library_root().await {
+            Ok(p) => p,
+            Err(_) => {
+                // No library root configured → treat as missing so
+                // the player falls back to its error state rather
+                // than hanging.
+                return Ok(VideoSource {
+                    vod_id: vod_id.to_owned(),
+                    path: None,
+                    state: VideoSourceState::Missing,
+                });
+            }
+        };
+        // Read the download row directly so we don't depend on the
+        // VOD's ingest state. A `partial` answer is "row exists but
+        // not yet completed".
+        let row = sqlx::query("SELECT state, final_path FROM downloads WHERE vod_id = ?")
+            .bind(vod_id)
+            .fetch_optional(self.db.pool())
+            .await?;
+        let Some(row) = row else {
+            return Ok(VideoSource {
+                vod_id: vod_id.to_owned(),
+                path: None,
+                state: VideoSourceState::Missing,
+            });
+        };
+        let state: String = row.try_get(0)?;
+        let path_str: Option<String> = row.try_get(1).ok();
+        if state != "completed" {
+            return Ok(VideoSource {
+                vod_id: vod_id.to_owned(),
+                path: None,
+                state: VideoSourceState::Partial,
+            });
+        }
+        let Some(path_str) = path_str else {
+            return Ok(VideoSource {
+                vod_id: vod_id.to_owned(),
+                path: None,
+                state: VideoSourceState::Missing,
+            });
+        };
+        let path = PathBuf::from(&path_str);
+        if !path.exists() {
+            return Ok(VideoSource {
+                vod_id: vod_id.to_owned(),
+                path: None,
+                state: VideoSourceState::Missing,
+            });
+        }
+        // ADR-0019 invariant: library-root containment check runs on
+        // every player-surfaced path. A file at this point is
+        // expected to pass — the download pipeline already validates
+        // — but we don't trust that blindly.
+        let checked = guarded_path(&library_root, &path)?;
+        Ok(VideoSource {
+            vod_id: vod_id.to_owned(),
+            path: Some(checked),
+            state: VideoSourceState::Ready,
+        })
+    }
+
+    /// Remux the downloaded `.mp4` in-place. Used by the player's
+    /// "Remux file" recovery action when the webview's `<video>`
+    /// element can't decode the file (bad codec, partial write).
+    ///
+    /// Security: the target path is fetched from the downloads row
+    /// rather than taken from the webview, so an attacker can't
+    /// trick us into invoking ffmpeg on an arbitrary file. Also
+    /// double-guards that the file sits under `library_root` before
+    /// invoking the subprocess.
+    pub async fn request_remux(&self, vod_id: &str) -> Result<(), AppError> {
+        let library_root = self.library_root().await?;
+        let row = sqlx::query("SELECT final_path FROM downloads WHERE vod_id = ?")
+            .bind(vod_id)
+            .fetch_optional(self.db.pool())
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let final_path_str: Option<String> = row.try_get(0).ok();
+        let Some(final_path_str) = final_path_str else {
+            return Err(AppError::NotFound);
+        };
+        let final_path = PathBuf::from(final_path_str);
+        // Containment check (defence-in-depth). The download
+        // pipeline already enforces this at move-time.
+        let _ = guarded_path(&library_root, &final_path)?;
+        let remuxed = final_path.with_extension("remuxed.mp4");
+        self.ffmpeg
+            .remux_to_mp4(&crate::infra::ffmpeg::RemuxSpec {
+                source: final_path.clone(),
+                destination: remuxed.clone(),
+            })
+            .await?;
+        // Move the remuxed file back over the original. Do a
+        // staged-swap via a temporary name so a crash mid-rename
+        // doesn't leave the user with neither file.
+        let backup = final_path.with_extension("mp4.backup");
+        let _ = tokio::fs::rename(&final_path, &backup).await;
+        if let Err(e) = tokio::fs::rename(&remuxed, &final_path).await {
+            // Restore the backup before surfacing the error.
+            let _ = tokio::fs::rename(&backup, &final_path).await;
+            return Err(AppError::Io {
+                detail: format!("remux-swap: {e}"),
+            });
+        }
+        let _ = tokio::fs::remove_file(&backup).await;
+        Ok(())
     }
 
     /// Standalone re-extract of the single thumbnail at 10% — used

@@ -49,6 +49,7 @@ use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
 use crate::services::timeline_indexer::TimelineIndexerService;
 use crate::services::vods::VodReadService;
+use crate::services::watch_progress::{WatchEvent, WatchEventSink, WatchProgressService};
 
 /// Shared application state. One instance is constructed during
 /// `setup` and managed by Tauri; each command handler pulls the
@@ -73,6 +74,8 @@ pub struct AppState {
     pub notifications: Arc<NotificationService>,
     // --- Phase 5 ---
     pub media_assets: Arc<MediaAssetsService>,
+    pub watch_progress: Arc<WatchProgressService>,
+    pub watch_progress_sink: WatchEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -257,6 +260,45 @@ pub fn run() {
                 let shortcuts_svc = Arc::new(ShortcutsService::new(db.clone()));
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
+
+                // Phase 5: watch-progress service + event sink.
+                let watch_progress_svc = Arc::new(WatchProgressService::new(
+                    db.clone(),
+                    clock.clone(),
+                ));
+                let watch_handle = handle.clone();
+                let watch_sink: WatchEventSink = Arc::new(move |ev| match ev {
+                    WatchEvent::Updated {
+                        vod_id,
+                        position_seconds,
+                        state,
+                    } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_PROGRESS_UPDATED,
+                            crate::services::events::WatchProgressUpdatedEvent {
+                                vod_id,
+                                position_seconds,
+                                state: state.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::StateChanged { vod_id, from, to } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_STATE_CHANGED,
+                            crate::services::events::WatchStateChangedEvent {
+                                vod_id,
+                                from: from.as_db_str().to_owned(),
+                                to: to.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::Completed { vod_id } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_COMPLETED,
+                            crate::services::events::WatchCompletedEvent { vod_id },
+                        );
+                    }
+                });
 
                 // Phase 5: media-asset resolver (shared by the player
                 // route + the grid's hover preview) + preview-frame
@@ -513,6 +555,8 @@ pub fn run() {
                     shortcuts: shortcuts_svc,
                     notifications: notifications_svc,
                     media_assets: media_assets_svc,
+                    watch_progress: watch_progress_svc,
+                    watch_progress_sink: watch_sink,
                     close_behavior,
                     app_handle: handle.clone(),
                 });

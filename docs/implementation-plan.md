@@ -353,16 +353,151 @@ with verified hashes. Scope deliberately stops short of the player
 
 ---
 
-## Phase 5 — Player and watch progress
+## Phase 5 — Player, watch progress, continue watching, cross-streamer deep link
 
-**Goal.** Play downloaded VODs locally with resume-from-position, mark-as-watched, and chapter scrubbing.
+**Goal.** Play downloaded VODs locally with resume-from-position, a
+polished controls overlay, six-frame hover previews on the library
+grid, a "Continue Watching" row, mark-as-watched, chapter scrubbing,
+and a cross-streamer deep link (the Phase 6 multi-view sync's data
+foundation without the split-screen UI).
+
+### Housekeeping first (closes Phase-4 deferrals)
+
+- [x] Dependabot sweep — no new PRs since Phase 4; closed majors
+  (#5 jsdom / #8 TS6 / #9 vitest4) remain deferred per Phase 3.
+- [x] Tray icon rendering — platform-native assets generated from a
+  single silhouette, `TrayIconBuilder` wired in `lib.rs`, integration
+  test asserts menu registration is stable. Closes phase-04.md
+  §Deviations #1.
+- [x] Library grid + 6-frame hover preview — closes phase-04.md
+  §Deviations #2. Ffmpeg pipeline extracts at 15/30/45/60/75/90 %;
+  background backfill regenerates for pre-Phase-5 rows.
+- [x] `@axe-core/react` + `pnpm a11y` script + CI gate. Exceptions in
+  `docs/a11y-exceptions.md`. Closes phase-04.md §Deviations #4.
+- [x] Graceful-shutdown integration test (`tests/graceful_shutdown.rs`).
+  Closes phase-04.md §Deviations #5.
+- [x] Autostart wiring via `tauri-plugin-autostart` with OS/DB
+  reconcile. Closes phase-04.md §Deviations #3.
 
 ### Acceptance criteria
 
-- [ ] Player (native `<video>` + custom controls) with keyboard shortcuts, variable playback rate, volume, fullscreen.
-- [ ] Watch progress persists on pause, close, seek.
-- [ ] Chapters surfaced in the scrubber.
-- [ ] Mark-as-watched sets a flag and optionally enqueues auto-cleanup.
+#### Schema + domain
+
+- [ ] Migration 0008 `watch_progress` with generated
+  `watched_fraction` column, indexes on `last_watched_at DESC` and
+  `state`. `PRAGMA user_version = 8`.
+- [ ] `domain/watch_progress` — state machine (unwatched →
+  in_progress → completed / manually_watched → unwatched),
+  completion-threshold boundary, pre-roll math
+  `max(0, position - pre_roll_seconds)` with the "if position is
+  within the last 30 s treat as completed" rule. Property-tested
+  state transitions.
+- [ ] `domain/interval_merger` — merge overlapping half-open
+  intervals; used by `total_watch_seconds` accrual. Property-tested
+  with overlap ordering + deduplication invariants.
+- [ ] `domain/deep_link` — pure wall-clock math:
+  `other.stream_started_at + (current_wall - this.stream_started_at)`
+  with saturating bounds against the target VOD's `duration_seconds`.
+
+#### Services + commands
+
+- [ ] `services/watch_progress` — CRUD + state-machine-checked
+  updates, debounced DB writes with flush-on-close semantics,
+  rounding to 0.5 s resolution.
+- [ ] `services/media_assets::get_video_source` (extends the
+  Phase-5-housekeeping service) returns `{ asset_url, state:
+  "ready" | "missing" | "partial" }` after verifying
+  `starts_with(library_root)`.
+- [ ] Tauri commands: `cmd_get_watch_progress`,
+  `cmd_update_watch_progress`, `cmd_mark_watched`,
+  `cmd_mark_unwatched`, `cmd_list_continue_watching`,
+  `cmd_get_watch_stats`, `cmd_get_video_source`,
+  `cmd_request_remux`.
+- [ ] Events: `watch:progress_updated`, `watch:state_changed`,
+  `watch:completed`.
+
+#### Player route
+
+- [ ] `/watch/:vodId` route renders a custom-controls HTML5
+  `<video>` with auto-hide overlay (3 s inactivity), elapsed /
+  remaining time toggle, volume + mute, playback speed menu
+  (0.5× / 0.75× / 1× / 1.25× / 1.5× / 1.75× / 2×), PiP + fullscreen
+  + settings menu, chapter menu.
+- [ ] Seek bar renders downloaded progress + current position +
+  chapter markers (with game-name tooltips) + resume indicator.
+- [ ] Keyboard shortcuts: space/k (play-pause), ←/→ (±5 s),
+  shift+←/shift+→ (±1 frame, pauses if playing), j/l (±10 s),
+  ↑/↓ (±10% volume), m (mute), f (fullscreen), p (PiP), c/shift+c
+  (next/prev chapter), 0–9 (seek 0–90%), < / > (speed), , / .
+  (frame step while paused), escape (exit fullscreen/overlay).
+  All customisable via the Phase-4 shortcuts service.
+- [ ] Missing-file state with "Re-download" action. Bad-codec
+  state with "Remux file" action.
+- [ ] Asset-protocol scope narrowed to `library_root`; `cmd_get_video_source`
+  is the single choke point.
+
+#### Continue watching + grid overlays
+
+- [ ] Horizontal row on `/library` above the grid, up to 12
+  cards ordered by `last_watched_at DESC`. Hidden when empty.
+- [ ] Grid cards overlay a progress bar when
+  `watched_fraction > 0.01 AND state != 'unwatched'`, and a
+  "watched" check icon when `state IN (completed,
+  manually_watched)`.
+- [ ] Timeline bars get a watch-state outline (amber = in-progress,
+  dim = completed).
+
+#### Cross-streamer deep link
+
+- [ ] Detail-drawer co-stream entries get a "Watch this perspective
+  at HH:MM:SS" action. Jumps to the other VOD and seeks to the
+  wall-clock-offset position. Toast confirms.
+- [ ] If the co-stream isn't downloaded, the action flips to
+  "Download and watch" at elevated priority and opens a placeholder
+  player that auto-starts on completion.
+
+#### Settings → Playback
+
+- [ ] Auto-play on open (default on), pre-roll seconds (0–30,
+  default 5), completion threshold (70–100%, default 90),
+  default playback speed (0.5–2, default 1×), volume memory
+  (session / vod / global), PiP-on-blur toggle, subtitle placeholder
+  (Phase 7 tooltip), hardware-acceleration hint + troubleshooting
+  link.
+
+#### Tests
+
+- [ ] Unit: state machine exhaustive, pre-roll math,
+  interval merger, completion threshold boundaries, deep-link
+  math with timezone / DST edge cases.
+- [ ] Integration: player opens a fixture MP4, progress persists
+  + resumes, missing-file path renders correctly, asset-URL
+  allowlist rejects out-of-library paths.
+- [ ] Frontend: every keyboard shortcut covered, focus management,
+  shortcut-help inclusion of player shortcuts, continue-watching
+  row empty vs populated, grid progress-bar accuracy.
+
+#### ADRs + docs
+
+- [ ] ADR-0018 — watch-progress data model + state machine.
+- [ ] ADR-0019 — asset-protocol scope for local playback.
+- [ ] ADR-0020 — cross-streamer deep-link model.
+- [ ] `docs/user-guide/player.md` — controls + shortcuts + resume +
+  missing-file troubleshooting.
+- [ ] `docs/user-guide/watch-progress.md` — what "completed" means,
+  how to change the threshold, how stats work.
+- [ ] `docs/api-contracts.md` + `docs/data-model.md` extended.
+- [ ] README Roadmap flips Player / Watch progress / Continue
+  watching / Cross-streamer deep-link to ✅. Multi-View Sync stays
+  Phase 6.
+
+### Out of scope (explicit)
+
+- Multi-view sync split-screen — Phase 6.
+- Auto-cleanup / retention policies — Phase 7.
+- Subtitles / captions — Phase 7+.
+- Release pipeline / code-signing — Phase 7.
+- Analytics / telemetry — never.
 
 ---
 

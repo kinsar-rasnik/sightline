@@ -30,7 +30,8 @@ pub fn ipc_builder() -> Builder<Wry> {
         LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
         StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerFavoritedEvent,
         StreamerRemovedEvent, StreamerUnfavoritedEvent, TimelineIndexRebuildingEvent,
-        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent,
+        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent,
+        WatchProgressUpdatedEvent, WatchStateChangedEvent,
     };
     use crate::services::notifications::NotificationPayload;
 
@@ -80,6 +81,14 @@ pub fn ipc_builder() -> Builder<Wry> {
             // Phase 5
             commands::media::get_vod_assets,
             commands::media::regenerate_vod_thumbnail,
+            commands::media::get_video_source,
+            commands::media::request_remux,
+            commands::watch::get_watch_progress,
+            commands::watch::update_watch_progress,
+            commands::watch::mark_watched,
+            commands::watch::mark_unwatched,
+            commands::watch::list_continue_watching,
+            commands::watch::get_watch_stats,
             commands::autostart::get_autostart_status,
             commands::autostart::set_autostart,
         ])
@@ -114,6 +123,9 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<NotificationPayload>()
         // Phase 5
         .typ::<AutostartStatus>()
+        .typ::<WatchProgressUpdatedEvent>()
+        .typ::<WatchStateChangedEvent>()
+        .typ::<WatchCompletedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace

@@ -11,7 +11,7 @@ use specta::Type;
 
 use crate::AppState;
 use crate::error::AppError;
-use crate::services::media_assets::VodAssets;
+use crate::services::media_assets::{VideoSource, VodAssets};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -43,4 +43,28 @@ pub async fn regenerate_vod_thumbnail(
     input: VodAssetsInput,
 ) -> Result<(), AppError> {
     state.media_assets.regenerate_thumbnail(&input.vod_id).await
+}
+
+/// Return a `VideoSource` narrowed to `ready | missing | partial`.
+/// The player uses this as its single choke point — the renderer
+/// never builds a filesystem path directly.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_video_source(
+    state: tauri::State<'_, AppState>,
+    input: VodAssetsInput,
+) -> Result<VideoSource, AppError> {
+    state.media_assets.get_video_source(&input.vod_id).await
+}
+
+/// Remux the downloaded `.mp4` in-place via ffmpeg. The player's
+/// "Remux file" recovery action fires this when the `<video>`
+/// element can't decode the downloaded file.
+#[tauri::command]
+#[specta::specta]
+pub async fn request_remux(
+    state: tauri::State<'_, AppState>,
+    input: VodAssetsInput,
+) -> Result<(), AppError> {
+    state.media_assets.request_remux(&input.vod_id).await
 }

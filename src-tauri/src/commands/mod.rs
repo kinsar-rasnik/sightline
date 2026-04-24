@@ -14,3 +14,4 @@ pub mod storage;
 pub mod streamers;
 pub mod timeline;
 pub mod vods;
+pub mod watch;
