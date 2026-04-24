@@ -158,7 +158,7 @@ function Process-Row($row) {
     $got = SHA256-OfFile $tmp
     if ($got -ne $sha) {
       Remove-Item -Force $tmp
-      throw "sha256 mismatch for $url: expected $sha, got $got"
+      throw "sha256 mismatch for ${url}: expected ${sha}, got ${got}"
     }
     Move-Item -Force -Path $tmp -Destination $cached
     Write-Host "ok verified $name $triple (sha256=$sha)" -ForegroundColor Green
