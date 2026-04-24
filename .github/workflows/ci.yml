@@ -57,6 +57,22 @@ jobs:
             librsvg2-dev \
             libssl-dev
 
+      # `cargo clippy` triggers `tauri-build`, which validates every
+      # `externalBin` path exists on disk before type-checking the crate.
+      # Without the bundled sidecars the clippy step fails with
+      # `resource path \`binaries/yt-dlp-…\` doesn't exist`. Bundle first,
+      # reuse the same checksum-verified script and per-OS cache as the
+      # test matrix. See ADR-0016.
+      - name: cache sidecar downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sightline-sidecars
+          key: sidecars-${{ runner.os }}-${{ hashFiles('scripts/sidecars.lock') }}
+
+      - name: bundle sidecars
+        shell: bash
+        run: ./scripts/bundle-sidecars.sh
+
       - name: cargo fmt
         working-directory: src-tauri
         run: cargo fmt --all -- --check
@@ -172,9 +188,20 @@ jobs:
       - name: install cargo-audit
         run: cargo install cargo-audit --locked
 
+      # Informational only until Phase 7 (see ADR-0017). We fail only on
+      # *vulnerabilities* (cargo audit's default exit code ≠ 0), not on
+      # `unmaintained` or `unsound` warnings that are all transitive through
+      # Tauri's GTK3 tree and upstream-blocked.
+      #
+      # Ignored advisories:
+      #   RUSTSEC-2023-0071 — rsa 0.9.10 Marvin Attack, reachable only via
+      #   sqlx-mysql. We disable `default-features` on sqlx so sqlx-mysql
+      #   is never compiled (verified: `cargo tree -i rsa` returns empty).
+      #   The crate stays in Cargo.lock as a dormant optional dep of sqlx,
+      #   which is why cargo-audit still flags it. No upstream fix exists.
       - name: cargo audit
         working-directory: src-tauri
-        run: cargo audit --deny warnings
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile

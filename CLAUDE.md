@@ -44,6 +44,8 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0013](docs/adr/0013-sidecar-bundling.md) — Pinned, verified sidecar bundling (yt-dlp + ffmpeg)
 - [ADR-0014](docs/adr/0014-tray-daemon-architecture.md) — Tray / headless daemon mode + graceful shutdown
 - [ADR-0015](docs/adr/0015-timeline-data-model.md) — `stream_intervals` materialised view + indexer
+- [ADR-0016](docs/adr/0016-checks-job-bundles-sidecars.md) — `checks` CI job bundles sidecars before clippy
+- [ADR-0017](docs/adr/0017-audit-policy-until-release.md) — `cargo audit` policy through Phase 6; Phase 7 hardens
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

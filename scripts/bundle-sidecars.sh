@@ -124,6 +124,16 @@ download() {
 # The `entry` value is a trusted-by-commit lockfile field; even so we
 # reject any form with a parent-directory traversal or absolute path so
 # a malicious lockfile PR can't write outside `$dest`.
+#
+# Cleanup note: we do NOT use `trap 'rm -rf "$tmp"' RETURN` here. Bash's
+# RETURN trap is NOT function-scoped by default (it only becomes scoped
+# when `set -o functrace` is on, which it isn't). A RETURN trap set
+# inside this function fires on EVERY subsequent function return, and
+# the trap body references `$tmp` — which is out of scope in the caller
+# and fatal under `set -u` ("tmp: unbound variable" on the caller's
+# return line). Instead we do explicit cleanup on every exit path.
+# `fail` always exits the whole script, so any leaked tmp dir there is
+# the OS temp cleaner's problem.
 extract_entry() {
   local archive="$1" kind="$2" entry="$3" dest="$4"
   case "$entry" in
@@ -131,13 +141,12 @@ extract_entry() {
   esac
   local tmp
   tmp="$(mktemp -d)"
-  # Ensure tmp is cleaned even on failure.
-  trap 'rm -rf "$tmp"' RETURN
   case "$kind" in
     zip)
       if command -v unzip >/dev/null 2>&1; then
         unzip -q -o "$archive" -d "$tmp"
       else
+        rm -rf "$tmp"
         fail "unzip required to extract $archive"
       fi
       ;;
@@ -145,15 +154,21 @@ extract_entry() {
       if command -v tar >/dev/null 2>&1; then
         tar -C "$tmp" -xf "$archive"
       else
+        rm -rf "$tmp"
         fail "tar required to extract $archive"
       fi
       ;;
-    *) fail "unsupported archive kind: $kind" ;;
+    *)
+      rm -rf "$tmp"
+      fail "unsupported archive kind: $kind"
+      ;;
   esac
   if [ ! -f "$tmp/$entry" ]; then
+    rm -rf "$tmp"
     fail "archive entry not found: $entry inside $archive"
   fi
   mv "$tmp/$entry" "$dest"
+  rm -rf "$tmp"
 }
 
 # Process a single lockfile row.
@@ -248,6 +263,11 @@ matching_rows() {
   local target="${1:-}"
   # Strip comments and blank lines; leave pipe-delimited rows intact.
   grep -v -E '^\s*(#|$)' "$LOCKFILE" | while IFS='|' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
+    # Belt-and-braces for Windows dev runs: if .gitattributes is bypassed
+    # and the lockfile arrives with CRLF, the last pipe-delimited field
+    # keeps the `\r`. Strip it so downstream comparisons (sha matches,
+    # empty-extracted_sha pin path) behave identically on every OS.
+    extracted_sha="${extracted_sha%$'\r'}"
     if [ "$FETCH_ALL" -eq 1 ] || [ "$triple" = "$target" ]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry" "${extracted_sha-}"
