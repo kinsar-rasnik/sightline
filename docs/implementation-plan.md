@@ -77,23 +77,129 @@
 
 ---
 
-## Phase 3 — Download engine
+## Phase 3 — Download engine, queue, library layout, storage hygiene
 
-**Goal.** Orchestrate yt-dlp as a sidecar to download queued VODs with per-item pause/resume, bandwidth throttle, and configurable quality preset.
+**Goal.** Orchestrate bundled yt-dlp + ffmpeg sidecars to download queued
+VODs with per-item pause/resume, a persistent retryable queue, staged
+writes + atomic move into a configurable library layout (Plex/Jellyfin
+or flat), bandwidth throttle, quality preset + fallback, disk-space
+preflight, and the UI surface to drive it all. Plays no video — the
+player and watch-progress arrive in Phase 5.
+
+### Housekeeping first (pre-feature)
+
+- [x] Batch-merge the Dependabot backlog; defer majors that break (TS 6,
+  vitest 4, jsdom 29) with notes in the phase report.
+- [x] Wire the deferred `poll:started` / `poll:finished` emits in
+  `services/poller.rs`, pipe them to a Zustand active-polls store, and
+  render a per-row polling indicator. Test covers the emit path.
+- [x] `#[specta(optional)]` on `SettingsPatch` / `VodFilters` so the
+  frontend drops the `EMPTY_PATCH` spread (ADR-0009).
+- [x] `swatinem/rust-cache@v2` on the `checks` CI job.
+- [x] `scripts/verify.sh` + opt-in pre-push hook, documented in
+  CONTRIBUTING.md as required before every push.
 
 ### Acceptance criteria
 
-- [ ] `DownloadManager` owns a bounded concurrency pool (default 2).
-- [ ] Per-download state machine: `queued → downloading → paused → completed | failed`.
-- [ ] Progress events stream to the frontend at 1 Hz.
-- [ ] Global bandwidth throttle honored across all active downloads.
-- [ ] Retry policy: 3 attempts with exponential backoff, then mark failed.
-- [ ] Sub-only VODs are detected and flagged, not silently retried.
-- [ ] ADR on the yt-dlp invocation contract.
+- [ ] **Sidecars bundled**: yt-dlp and ffmpeg binaries ship per-platform
+  via `scripts/bundle-sidecars.sh`. Startup health-check invokes
+  `yt-dlp --version`, compares against a pinned minimum, and records
+  the outcome in the `HealthReport`. Optional auto-update setting
+  `autoUpdateYtDlp` (default on); failures fall back to pinned and
+  never block startup.
+- [ ] **Migrations 0004 + 0005**: `downloads` table (vod_id PK, state,
+  priority, quality_preset, quality_resolved, staging_path, final_path,
+  bytes_total/done, speed_bps, eta_seconds, attempts, last_error,
+  timestamps, pause_requested) and `library_migrations` table. Indexes
+  on `downloads(state)` and `downloads(priority DESC, queued_at ASC)`.
+  `PRAGMA user_version = 5`.
+- [ ] **State machine**: `queued → downloading → (paused | completed |
+  failed_retryable | failed_permanent)` with `paused → downloading`
+  and `failed_retryable → queued` (max 5 attempts, exponential
+  backoff). Pure-domain transition table with exhaustive unit tests.
+- [ ] **`infra/ytdlp`**: `YtDlp` trait with `fetch_info` + `download`;
+  real `YtDlpCli` parses `--progress-template '%(progress)j'` into
+  typed progress events; `YtDlpFake` (behind `test-support`) for
+  deterministic tests. Exit-code handling for 0/1/2/100/signal. Argv
+  only, never shell.
+- [ ] **`infra/ffmpeg`**: same trait/fake pattern; used only for remux
+  (.ts → .mp4) and thumbnail capture (frame at 10% of the VOD).
+- [ ] **Token-bucket throttle**: global `TokenBucket` re-fair-shared
+  across workers as concurrency or setting changes; fairness + no
+  leakage under concurrent load, property-tested. Applied by
+  passing a per-worker `--limit-rate`; document the limitation in
+  ADR-0010.
+- [ ] **Queue service**: `services/download_queue.rs` owns an
+  mpsc-command channel + worker pool. On startup, any row stuck in
+  `downloading` resets to `queued` (partial staging file discarded).
+  Commands: enqueue, pause, resume, cancel, retry, reprioritize.
+  Events: `download:state_changed`, `download:progress` (throttled
+  ≤ 2 Hz per download), `download:completed`, `download:failed`.
+- [ ] **Library layout trait + two impls**:
+  - `plex` — `<root>/<Display Name>/Season YYYY-MM/<Display> - YYYY-MM-DD - <Title> [twitch-<id>].{mp4, nfo, -thumb.jpg}`
+    with Kodi-compatible NFO (`<movie>` + per-chapter tags +
+    `uniqueid type="twitch"`).
+  - `flat` — `<root>/<login>/YYYY-MM-DD_<id>_<slug>.mp4`, thumbnails
+    in hidden `.thumbs/`.
+  - Filename sanitizer: strips FAT32/exFAT/NTFS illegal chars, trims
+    trailing dots/spaces, caps at 200 chars. Property-tested.
+- [ ] **Layout migration**: changing `libraryLayout` triggers a
+  background migrator that atomically moves (or copy+verify+delete
+  across filesystems) every completed download to the new layout.
+  Emits `library:migrating`. Recorded in `library_migrations`.
+- [ ] **Staging + atomic move**: default staging under platform cache
+  dir outside any sync provider. Flow: yt-dlp to staging → optional
+  ffmpeg remux → thumbnail → atomic move (or copy+fsync+verify+
+  delete) → sidecars written → DB updated. Stale staging files
+  (> 48 h) cleaned on startup.
+- [ ] **Disk-space preflight**: estimate from `filesize_approx`, check
+  staging partition for size × 1.2 and library partition for size ×
+  1.1 before enqueueing. Fail `failed_permanent` with reason
+  `DISK_FULL` if either partition is short; emit
+  `storage:low_disk_warning` (deduped per threshold).
+- [ ] **Quality preset + fallback**: `source | 1080p60 | 720p60 | 480p`
+  with a documented format-selector chain. If the preset can't be
+  satisfied, fall back one step and record the resolved quality.
+- [ ] **Tauri commands (thin)**: `cmd_enqueue_download`,
+  `cmd_pause_download`, `cmd_resume_download`, `cmd_cancel_download`,
+  `cmd_retry_download`, `cmd_reprioritize_download`,
+  `cmd_list_downloads`, `cmd_get_download`, `cmd_get_staging_info`,
+  `cmd_get_library_info`, `cmd_migrate_library`,
+  `cmd_get_migration_status`. All ≤ 20 lines, `#[specta::specta]`.
+- [ ] **Frontend**: new `/downloads` route with live-updated table
+  (thumbnail, title, streamer, state, progress, speed, ETA,
+  actions); Library row badges + primary-action button reflecting
+  download state; Settings gets "Downloads & Storage" section
+  covering concurrency, bandwidth limit, quality preset, library
+  root + layout selector with live preview, staging path, auto-
+  update toggle, disk info. Layout switch triggers a confirmation
+  dialog + the migrator.
+- [ ] **ADRs**: 0010 bandwidth throttle approach, 0011 library layout
+  pluggability, 0012 staging + atomic move strategy.
+- [ ] **Docs**: `data-model.md` + `api-contracts.md` updated;
+  `docs/user-guide/library-layouts.md` covers Plex vs flat; README
+  Installation notes the bundled sidecars, Roadmap flips Download
+  engine to ✅.
+- [ ] **Security review** (subagent) pass: no shell injection, no path
+  traversal, atomic-move semantics correct, no client_id leak into
+  files on disk.
+- [ ] **Cross-platform**: path-length budget tested with a long Proton
+  Drive prefix on Windows. SQLite WAL confirmed. Sidecar names match
+  Tauri's `<name>-<target>` convention per platform.
+- [ ] **Observability**: tracing spans on every download + migration +
+  subprocess invocation, `vod_id` as a span field. Optional
+  rotating debug log under `~/.local/state/sightline/logs/`.
+- [ ] `docs/session-reports/phase-03.md` exists.
+- [ ] Quality gate (via `scripts/verify.sh`) green; tag
+  `phase-3-complete`.
 
-### Out of scope
+### Out of scope (stays for later phases)
 
-- UI beyond the existing placeholder.
+- Player, resume-from-position, watch progress — Phase 5.
+- Multi-view sync — Phase 6.
+- Auto-cleanup policies, mark-as-watched UI, cross-streamer timeline
+  overhaul — Phase 5 or 7.
+- Installer signing / notarization — Phase 7.
 
 ---
 
