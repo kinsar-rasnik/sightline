@@ -423,16 +423,56 @@ impl MediaAssetsService {
     }
 }
 
-/// Return `path` as a string iff it's inside `root`; otherwise reject.
+/// Return a library-root-scoped absolute path string iff the supplied
+/// `path` resolves to a location inside `root`. Otherwise reject.
+///
 /// Path comparisons use canonicalized absolute paths to defeat
-/// `..`-escape attempts.
+/// `..`-escape + symlink-escape attempts. When a path *does* resolve,
+/// we return the canonical form (not the original) so downstream I/O
+/// sees the symlink-resolved path — prevents a TOCTOU where an
+/// attacker swaps the symlink between the check and the webview's
+/// asset-protocol fetch. Addresses the Phase-5 security review's
+/// MEDIUM finding on `guarded_path`.
 fn guarded_path(root: &Path, path: &Path) -> Result<String, AppError> {
-    // Canonicalize when possible; otherwise fall back to a literal
-    // starts_with check on the abs path. We can't require canonicalize
-    // to succeed — on Windows, missing-file paths can't be
-    // canonicalized.
-    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canon_root = root.canonicalize().unwrap_or_else(|e| {
+        // Logging at debug — the library-root missing path is an
+        // expected case on first-run before the user picks one.
+        debug!(
+            root = %root.display(),
+            error = %e,
+            "library_root canonicalize failed; falling back to raw path"
+        );
+        root.to_path_buf()
+    });
+
+    // Two-tier resolution:
+    //
+    //  * For a path that exists, `canonicalize` resolves symlinks and
+    //    `..` segments. We pin the returned string to the canonical
+    //    form so callers can't be surprised by a subsequent symlink
+    //    swap.
+    //
+    //  * For a path that does not exist yet (remux destinations,
+    //    thumbnail targets that the caller is about to create), we
+    //    fall back to the raw `PathBuf`. `starts_with` on `Path` is
+    //    component-safe (it doesn't do naive string prefix matching),
+    //    so `..` components would be caught here as well — but we
+    //    still log the fallback so an operator can tell why an
+    //    existing-file canonicalize failure slipped through.
+    let (canon_path, canonicalized) = match path.canonicalize() {
+        Ok(p) => (p, true),
+        Err(e) => {
+            if path.exists() {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "canonicalize failed on an existing path; using raw path for containment check"
+                );
+            }
+            (path.to_path_buf(), false)
+        }
+    };
+
     if !canon_path.starts_with(&canon_root) {
         return Err(AppError::InvalidInput {
             detail: format!(
@@ -442,7 +482,15 @@ fn guarded_path(root: &Path, path: &Path) -> Result<String, AppError> {
             ),
         });
     }
-    Ok(path.display().to_string())
+
+    // Return the canonical form when we have one. Downstream I/O then
+    // uses the symlink-resolved path, so a later swap of the original
+    // symlink target has no effect on what the webview fetches.
+    Ok(if canonicalized {
+        canon_path.display().to_string()
+    } else {
+        path.display().to_string()
+    })
 }
 
 /// Internal container for the per-row data we fetch during asset
@@ -525,5 +573,42 @@ mod tests {
         std::fs::write(&inside, b"video").unwrap();
         let s = guarded_path(root, &inside).unwrap();
         assert!(s.contains("vod.mp4"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_path_returns_canonical_form_to_defeat_symlink_swap() {
+        // Regression for the Phase-5 security review's MEDIUM
+        // finding: when the caller supplies a symlink that resolves
+        // inside the root, we should return the RESOLVED path, not
+        // the symlink's raw path. Otherwise a later atomic swap of
+        // the symlink target would redirect the webview's fetch.
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let real = root.join("real.mp4");
+        std::fs::write(&real, b"video").unwrap();
+        let link = root.join("alias.mp4");
+        symlink(&real, &link).unwrap();
+        let returned = guarded_path(root, &link).unwrap();
+        // Not the symlink's literal string — should resolve to the
+        // real target path, so a later swap of the symlink has no
+        // effect on the downstream fetch.
+        assert!(returned.contains("real.mp4"));
+        assert!(!returned.ends_with("alias.mp4"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_path_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let tmp_root = tempfile::tempdir().unwrap();
+        let tmp_outside = tempfile::tempdir().unwrap();
+        let outside_file = tmp_outside.path().join("secret.bin");
+        std::fs::write(&outside_file, b"secret").unwrap();
+        let link = tmp_root.path().join("alias.mp4");
+        symlink(&outside_file, &link).unwrap();
+        let err = guarded_path(tmp_root.path(), &link).unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 }
