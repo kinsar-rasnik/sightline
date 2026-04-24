@@ -18,6 +18,7 @@ import {
   type AppSummary,
   type AppTrayActionEvent,
   type AutostartStatus,
+  type Chapter,
   type CoStream,
   type CredentialsChangedEvent,
   type CredentialsStatus,
@@ -74,12 +75,25 @@ import {
   type TrayActionInput,
   type TrayActionKind,
   type TriggerPollInput,
+  type ContinueWatchingEntry,
+  type GetWatchStatsInput,
+  type ListContinueWatchingInput,
+  type UpdateWatchProgressInput,
+  type VideoSource,
+  type VideoSourceState,
   type VodAssets,
   type VodAssetsInput,
   type VodIdInput,
   type VodIngestedEvent,
   type VodUpdatedEvent,
   type VodWithChapters,
+  type WatchCompletedEvent,
+  type WatchProgressRow,
+  type WatchProgressUpdatedEvent,
+  type WatchState,
+  type WatchStateChangedEvent,
+  type WatchStats,
+  type WatchVodIdInput,
   type WindowCloseBehavior,
 } from "@/ipc/bindings";
 
@@ -92,6 +106,7 @@ export type {
   AppSummary,
   AppTrayActionEvent,
   AutostartStatus,
+  Chapter,
   CoStream,
   CredentialsChangedEvent,
   CredentialsStatus,
@@ -148,12 +163,25 @@ export type {
   TrayActionInput,
   TrayActionKind,
   TriggerPollInput,
+  ContinueWatchingEntry,
+  GetWatchStatsInput,
+  ListContinueWatchingInput,
+  UpdateWatchProgressInput,
+  VideoSource,
+  VideoSourceState,
   VodAssets,
   VodAssetsInput,
   VodIdInput,
   VodIngestedEvent,
   VodUpdatedEvent,
   VodWithChapters,
+  WatchCompletedEvent,
+  WatchProgressRow,
+  WatchProgressUpdatedEvent,
+  WatchState,
+  WatchStateChangedEvent,
+  WatchStats,
+  WatchVodIdInput,
   WindowCloseBehavior,
 };
 
@@ -205,6 +233,9 @@ export const events = {
   appTrayAction: "app:tray_action",
   appShutdownRequested: "app:shutdown_requested",
   notificationShow: "notification:show",
+  watchProgressUpdated: "watch:progress_updated",
+  watchStateChanged: "watch:state_changed",
+  watchCompleted: "watch:completed",
 } as const;
 
 /**
@@ -315,6 +346,29 @@ export const commands = {
   regenerateVodThumbnail: async (input: VodAssetsInput): Promise<void> => {
     unwrap(await generatedCommands.regenerateVodThumbnail(input));
   },
+  getVideoSource: async (input: VodAssetsInput): Promise<VideoSource> =>
+    unwrap(await generatedCommands.getVideoSource(input)),
+  requestRemux: async (input: VodAssetsInput): Promise<void> => {
+    unwrap(await generatedCommands.requestRemux(input));
+  },
+  getWatchProgress: async (
+    input: WatchVodIdInput
+  ): Promise<WatchProgressRow | null> =>
+    unwrap(await generatedCommands.getWatchProgress(input)),
+  updateWatchProgress: async (
+    input: UpdateWatchProgressInput
+  ): Promise<WatchProgressRow> =>
+    unwrap(await generatedCommands.updateWatchProgress(input)),
+  markWatched: async (input: WatchVodIdInput): Promise<WatchProgressRow> =>
+    unwrap(await generatedCommands.markWatched(input)),
+  markUnwatched: async (input: WatchVodIdInput): Promise<WatchProgressRow> =>
+    unwrap(await generatedCommands.markUnwatched(input)),
+  listContinueWatching: async (
+    input: ListContinueWatchingInput
+  ): Promise<ContinueWatchingEntry[]> =>
+    unwrap(await generatedCommands.listContinueWatching(input)),
+  getWatchStats: async (input: GetWatchStatsInput): Promise<WatchStats> =>
+    unwrap(await generatedCommands.getWatchStats(input)),
   getAutostartStatus: async (): Promise<AutostartStatus> =>
     unwrap(await generatedCommands.getAutostartStatus()),
   setAutostart: async (input: SetAutostartInput): Promise<AutostartStatus> =>

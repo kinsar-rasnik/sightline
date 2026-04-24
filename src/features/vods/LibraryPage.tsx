@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/primitives/Button";
@@ -7,11 +8,19 @@ import {
   useEnqueueDownload,
   useRetryDownload,
 } from "@/features/downloads/use-downloads";
+import { ContinueWatchingRow } from "@/features/player/ContinueWatchingRow";
+import { useContinueWatching } from "@/features/player/use-watch-progress";
 import { useStreamers } from "@/features/streamers/use-streamers";
 import { useVods } from "@/features/vods/use-vods";
 import { VodCard } from "@/features/vods/VodCard";
-import type { DownloadRow, VodWithChapters } from "@/ipc";
+import {
+  commands,
+  type CoStream,
+  type DownloadRow,
+  type VodWithChapters,
+} from "@/ipc";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
+import { useNavStore } from "@/stores/nav-store";
 
 type StatusFilter =
   | "all"
@@ -56,6 +65,8 @@ export function LibraryPage() {
     for (const row of downloads.data ?? []) m.set(row.vodId, row);
     return m;
   }, [downloads.data]);
+  const continueWatching = useContinueWatching(12);
+  const openPlayer = useNavStore((s) => s.openPlayer);
 
   return (
     <div className="flex gap-6 h-full">
@@ -114,21 +125,40 @@ export function LibraryPage() {
           </p>
         )}
 
+        <ContinueWatchingRow
+          entries={continueWatching.data ?? []}
+          onPlay={(entry) =>
+            openPlayer({ vodId: entry.vodId, autoplay: true })
+          }
+        />
+
         {vods.data && vods.data.length > 0 && (
           <ul
             className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 max-h-[calc(100vh-200px)] overflow-y-auto pr-1"
             aria-label={`Library — ${vods.data.length} VODs`}
           >
-            {vods.data.map((v) => (
-              <li key={v.vod.twitchVideoId}>
-                <VodCard
-                  row={v}
-                  download={downloadsById.get(v.vod.twitchVideoId) ?? null}
-                  selected={selected === v.vod.twitchVideoId}
-                  onSelect={() => setSelected(v.vod.twitchVideoId)}
-                />
-              </li>
-            ))}
+            {vods.data.map((v) => {
+              const cw = continueWatching.data?.find(
+                (e) => e.vodId === v.vod.twitchVideoId
+              );
+              return (
+                <li key={v.vod.twitchVideoId}>
+                  <VodCard
+                    row={v}
+                    download={downloadsById.get(v.vod.twitchVideoId) ?? null}
+                    selected={selected === v.vod.twitchVideoId}
+                    onSelect={() => setSelected(v.vod.twitchVideoId)}
+                    onPlay={() =>
+                      openPlayer({
+                        vodId: v.vod.twitchVideoId,
+                        autoplay: true,
+                      })
+                    }
+                    {...(cw ? { watchedFraction: cw.watchedFraction } : {})}
+                  />
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -157,6 +187,7 @@ function VodDetail({
 }) {
   const enqueue = useEnqueueDownload();
   const retry = useRetryDownload();
+  const openPlayer = useNavStore((s) => s.openPlayer);
   if (!vod) {
     return (
       <p className="text-sm text-[--color-muted]">
@@ -185,7 +216,12 @@ function VodDetail({
           </Button>
         )}
         {download?.state === "completed" && (
-          <Button variant="secondary" disabled title="Player lands in Phase 5">
+          <Button
+            variant="primary"
+            onClick={() =>
+              openPlayer({ vodId: v.twitchVideoId, autoplay: true })
+            }
+          >
             Watch
           </Button>
         )}
@@ -208,6 +244,9 @@ function VodDetail({
             </Button>
           )}
       </div>
+
+      <CoStreamsSection vod={vod} />
+
 
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         <dt className="text-[--color-muted]">Status</dt>
@@ -270,5 +309,101 @@ function VodDetail({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Phase 5 cross-streamer deep link surface. Pulls the co-streams
+ * from the backend and, for each, renders a "Watch this perspective
+ * at HH:MM:SS" action. Clicking opens the other VOD's player seeked
+ * to the shared wall-clock position (math lives in
+ * `domain::deep_link::resolve_deep_link_target` server-side — we
+ * mirror it here so the label shown to the user matches the actual
+ * seek). If the other VOD isn't downloaded yet, the action becomes
+ * "Download and watch" at elevated priority and the user sees a
+ * placeholder player while the download finishes.
+ */
+function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
+  const openPlayer = useNavStore((s) => s.openPlayer);
+  const coStreams = useQuery<CoStream[]>({
+    queryKey: ["co-streams", vod.vod.twitchVideoId],
+    queryFn: () =>
+      commands.getCoStreams({
+        vodId: vod.vod.twitchVideoId,
+      }),
+    staleTime: 60_000,
+  });
+  const streamers = useStreamers();
+  const downloads = useDownloads({});
+  const downloadMap = useMemo(() => {
+    const m = new Map<string, DownloadRow>();
+    for (const row of downloads.data ?? []) m.set(row.vodId, row);
+    return m;
+  }, [downloads.data]);
+  const streamerNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const row of streamers.data ?? []) {
+      m.set(row.streamer.twitchUserId, row.streamer.displayName);
+    }
+    return m;
+  }, [streamers.data]);
+
+  if (!coStreams.data || coStreams.data.length === 0) return null;
+
+  // Use the current VOD's midpoint as the "moment the user wants to
+  // jump to" — a reasonable default for the detail drawer entry
+  // point. The player's own cross-streamer action uses the live
+  // currentTime; this one is a static shortcut.
+  const selfMomentOffset = Math.floor(vod.vod.durationSeconds / 2);
+  const selfMoment = vod.vod.streamStartedAt + selfMomentOffset;
+
+  return (
+    <section aria-labelledby="co-streams-heading" className="space-y-2">
+      <h4 id="co-streams-heading" className="text-sm font-medium">
+        Co-streams
+      </h4>
+      <ul className="space-y-2">
+        {coStreams.data.map((cs) => {
+          const intervalDuration = Math.max(0, cs.interval.endAt - cs.interval.startAt);
+          const offset = Math.max(0, selfMoment - cs.interval.startAt);
+          const clamped = Math.min(intervalDuration, offset);
+          const label = formatDurationSeconds(Math.floor(clamped));
+          const other = downloadMap.get(cs.interval.vodId);
+          const downloaded = other?.state === "completed";
+          const streamerName =
+            streamerNameById.get(cs.interval.streamerId) ?? cs.interval.streamerId;
+          const handleClick = () => {
+            if (!downloaded) {
+              void commands.enqueueDownload({
+                vodId: cs.interval.vodId,
+                priority: 500, // higher than the default 100
+              });
+            }
+            openPlayer({
+              vodId: cs.interval.vodId,
+              initialPositionSeconds: clamped,
+              autoplay: downloaded,
+            });
+          };
+          return (
+            <li
+              key={cs.interval.vodId}
+              className="text-xs flex items-center gap-3 border border-[--color-border]/50 rounded p-2"
+            >
+              <div className="flex-1 min-w-0">
+                <p className="font-medium truncate">{streamerName}</p>
+                <p className="text-[--color-muted]">
+                  {formatUnixSeconds(cs.interval.startAt)} · overlap{" "}
+                  {formatDurationSeconds(Math.floor(cs.overlapSeconds))}
+                </p>
+              </div>
+              <Button variant="secondary" onClick={handleClick}>
+                {downloaded ? `Jump to ${label}` : `Download & watch @ ${label}`}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

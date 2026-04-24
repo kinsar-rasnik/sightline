@@ -10,6 +10,19 @@ entry starts rotting.
 
 ## Currently-skipped rules
 
+### `jsx-a11y/media-has-caption` (ESLint rule, not axe)
+
+- **Why.** Sightline's player renders a VOD from a local file — we
+  don't have a captions / subtitles track because the upstream Twitch
+  VOD doesn't ship with one. Captions/subtitles are on the Phase 7
+  roadmap (see `docs/implementation-plan.md §Phase 7`).
+- **Scope.** Local disable on the single `<video>` element in
+  `src/features/player/PlayerPage.tsx`.
+- **When to remove.** When Phase 7 lands a caption pipeline (auto-
+  transcribe via ffmpeg + whisper.cpp, or VTT ingestion from streamer
+  sidecars). At that point the `eslint-disable` line comes off in the
+  same commit that wires the `<track>` elements.
+
 ### `color-contrast` and `color-contrast-enhanced`
 
 - **Why.** axe checks contrast by reading computed styles via
