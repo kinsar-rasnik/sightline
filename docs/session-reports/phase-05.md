@@ -3,11 +3,10 @@
 - **Status.** All Phase 4 deferrals closed + Phase 5 feature surface
   delivered. Full quality gate green locally (300 Rust tests + 33
   frontend tests + axe-core clean across every route + `pnpm build`
-  succeeds at 324 kB / 96 kB gzipped). **Phase 5 not tagged.** Per the
-  Rules of Engagement, the tag lands only after the CI matrix is
-  green on Ubuntu / macOS / Windows. First PR-#14 CI run green before
-  the security fix landed; second run is in flight at the moment this
-  report is committed.
+  succeeds at 324 kB / 96 kB gzipped). CI matrix green on Ubuntu +
+  macOS + Windows at the head commit — see §CI run for run IDs.
+  **Phase 5 not tagged.** Per the Rules of Engagement, the
+  `phase-5-complete` tag lands only after PR #14 merges to `main`.
 - **Dates.** 2026-04-24.
 - **Senior Engineer.** Claude Opus 4.7 (1M ctx).
 - **CTO review.** Pending.
