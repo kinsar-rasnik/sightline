@@ -123,12 +123,11 @@ mod tests {
     async fn default_app_settings_seeded() {
         let db = Db::open_in_memory().await.unwrap();
         db.migrate().await.unwrap();
-        let games: String = sqlx::query_scalar(
-            "SELECT enabled_game_ids_json FROM app_settings WHERE id = 1",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let games: String =
+            sqlx::query_scalar("SELECT enabled_game_ids_json FROM app_settings WHERE id = 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert!(games.contains("32982"), "expected GTA V in default filter");
     }
 
