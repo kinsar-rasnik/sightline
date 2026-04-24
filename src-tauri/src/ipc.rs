@@ -23,8 +23,11 @@ use crate::commands;
 /// source) and offline (to regenerate bindings).
 pub fn ipc_builder() -> Builder<Wry> {
     use crate::services::events::{
-        AppReadyEvent, CredentialsChangedEvent, PollFinishedEvent, PollStartedEvent,
-        StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+        AppReadyEvent, CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent,
+        DownloadProgressEvent, DownloadStateChangedEvent, LibraryMigrationCompletedEvent,
+        LibraryMigrationFailedEvent, LibraryMigratingEvent, PollFinishedEvent, PollStartedEvent,
+        StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent,
+        VodUpdatedEvent,
     };
 
     Builder::<Wry>::new()
@@ -42,6 +45,19 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::settings::update_settings,
             commands::poll::trigger_poll,
             commands::poll::get_poll_status,
+            // Phase 3
+            commands::downloads::enqueue_download,
+            commands::downloads::pause_download,
+            commands::downloads::resume_download,
+            commands::downloads::cancel_download,
+            commands::downloads::retry_download,
+            commands::downloads::reprioritize_download,
+            commands::downloads::list_downloads,
+            commands::downloads::get_download,
+            commands::storage::get_staging_info,
+            commands::storage::get_library_info,
+            commands::storage::migrate_library,
+            commands::storage::get_migration_status,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -55,6 +71,15 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<VodUpdatedEvent>()
         .typ::<PollStartedEvent>()
         .typ::<PollFinishedEvent>()
+        // Phase 3
+        .typ::<DownloadStateChangedEvent>()
+        .typ::<DownloadProgressEvent>()
+        .typ::<DownloadCompletedEvent>()
+        .typ::<DownloadFailedEvent>()
+        .typ::<LibraryMigratingEvent>()
+        .typ::<LibraryMigrationCompletedEvent>()
+        .typ::<LibraryMigrationFailedEvent>()
+        .typ::<StorageLowDiskWarningEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace

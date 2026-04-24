@@ -17,6 +17,10 @@ export function subscribeEventsToQueryClient(client: QueryClient): Promise<Unlis
     [events.vodIngested, [["vods"], ["streamers"], ["poll-status"]]],
     [events.vodUpdated, [["vods"], ["poll-status"]]],
     [events.pollFinished, [["poll-status"], ["streamers"]]],
+    [events.downloadStateChanged, [["downloads"]]],
+    [events.downloadCompleted, [["downloads"], ["library-info"]]],
+    [events.downloadFailed, [["downloads"]]],
+    [events.libraryMigrationCompleted, [["library-info"], ["downloads"]]],
   ];
 
   const store = useActivePollsStore.getState();

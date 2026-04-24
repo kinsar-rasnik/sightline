@@ -23,14 +23,26 @@ use crate::infra::twitch::auth::TwitchAuthenticator;
 use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
 use crate::services::credentials::CredentialsService;
+use crate::services::downloads::{
+    DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
+};
 use crate::services::events::{
-    CredentialsChangedEvent, EV_CREDENTIALS_CHANGED, EV_POLL_FINISHED, EV_POLL_STARTED,
-    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED, PollFinishedEvent,
-    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+    CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
+    DownloadStateChangedEvent, EV_CREDENTIALS_CHANGED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
+    EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
+    EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
+    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED,
+    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, LibraryMigratingEvent,
+    PollFinishedEvent, PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent,
+    VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
+use crate::services::library_migrator::{
+    LibraryMigrationEvent, LibraryMigratorService, MigrationSink,
+};
 use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
+use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
 use crate::services::vods::VodReadService;
 
@@ -45,6 +57,12 @@ pub struct AppState {
     pub settings: Arc<SettingsService>,
     pub vods: Arc<VodReadService>,
     pub poller_handle: PollerHandle,
+    // --- Phase 3 ---
+    pub downloads: Arc<DownloadQueueService>,
+    pub downloads_handle: DownloadQueueHandle,
+    pub library_migrator: Arc<LibraryMigratorService>,
+    pub library_migration_sink: MigrationSink,
+    pub storage: Arc<StorageService>,
     pub app_handle: tauri::AppHandle,
 }
 
@@ -149,6 +167,47 @@ pub fn run() {
                     ingest_svc,
                 ));
 
+                // Phase 3 services.
+                use crate::infra::ffmpeg::cli::FfmpegCli;
+                use crate::infra::ffmpeg::SharedFfmpeg;
+                use crate::infra::fs::space::{FreeSpaceProbe, SystemFreeSpace};
+                use crate::infra::fs::staging;
+                use crate::infra::throttle::GlobalRate;
+                use crate::infra::ytdlp::cli::YtDlpCli;
+                use crate::infra::ytdlp::SharedYtDlp;
+
+                let ytdlp_binary = resolve_sidecar(&handle, "yt-dlp")
+                    .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp"));
+                let ffmpeg_binary = resolve_sidecar(&handle, "ffmpeg")
+                    .unwrap_or_else(|| std::path::PathBuf::from("ffmpeg"));
+                let ytdlp: SharedYtDlp = Arc::new(YtDlpCli::new(ytdlp_binary));
+                let ffmpeg: SharedFfmpeg = Arc::new(FfmpegCli::new(ffmpeg_binary));
+                let space_probe: Arc<dyn FreeSpaceProbe> = Arc::new(SystemFreeSpace);
+                let rate = Arc::new(GlobalRate::new());
+                let default_staging = staging::default_staging_dir();
+                // Non-fatal: a missing staging dir is fine at this
+                // point, we create it lazily at enqueue time.
+                let _ = staging::cleanup_stale(&default_staging).await;
+
+                let downloads_svc = Arc::new(DownloadQueueService::new(
+                    db.clone(),
+                    clock.clone(),
+                    ytdlp,
+                    ffmpeg,
+                    space_probe,
+                    rate,
+                    SettingsService::new(db.clone(), clock.clone()),
+                    vods_svc.clone(),
+                    default_staging,
+                ));
+
+                let library_migrator = Arc::new(LibraryMigratorService::new(
+                    db.clone(),
+                    clock.clone(),
+                    vods_svc.clone(),
+                ));
+                let storage_svc = Arc::new(StorageService::new(Arc::new(SystemFreeSpace)));
+
                 // Event sink: dispatch each PollerEvent variant to the
                 // matching Tauri topic. Keeping all event construction
                 // in one closure makes it trivial to trace the surface
@@ -216,6 +275,85 @@ pub fn run() {
                 });
 
                 let spawn = poller_svc.spawn(sink);
+
+                // Download event sink: fan out to Tauri topics.
+                let download_sink_handle = handle.clone();
+                let download_sink: DownloadEventSink =
+                    Arc::new(move |ev: DownloadEvent| match ev {
+                        DownloadEvent::StateChanged { vod_id, state } => {
+                            let _ = download_sink_handle.emit(
+                                EV_DOWNLOAD_STATE_CHANGED,
+                                DownloadStateChangedEvent {
+                                    vod_id,
+                                    state: state.as_db_str().to_owned(),
+                                },
+                            );
+                        }
+                        DownloadEvent::Progress { vod_id, progress } => {
+                            let _ = download_sink_handle.emit(
+                                EV_DOWNLOAD_PROGRESS,
+                                DownloadProgressEvent {
+                                    vod_id,
+                                    progress: progress.progress,
+                                    bytes_done: progress.bytes_done as i64,
+                                    bytes_total: progress.bytes_total.map(|n| n as i64),
+                                    speed_bps: progress.speed_bps.map(|n| n as i64),
+                                    eta_seconds: progress.eta_seconds.map(|n| n as i64),
+                                },
+                            );
+                        }
+                        DownloadEvent::Completed { vod_id, final_path } => {
+                            let _ = download_sink_handle.emit(
+                                EV_DOWNLOAD_COMPLETED,
+                                DownloadCompletedEvent {
+                                    vod_id,
+                                    final_path: final_path.display().to_string(),
+                                },
+                            );
+                        }
+                        DownloadEvent::Failed { vod_id, reason } => {
+                            let _ = download_sink_handle.emit(
+                                EV_DOWNLOAD_FAILED,
+                                DownloadFailedEvent { vod_id, reason },
+                            );
+                        }
+                    });
+                let downloads_spawn = downloads_svc.clone().spawn(download_sink);
+
+                let lib_sink_handle = handle.clone();
+                let library_migration_sink: MigrationSink =
+                    Arc::new(move |ev: LibraryMigrationEvent| match ev {
+                        LibraryMigrationEvent::Migrating { id, moved, total } => {
+                            let _ = lib_sink_handle.emit(
+                                EV_LIBRARY_MIGRATING,
+                                LibraryMigratingEvent {
+                                    migration_id: id,
+                                    moved,
+                                    total,
+                                },
+                            );
+                        }
+                        LibraryMigrationEvent::Completed { id, moved, errors } => {
+                            let _ = lib_sink_handle.emit(
+                                EV_LIBRARY_MIGRATION_COMPLETED,
+                                LibraryMigrationCompletedEvent {
+                                    migration_id: id,
+                                    moved,
+                                    errors,
+                                },
+                            );
+                        }
+                        LibraryMigrationEvent::Failed { id, reason } => {
+                            let _ = lib_sink_handle.emit(
+                                EV_LIBRARY_MIGRATION_FAILED,
+                                LibraryMigrationFailedEvent {
+                                    migration_id: id,
+                                    reason,
+                                },
+                            );
+                        }
+                    });
+
                 handle.manage(AppState {
                     started_at,
                     db,
@@ -224,6 +362,11 @@ pub fn run() {
                     settings: settings_svc,
                     vods: vods_svc,
                     poller_handle: spawn.handle,
+                    downloads: downloads_svc,
+                    downloads_handle: downloads_spawn.handle,
+                    library_migrator,
+                    library_migration_sink,
+                    storage: storage_svc,
                     app_handle: handle.clone(),
                 });
 
@@ -244,6 +387,7 @@ pub fn run() {
                 && let Some(state) = window.try_state::<AppState>()
             {
                 state.poller_handle.shutdown();
+                state.downloads_handle.shutdown();
             }
         })
         .run(tauri::generate_context!())
@@ -267,6 +411,32 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's
+/// resolver can't find it — callers fall back to the binary on PATH
+/// (dev workflow) or surface a Sidecar error to the user.
+fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::PathBuf> {
+    use tauri::path::BaseDirectory;
+    // Tauri bundles sidecars under `binaries/<name>-<target-triple>`.
+    // Naming matches the `src-tauri/binaries/` convention set by
+    // ADR-0003 and `scripts/bundle-sidecars.sh`.
+    let triple = std::env::consts::ARCH;
+    // Just a simple attempt — the sidecar manager in Phase 3 housekeeping
+    // will get fancier. We only need `yt-dlp` and `ffmpeg` to be
+    // available on PATH during `pnpm tauri dev`; CI packages the
+    // bundle.
+    for candidate in [
+        format!("binaries/{name}"),
+        format!("binaries/{name}-{triple}"),
+    ] {
+        if let Ok(path) = handle.path().resolve(&candidate, BaseDirectory::Resource)
+            && path.exists()
+        {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// Resolve the SQLite file path. In Phase 1 we keep it simple and place

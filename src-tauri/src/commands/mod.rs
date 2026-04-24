@@ -3,8 +3,10 @@
 //! binding generation flow and `.claude/skills/add-tauri-command/`.
 
 pub mod credentials;
+pub mod downloads;
 pub mod health;
 pub mod poll;
 pub mod settings;
+pub mod storage;
 pub mod streamers;
 pub mod vods;

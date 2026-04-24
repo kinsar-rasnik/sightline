@@ -30,6 +30,18 @@ export const commands = {
 	updateSettings: (patch: SettingsPatch) => typedError<AppSettings, AppError>(__TAURI_INVOKE("update_settings", { patch })),
 	triggerPoll: (input: TriggerPollInput) => typedError<null, AppError>(__TAURI_INVOKE("trigger_poll", { input })),
 	getPollStatus: () => typedError<PollStatusRow[], AppError>(__TAURI_INVOKE("get_poll_status")),
+	enqueueDownload: (input: EnqueueDownloadInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("enqueue_download", { input })),
+	pauseDownload: (input: VodIdInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("pause_download", { input })),
+	resumeDownload: (input: VodIdInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("resume_download", { input })),
+	cancelDownload: (input: VodIdInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("cancel_download", { input })),
+	retryDownload: (input: VodIdInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("retry_download", { input })),
+	reprioritizeDownload: (input: ReprioritizeInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("reprioritize_download", { input })),
+	listDownloads: (input: ListDownloadsInput) => typedError<DownloadRow[], AppError>(__TAURI_INVOKE("list_downloads", { input })),
+	getDownload: (input: VodIdInput) => typedError<DownloadRow, AppError>(__TAURI_INVOKE("get_download", { input })),
+	getStagingInfo: () => typedError<StagingInfo, AppError>(__TAURI_INVOKE("get_staging_info")),
+	getLibraryInfo: () => typedError<LibraryInfo, AppError>(__TAURI_INVOKE("get_library_info")),
+	migrateLibrary: (input: MigrateLibraryInput) => typedError<MigrateLibraryOutput, AppError>(__TAURI_INVOKE("migrate_library", { input })),
+	getMigrationStatus: (input: MigrationIdInput) => typedError<MigrationRow, AppError>(__TAURI_INVOKE("get_migration_status", { input })),
 };
 
 /* Types */
@@ -136,6 +148,77 @@ export type CredentialsStatus = {
 	lastTokenAcquiredAt: number | null,
 };
 
+export type DownloadCompletedEvent = {
+	vodId: string,
+	finalPath: string,
+};
+
+export type DownloadFailedEvent = {
+	vodId: string,
+	reason: string,
+};
+
+export type DownloadFilters = {
+	state?: DownloadState | null,
+	streamerId?: string | null,
+};
+
+export type DownloadProgressEvent = {
+	vodId: string,
+	progress: number | null,
+	bytesDone: number,
+	bytesTotal: number | null,
+	speedBps: number | null,
+	etaSeconds: number | null,
+};
+
+/**
+ *  A single row from the `downloads` table, joined with the owning
+ *  VOD + streamer so the frontend doesn't have to round-trip.
+ */
+export type DownloadRow = {
+	vodId: string,
+	state: DownloadState,
+	priority: number,
+	qualityPreset: QualityPreset,
+	qualityResolved: string | null,
+	stagingPath: string | null,
+	finalPath: string | null,
+	bytesTotal: number | null,
+	bytesDone: number,
+	speedBps: number | null,
+	etaSeconds: number | null,
+	attempts: number,
+	lastError: string | null,
+	lastErrorAt: number | null,
+	queuedAt: number,
+	startedAt: number | null,
+	finishedAt: number | null,
+	pauseRequested: boolean,
+	title: string,
+	streamerDisplayName: string,
+	streamerLogin: string,
+	thumbnailUrl: string | null,
+};
+
+/**
+ *  Every reachable state of a download. The wire string (matching the
+ *  `CHECK` constraint on `downloads.state`) is stable; changing it is
+ *  a schema change.
+ */
+export type DownloadState = "queued" | "downloading" | "paused" | "completed" | "failed_retryable" | "failed_permanent";
+
+export type DownloadStateChangedEvent = {
+	vodId: string,
+	// Matches `DownloadState` wire strings.
+	state: string,
+};
+
+export type EnqueueDownloadInput = {
+	vodId: string,
+	priority?: number | null,
+};
+
 export type GetVodInput = {
 	twitchVideoId: string,
 };
@@ -164,6 +247,12 @@ export type LastPollSummary = {
 	status: string,
 };
 
+export type LibraryInfo = {
+	path: string | null,
+	freeBytes: number | null,
+	fileCount: number,
+};
+
 /**
  *  The two layout options surfaced on the Settings page. Wire strings
  *  match the `CHECK` constraint on `app_settings.library_layout`.
@@ -177,11 +266,55 @@ export type LibraryLayoutKind =
  */
 "flat";
 
+export type LibraryMigratingEvent = {
+	migrationId: number,
+	moved: number,
+	total: number,
+};
+
+export type LibraryMigrationCompletedEvent = {
+	migrationId: number,
+	moved: number,
+	errors: number,
+};
+
+export type LibraryMigrationFailedEvent = {
+	migrationId: number,
+	reason: string,
+};
+
+export type ListDownloadsInput = {
+	filters?: DownloadFilters | null,
+};
+
 export type ListVodsInput = {
 	filters: VodFilters,
 	sort: VodSort,
 	limit: number,
 	offset: number,
+};
+
+export type MigrateLibraryInput = {
+	targetLayout: LibraryLayoutKind,
+};
+
+export type MigrateLibraryOutput = {
+	migrationId: number,
+};
+
+export type MigrationIdInput = {
+	migrationId: number,
+};
+
+export type MigrationRow = {
+	id: number,
+	startedAt: number,
+	finishedAt: number | null,
+	fromLayout: LibraryLayoutKind,
+	toLayout: LibraryLayoutKind,
+	moved: number,
+	errors: number,
+	status: string,
 };
 
 // A muted segment returned by the Helix `videos` endpoint.
@@ -223,6 +356,11 @@ export type RemoveStreamerInput = {
 	twitchUserId: string,
 };
 
+export type ReprioritizeInput = {
+	vodId: string,
+	priority: number,
+};
+
 /**
  *  Input payload for `set_twitch_credentials`. The IPC boundary is
  *  the only place the Client Secret crosses from the webview into
@@ -260,6 +398,17 @@ export type SettingsPatch = {
 	bandwidthLimitBps?: number | null,
 	qualityPreset?: QualityPreset | null,
 	autoUpdateYtDlp?: boolean | null,
+};
+
+export type StagingInfo = {
+	path: string,
+	freeBytes: number,
+	staleFileCount: number,
+};
+
+export type StorageLowDiskWarningEvent = {
+	path: string,
+	freeBytes: number,
 };
 
 // Storage-aligned streamer row. The `*_at` fields are unix seconds UTC.
@@ -337,6 +486,10 @@ export type VodFilters = {
 	// Unix seconds UTC.
 	since?: number | null,
 	until?: number | null,
+};
+
+export type VodIdInput = {
+	vodId: string,
 };
 
 export type VodIngestedEvent = {
