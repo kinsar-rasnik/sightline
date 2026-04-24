@@ -11,9 +11,7 @@ use crate::services::storage::{LibraryInfo, StagingInfo};
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_staging_info(
-    state: tauri::State<'_, AppState>,
-) -> Result<StagingInfo, AppError> {
+pub async fn get_staging_info(state: tauri::State<'_, AppState>) -> Result<StagingInfo, AppError> {
     let settings = state.settings.get().await?;
     state
         .storage
@@ -23,9 +21,7 @@ pub async fn get_staging_info(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_library_info(
-    state: tauri::State<'_, AppState>,
-) -> Result<LibraryInfo, AppError> {
+pub async fn get_library_info(state: tauri::State<'_, AppState>) -> Result<LibraryInfo, AppError> {
     let settings = state.settings.get().await?;
     state
         .storage

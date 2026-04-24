@@ -31,10 +31,9 @@ use crate::services::events::{
     DownloadStateChangedEvent, EV_CREDENTIALS_CHANGED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
     EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
     EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
-    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED,
-    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, LibraryMigratingEvent,
-    PollFinishedEvent, PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent,
-    VodIngestedEvent, VodUpdatedEvent,
+    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
+    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
+    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -168,13 +167,13 @@ pub fn run() {
                 ));
 
                 // Phase 3 services.
-                use crate::infra::ffmpeg::cli::FfmpegCli;
                 use crate::infra::ffmpeg::SharedFfmpeg;
+                use crate::infra::ffmpeg::cli::FfmpegCli;
                 use crate::infra::fs::space::{FreeSpaceProbe, SystemFreeSpace};
                 use crate::infra::fs::staging;
                 use crate::infra::throttle::GlobalRate;
-                use crate::infra::ytdlp::cli::YtDlpCli;
                 use crate::infra::ytdlp::SharedYtDlp;
+                use crate::infra::ytdlp::cli::YtDlpCli;
 
                 let ytdlp_binary = resolve_sidecar(&handle, "yt-dlp")
                     .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp"));
@@ -312,10 +311,8 @@ pub fn run() {
                             );
                         }
                         DownloadEvent::Failed { vod_id, reason } => {
-                            let _ = download_sink_handle.emit(
-                                EV_DOWNLOAD_FAILED,
-                                DownloadFailedEvent { vod_id, reason },
-                            );
+                            let _ = download_sink_handle
+                                .emit(EV_DOWNLOAD_FAILED, DownloadFailedEvent { vod_id, reason });
                         }
                     });
                 let downloads_spawn = downloads_svc.clone().spawn(download_sink);

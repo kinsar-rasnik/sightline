@@ -119,8 +119,8 @@ impl SettingsService {
         let credentials = self.read_credentials_meta().await?;
 
         let library_layout_str: String = row.try_get(7)?;
-        let library_layout = LibraryLayoutKind::from_db_str(&library_layout_str)
-            .unwrap_or(LibraryLayoutKind::Plex);
+        let library_layout =
+            LibraryLayoutKind::from_db_str(&library_layout_str).unwrap_or(LibraryLayoutKind::Plex);
         let quality_preset_str: String = row.try_get(11)?;
         let quality_preset =
             QualityPreset::from_db_str(&quality_preset_str).unwrap_or(QualityPreset::Source);
@@ -175,9 +175,25 @@ impl SettingsService {
             .unwrap_or(current.first_backfill_limit)
             .clamp(1, 500);
 
-        let library_root = patch.library_root.clone().or(current.library_root);
+        let library_root = match patch.library_root.clone() {
+            Some(root) => {
+                // Reject obviously-unsafe roots before we persist. The
+                // disk-preflight and atomic-move flows rely on the
+                // root being a real directory that is NOT the
+                // filesystem root.
+                validate_library_root(&root)?;
+                Some(root)
+            }
+            None => current.library_root,
+        };
         let library_layout = patch.library_layout.unwrap_or(current.library_layout);
-        let staging_path = patch.staging_path.clone().or(current.staging_path);
+        let staging_path = match patch.staging_path.clone() {
+            Some(path) => {
+                validate_staging_override(&path, library_root.as_deref())?;
+                Some(path)
+            }
+            None => current.staging_path,
+        };
         let max_concurrent = patch
             .max_concurrent_downloads
             .unwrap_or(current.max_concurrent_downloads)
@@ -190,7 +206,9 @@ impl SettingsService {
             None => current.bandwidth_limit_bps,
         };
         let quality_preset = patch.quality_preset.unwrap_or(current.quality_preset);
-        let auto_update_yt_dlp = patch.auto_update_yt_dlp.unwrap_or(current.auto_update_yt_dlp);
+        let auto_update_yt_dlp = patch
+            .auto_update_yt_dlp
+            .unwrap_or(current.auto_update_yt_dlp);
 
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
@@ -283,6 +301,62 @@ impl SettingsService {
         }
         .normalized()
     }
+}
+
+/// Validate a proposed `library_root` value before persisting it.
+///
+/// A malicious or buggy frontend could otherwise hand us "/" or
+/// "C:\" and cause every subsequent atomic move to write into the
+/// filesystem root. See the ADR-0012 security posture.
+fn validate_library_root(raw: &str) -> Result<(), AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput {
+            detail: "library_root is empty".into(),
+        });
+    }
+    let path = std::path::Path::new(trimmed);
+    if !path.is_absolute() {
+        return Err(AppError::InvalidInput {
+            detail: "library_root must be an absolute path".into(),
+        });
+    }
+    // Reject a filesystem root; a user picking "/" (or "C:\") via the
+    // folder picker would otherwise mean the library migrator and
+    // atomic-move flows scribble across the entire disk.
+    if path.parent().is_none() || path == std::path::Path::new("/") {
+        return Err(AppError::InvalidInput {
+            detail: "library_root must not be the filesystem root".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate a proposed `staging_path` override. Must be absolute,
+/// cannot live inside `library_root` (would defeat the atomic-move
+/// design).
+fn validate_staging_override(raw: &str, library_root: Option<&str>) -> Result<(), AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput {
+            detail: "staging_path is empty".into(),
+        });
+    }
+    let path = std::path::Path::new(trimmed);
+    if !path.is_absolute() {
+        return Err(AppError::InvalidInput {
+            detail: "staging_path must be an absolute path".into(),
+        });
+    }
+    if let Some(root) = library_root {
+        let root_path = std::path::Path::new(root);
+        if path.starts_with(root_path) {
+            return Err(AppError::InvalidInput {
+                detail: "staging_path must not be under library_root".into(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -403,6 +477,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.bandwidth_limit_bps, None);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_empty_or_relative_library_root() {
+        let svc = setup().await;
+        let err = svc
+            .update(SettingsPatch {
+                library_root: Some(String::new()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+        let err = svc
+            .update(SettingsPatch {
+                library_root: Some("relative/path".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_filesystem_root_as_library_root() {
+        let svc = setup().await;
+        let err = svc
+            .update(SettingsPatch {
+                library_root: Some("/".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_staging_under_library_root() {
+        let svc = setup().await;
+        svc.update(SettingsPatch {
+            library_root: Some("/tmp/lib".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let err = svc
+            .update(SettingsPatch {
+                staging_path: Some("/tmp/lib/staging".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn update_accepts_absolute_non_nested_staging() {
+        let svc = setup().await;
+        svc.update(SettingsPatch {
+            library_root: Some("/tmp/lib".into()),
+            staging_path: Some("/tmp/staging".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

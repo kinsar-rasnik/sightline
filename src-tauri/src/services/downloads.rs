@@ -202,7 +202,11 @@ impl DownloadQueueService {
     /// Insert a new row in `queued` state. Idempotent on the PK:
     /// a subsequent enqueue of the same VOD returns the existing row
     /// (so the UI's "Download" button is safe to double-click).
-    pub async fn enqueue(&self, vod_id: &str, priority: Option<i64>) -> Result<DownloadRow, AppError> {
+    pub async fn enqueue(
+        &self,
+        vod_id: &str,
+        priority: Option<i64>,
+    ) -> Result<DownloadRow, AppError> {
         let settings = self.settings.get().await?;
         let now = self.clock.unix_seconds();
         let priority = priority.unwrap_or(100);
@@ -235,7 +239,9 @@ impl DownloadQueueService {
             clauses.push(String::from("d.state = ?"));
         }
         if filters.streamer_id.is_some() {
-            clauses.push(String::from("d.vod_id IN (SELECT twitch_video_id FROM vods WHERE twitch_user_id = ?)"));
+            clauses.push(String::from(
+                "d.vod_id IN (SELECT twitch_video_id FROM vods WHERE twitch_user_id = ?)",
+            ));
         }
         let sql = format!(
             "{base} WHERE {clauses}
@@ -278,8 +284,10 @@ impl DownloadQueueService {
     }
 
     pub async fn cancel(&self, vod_id: &str) -> Result<DownloadRow, AppError> {
-        self.transition(vod_id, Transition::Cancel, |_| Some(reason::USER_CANCELLED.into()))
-            .await
+        self.transition(vod_id, Transition::Cancel, |_| {
+            Some(reason::USER_CANCELLED.into())
+        })
+        .await
     }
 
     pub async fn retry(&self, vod_id: &str) -> Result<DownloadRow, AppError> {
@@ -434,7 +442,8 @@ impl DownloadQueueService {
             let Some(row) = row else {
                 return Ok(());
             };
-            self.rate.set_active_workers(semaphore.available_permits() + 1);
+            self.rate
+                .set_active_workers(semaphore.available_permits() + 1);
             let this = self.clone();
             let events = events.clone();
             tokio::spawn(async move {
@@ -464,7 +473,8 @@ impl DownloadQueueService {
         vod_id: &str,
     ) -> Result<(), AppError> {
         // Transition to `downloading`.
-        self.set_state(vod_id, DownloadState::Downloading, None).await?;
+        self.set_state(vod_id, DownloadState::Downloading, None)
+            .await?;
         (events)(DownloadEvent::StateChanged {
             vod_id: vod_id.to_owned(),
             state: DownloadState::Downloading,
@@ -535,14 +545,10 @@ impl DownloadQueueService {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_staging.clone());
 
-        let vod = self
-            .vods
-            .get(vod_id)
-            .await
-            .map_err(|e| PipelineErr {
-                reason: format!("load vod: {e}"),
-                retryable: false,
-            })?;
+        let vod = self.vods.get(vod_id).await.map_err(|e| PipelineErr {
+            reason: format!("load vod: {e}"),
+            retryable: false,
+        })?;
         if vod.vod.is_sub_only {
             return Err(PipelineErr {
                 reason: reason::SUB_ONLY.into(),
@@ -646,7 +652,9 @@ impl DownloadQueueService {
         let _ = progress_task.await;
 
         // Post-process: remux if needed, thumbnail, atomic move.
-        let staging_output = find_output_file(&staging_root, &stem).await.unwrap_or(result.output_path.clone());
+        let staging_output = find_output_file(&staging_root, &stem)
+            .await
+            .unwrap_or(result.output_path.clone());
         let layout = build_layout(settings.library_layout);
         let view = VodWithStreamer {
             vod: &vod.vod,
@@ -655,6 +663,19 @@ impl DownloadQueueService {
         };
         let relative_final = layout.path_for(&view);
         let final_path = library_root.join(&relative_final);
+        // Defence-in-depth: the sanitizer already strips path
+        // separators and `..`, but assert the composed path cannot
+        // escape the library root. A violation here is a bug in the
+        // sanitizer or the layout impl, not attacker input.
+        if !final_path.starts_with(&library_root) {
+            return Err(PipelineErr {
+                reason: format!(
+                    "final_path {:?} escapes library_root {:?}",
+                    final_path, library_root
+                ),
+                retryable: false,
+            });
+        }
 
         // Ensure .mp4 container.
         let mp4_staging = if already_mp4(&staging_output) {
@@ -693,12 +714,12 @@ impl DownloadQueueService {
         }
 
         // Atomic move of the mp4 into the library.
-        atomic_move(&mp4_staging, &final_path).await.map_err(|e| {
-            PipelineErr {
+        atomic_move(&mp4_staging, &final_path)
+            .await
+            .map_err(|e| PipelineErr {
                 reason: format!("move: {e}"),
                 retryable: true,
-            }
-        })?;
+            })?;
         if thumb_staging.exists() {
             let _ = atomic_move(&thumb_staging, &thumbnail_abs).await;
         }
@@ -827,11 +848,10 @@ fn row_to_download(r: &sqlx::sqlite::SqliteRow) -> Result<DownloadRow, AppError>
         detail: format!("unknown state {state_str}"),
     })?;
     let quality_preset_str: String = r.try_get(3)?;
-    let quality_preset = QualityPreset::from_db_str(&quality_preset_str).ok_or_else(|| {
-        AppError::Download {
+    let quality_preset =
+        QualityPreset::from_db_str(&quality_preset_str).ok_or_else(|| AppError::Download {
             detail: format!("unknown preset {quality_preset_str}"),
-        }
-    })?;
+        })?;
     let pause_requested: i64 = r.try_get(17)?;
     Ok(DownloadRow {
         vod_id: r.try_get(0)?,
@@ -988,7 +1008,10 @@ mod tests {
         seed_streamer_and_vod(&db).await;
         let first = svc.enqueue("v1", Some(50)).await.unwrap();
         let second = svc.enqueue("v1", Some(200)).await.unwrap();
-        assert_eq!(first.priority, second.priority, "second enqueue should not change priority");
+        assert_eq!(
+            first.priority, second.priority,
+            "second enqueue should not change priority"
+        );
     }
 
     #[tokio::test]

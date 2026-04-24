@@ -77,12 +77,7 @@ async fn count_files(path: &std::path::Path) -> u64 {
     };
     let mut n = 0;
     while let Ok(Some(entry)) = rd.next_entry().await {
-        if entry
-            .metadata()
-            .await
-            .map(|m| m.is_file())
-            .unwrap_or(false)
-        {
+        if entry.metadata().await.map(|m| m.is_file()).unwrap_or(false) {
             n += 1;
         }
     }

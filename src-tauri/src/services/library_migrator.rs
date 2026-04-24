@@ -148,13 +148,11 @@ impl LibraryMigratorService {
             match atomic_move(&src, &dst).await {
                 Ok(_) => {
                     moved += 1;
-                    let _ = sqlx::query(
-                        "UPDATE downloads SET final_path = ? WHERE vod_id = ?",
-                    )
-                    .bind(dst.display().to_string())
-                    .bind(vod_id)
-                    .execute(self.db.pool())
-                    .await;
+                    let _ = sqlx::query("UPDATE downloads SET final_path = ? WHERE vod_id = ?")
+                        .bind(dst.display().to_string())
+                        .bind(vod_id)
+                        .execute(self.db.pool())
+                        .await;
                     (sink)(LibraryMigrationEvent::Migrating { id, moved, total });
                 }
                 Err(_) => errors += 1,
@@ -169,13 +167,7 @@ impl LibraryMigratorService {
         Ok(())
     }
 
-    async fn finish(
-        &self,
-        id: i64,
-        moved: i64,
-        errors: i64,
-        status: &str,
-    ) -> Result<(), AppError> {
+    async fn finish(&self, id: i64, moved: i64, errors: i64, status: &str) -> Result<(), AppError> {
         sqlx::query(
             "UPDATE library_migrations
              SET finished_at = ?, moved = ?, errors = ?, status = ?

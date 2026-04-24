@@ -24,10 +24,10 @@ use crate::commands;
 pub fn ipc_builder() -> Builder<Wry> {
     use crate::services::events::{
         AppReadyEvent, CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent,
-        DownloadProgressEvent, DownloadStateChangedEvent, LibraryMigrationCompletedEvent,
-        LibraryMigrationFailedEvent, LibraryMigratingEvent, PollFinishedEvent, PollStartedEvent,
-        StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent,
-        VodUpdatedEvent,
+        DownloadProgressEvent, DownloadStateChangedEvent, LibraryMigratingEvent,
+        LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
+        PollStartedEvent, StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerRemovedEvent,
+        VodIngestedEvent, VodUpdatedEvent,
     };
 
     Builder::<Wry>::new()
