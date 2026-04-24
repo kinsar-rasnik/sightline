@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
-use sightline_lib::Db;
 use sightline_lib::infra::clock::{Clock, FixedClock};
+use sightline_lib::infra::db::Db;
 use sightline_lib::infra::keychain::{Credentials, InMemoryCredentials, TwitchCredentials};
 use sightline_lib::infra::twitch::auth::{TwitchAuthenticator, prime_token_for_tests};
 use sightline_lib::infra::twitch::gql::GqlClient;

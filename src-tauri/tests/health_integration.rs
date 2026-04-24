@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use sightline_lib::Db;
+use sightline_lib::infra::db::Db;
 use sightline_lib::services::health::HealthService;
 use tempfile::tempdir;
 

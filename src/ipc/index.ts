@@ -10,11 +10,54 @@
 
 import {
   commands as generatedCommands,
+  type AddStreamerInput,
   type AppError,
+  type AppSettings,
+  type AppReadyEvent,
+  type CredentialsChangedEvent,
+  type CredentialsStatus,
+  type GetVodInput,
   type HealthReport,
+  type ListVodsInput,
+  type PollFinishedEvent,
+  type PollStartedEvent,
+  type PollStatusRow,
+  type RemoveStreamerInput,
+  type SetTwitchCredentialsInput,
+  type SettingsPatch,
+  type StreamerAddedEvent,
+  type StreamerRemovedEvent,
+  type StreamerSummary,
+  type TriggerPollInput,
+  type VodIngestedEvent,
+  type VodUpdatedEvent,
+  type VodWithChapters,
 } from "@/ipc/bindings";
 
-export type { AppError, HealthReport };
+export type {
+  AddStreamerInput,
+  AppError,
+  AppSettings,
+  AppReadyEvent,
+  CredentialsChangedEvent,
+  CredentialsStatus,
+  GetVodInput,
+  HealthReport,
+  ListVodsInput,
+  PollFinishedEvent,
+  PollStartedEvent,
+  PollStatusRow,
+  RemoveStreamerInput,
+  SetTwitchCredentialsInput,
+  SettingsPatch,
+  StreamerAddedEvent,
+  StreamerRemovedEvent,
+  StreamerSummary,
+  TriggerPollInput,
+  VodIngestedEvent,
+  VodUpdatedEvent,
+  VodWithChapters,
+};
 
 /**
  * Wraps a typed `AppError` so React hooks can `throw` on failure while
@@ -39,13 +82,55 @@ function unwrap<T>(result: IpcResult<T>): T {
   throw new IpcError(result.error);
 }
 
+/** Event topic strings. Central list so typos surface at compile time. */
+export const events = {
+  appReady: "app:ready",
+  credentialsChanged: "credentials:changed",
+  streamerAdded: "streamer:added",
+  streamerRemoved: "streamer:removed",
+  vodIngested: "vod:ingested",
+  vodUpdated: "vod:updated",
+  pollStarted: "poll:started",
+  pollFinished: "poll:finished",
+} as const;
+
 /**
  * Throw-style wrappers around the generated Result-style commands. One
  * entry per Rust `#[tauri::command]`. Type inference flows from the
  * generator so new fields show up here automatically.
  */
 export const commands = {
-  health: async (): Promise<HealthReport> => unwrap(await generatedCommands.health()),
+  health: async (): Promise<HealthReport> =>
+    unwrap(await generatedCommands.health()),
+  setTwitchCredentials: async (
+    input: SetTwitchCredentialsInput
+  ): Promise<CredentialsStatus> =>
+    unwrap(await generatedCommands.setTwitchCredentials(input)),
+  getTwitchCredentialsStatus: async (): Promise<CredentialsStatus> =>
+    unwrap(await generatedCommands.getTwitchCredentialsStatus()),
+  clearTwitchCredentials: async (): Promise<void> => {
+    unwrap(await generatedCommands.clearTwitchCredentials());
+  },
+  addStreamer: async (input: AddStreamerInput): Promise<StreamerSummary> =>
+    unwrap(await generatedCommands.addStreamer(input)),
+  removeStreamer: async (input: RemoveStreamerInput): Promise<void> => {
+    unwrap(await generatedCommands.removeStreamer(input));
+  },
+  listStreamers: async (): Promise<StreamerSummary[]> =>
+    unwrap(await generatedCommands.listStreamers()),
+  listVods: async (input: ListVodsInput): Promise<VodWithChapters[]> =>
+    unwrap(await generatedCommands.listVods(input)),
+  getVod: async (input: GetVodInput): Promise<VodWithChapters> =>
+    unwrap(await generatedCommands.getVod(input)),
+  getSettings: async (): Promise<AppSettings> =>
+    unwrap(await generatedCommands.getSettings()),
+  updateSettings: async (patch: SettingsPatch): Promise<AppSettings> =>
+    unwrap(await generatedCommands.updateSettings(patch)),
+  triggerPoll: async (input: TriggerPollInput): Promise<void> => {
+    unwrap(await generatedCommands.triggerPoll(input));
+  },
+  getPollStatus: async (): Promise<PollStatusRow[]> =>
+    unwrap(await generatedCommands.getPollStatus()),
 };
 
 /**

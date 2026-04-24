@@ -18,9 +18,25 @@ export const commands = {
 	 *  bridge, and database are all alive.
 	 */
 	health: () => typedError<HealthReport, AppError>(__TAURI_INVOKE("health")),
+	setTwitchCredentials: (input: SetTwitchCredentialsInput) => typedError<CredentialsStatus, AppError>(__TAURI_INVOKE("set_twitch_credentials", { input })),
+	getTwitchCredentialsStatus: () => typedError<CredentialsStatus, AppError>(__TAURI_INVOKE("get_twitch_credentials_status")),
+	clearTwitchCredentials: () => typedError<null, AppError>(__TAURI_INVOKE("clear_twitch_credentials")),
+	addStreamer: (input: AddStreamerInput) => typedError<StreamerSummary, AppError>(__TAURI_INVOKE("add_streamer", { input })),
+	removeStreamer: (input: RemoveStreamerInput) => typedError<null, AppError>(__TAURI_INVOKE("remove_streamer", { input })),
+	listStreamers: () => typedError<StreamerSummary[], AppError>(__TAURI_INVOKE("list_streamers")),
+	listVods: (input: ListVodsInput) => typedError<VodWithChapters[], AppError>(__TAURI_INVOKE("list_vods", { input })),
+	getVod: (input: GetVodInput) => typedError<VodWithChapters, AppError>(__TAURI_INVOKE("get_vod", { input })),
+	getSettings: () => typedError<AppSettings, AppError>(__TAURI_INVOKE("get_settings")),
+	updateSettings: (patch: SettingsPatch) => typedError<AppSettings, AppError>(__TAURI_INVOKE("update_settings", { patch })),
+	triggerPoll: (input: TriggerPollInput) => typedError<null, AppError>(__TAURI_INVOKE("trigger_poll", { input })),
+	getPollStatus: () => typedError<PollStatusRow[], AppError>(__TAURI_INVOKE("get_poll_status")),
 };
 
 /* Types */
+export type AddStreamerInput = {
+	login: string,
+};
+
 /**
  *  Typed application error. Serialized with a `kind` tag so the frontend
  *  can exhaustively narrow on it via a discriminated union.
@@ -49,6 +65,44 @@ export type AppError = { kind: "db"; detail: string } | { kind: "io"; detail: st
 // Parser failure — duration, chapter payload, ISO timestamp.
 { kind: "parse"; detail: string };
 
+export type AppReadyEvent = {
+	startedAt: number,
+};
+
+export type AppSettings = {
+	enabledGameIds: string[],
+	pollFloorSeconds: number,
+	pollRecentSeconds: number,
+	pollCeilingSeconds: number,
+	concurrencyCap: number,
+	firstBackfillLimit: number,
+	credentials: CredentialsStatus,
+};
+
+export type Chapter = {
+	positionMs: number,
+	durationMs: number,
+	gameId: string | null,
+	gameName: string,
+	chapterType: ChapterType,
+};
+
+export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
+
+export type CredentialsChangedEvent = {
+	configured: boolean,
+};
+
+export type CredentialsStatus = {
+	configured: boolean,
+	clientIdMasked: string | null,
+	lastTokenAcquiredAt: number | null,
+};
+
+export type GetVodInput = {
+	twitchVideoId: string,
+};
+
 export type HealthReport = {
 	// Short program identifier. Always `"sightline"`.
 	appName: string,
@@ -60,6 +114,162 @@ export type HealthReport = {
 	startedAt: number,
 	// Unix seconds UTC when this report was assembled.
 	checkedAt: number,
+};
+
+// Ingest lifecycle. Matches the `CHECK` constraint on `vods.ingest_status`.
+export type IngestStatus = "pending" | "chapters_fetched" | "eligible" | "skipped_game" | "skipped_sub_only" | "skipped_live" | "error";
+
+export type LastPollSummary = {
+	startedAt: number,
+	finishedAt: number | null,
+	vodsNew: number,
+	vodsUpdated: number,
+	status: string,
+};
+
+export type ListVodsInput = {
+	filters: VodFilters,
+	sort: VodSort,
+	limit: number,
+	offset: number,
+};
+
+// A muted segment returned by the Helix `videos` endpoint.
+export type MutedSegment = {
+	offsetSeconds: number,
+	durationSeconds: number,
+};
+
+export type PollFinishedEvent = {
+	twitchUserId: string,
+	finishedAt: number,
+	vodsNew: number,
+	vodsUpdated: number,
+	status: string,
+};
+
+export type PollStartedEvent = {
+	twitchUserId: string,
+	startedAt: number,
+};
+
+export type PollStatusRow = {
+	streamer: StreamerSummary,
+	lastPoll: LastPollSummary | null,
+};
+
+export type RemoveStreamerInput = {
+	twitchUserId: string,
+};
+
+export type SetTwitchCredentialsInput = {
+	clientId: string,
+	clientSecret: string,
+};
+
+// Partial settings update — any subset may be supplied by the frontend.
+export type SettingsPatch = {
+	enabledGameIds: string[] | null,
+	pollFloorSeconds: number | null,
+	pollRecentSeconds: number | null,
+	pollCeilingSeconds: number | null,
+	concurrencyCap: number | null,
+	firstBackfillLimit: number | null,
+};
+
+// Storage-aligned streamer row. The `*_at` fields are unix seconds UTC.
+export type Streamer = {
+	twitchUserId: string,
+	login: string,
+	displayName: string,
+	profileImageUrl: string | null,
+	broadcasterType: string,
+	twitchCreatedAt: number,
+	addedAt: number,
+	deletedAt: number | null,
+	lastPolledAt: number | null,
+	nextPollAt: number | null,
+	lastLiveAt: number | null,
+};
+
+export type StreamerAddedEvent = {
+	twitchUserId: string,
+	login: string,
+};
+
+export type StreamerRemovedEvent = {
+	twitchUserId: string,
+};
+
+// Frontend-facing summary: the `Streamer` row plus derived fields.
+export type StreamerSummary = {
+	streamer: Streamer,
+	vodCount: number,
+	eligibleVodCount: number,
+	liveNow: boolean,
+	nextPollEtaSeconds: number | null,
+};
+
+export type TriggerPollInput = {
+	// If omitted, the poller re-evaluates every due streamer on its next tick.
+	twitchUserId: string | null,
+};
+
+// Storage-aligned VOD row. The `*_at` fields are unix seconds UTC.
+export type Vod = {
+	twitchVideoId: string,
+	twitchUserId: string,
+	streamId: string | null,
+	title: string,
+	description: string,
+	streamStartedAt: number,
+	publishedAt: number,
+	url: string,
+	thumbnailUrl: string | null,
+	durationSeconds: number,
+	viewCount: number,
+	language: string,
+	mutedSegments: MutedSegment[],
+	isSubOnly: boolean,
+	helixGameId: string | null,
+	helixGameName: string | null,
+	ingestStatus: IngestStatus,
+	statusReason: string,
+	firstSeenAt: number,
+	lastSeenAt: number,
+};
+
+export type VodFilters = {
+	streamerIds: string[] | null,
+	// Mirrors `IngestStatus` db strings; caller may send any subset.
+	statuses: string[] | null,
+	gameIds: string[] | null,
+	// Unix seconds UTC.
+	since: number | null,
+	until: number | null,
+};
+
+export type VodIngestedEvent = {
+	twitchVideoId: string,
+	twitchUserId: string,
+	// Mirrors `vods.ingest_status`.
+	ingestStatus: string,
+	streamStartedAt: number,
+};
+
+export type VodSort = "stream_started_at_desc" | "stream_started_at_asc";
+
+export type VodUpdatedEvent = {
+	twitchVideoId: string,
+	ingestStatus: string,
+};
+
+export type VodWithChapters = {
+	vod: Vod,
+	chapters: Chapter[],
+	// Streamer display name, denormalized for convenience.
+	streamerDisplayName: string,
+	streamerLogin: string,
 };
 
 /* Tauri Specta runtime */

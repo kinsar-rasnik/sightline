@@ -22,9 +22,39 @@ use crate::commands;
 /// exposes. The same instance is used at runtime (as the `invoke_handler`
 /// source) and offline (to regenerate bindings).
 pub fn ipc_builder() -> Builder<Wry> {
+    use crate::services::events::{
+        AppReadyEvent, CredentialsChangedEvent, PollFinishedEvent, PollStartedEvent,
+        StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+    };
+
     Builder::<Wry>::new()
-        .commands(collect_commands![commands::health::health,])
+        .commands(collect_commands![
+            commands::health::health,
+            commands::credentials::set_twitch_credentials,
+            commands::credentials::get_twitch_credentials_status,
+            commands::credentials::clear_twitch_credentials,
+            commands::streamers::add_streamer,
+            commands::streamers::remove_streamer,
+            commands::streamers::list_streamers,
+            commands::vods::list_vods,
+            commands::vods::get_vod,
+            commands::settings::get_settings,
+            commands::settings::update_settings,
+            commands::poll::trigger_poll,
+            commands::poll::get_poll_status,
+        ])
         .events(collect_events![])
+        // Register the event payload shapes so the frontend gets their TS
+        // types even though nothing returns them from a `#[tauri::command]`.
+        // See ADR-0007 on the event-vs-command boundary.
+        .typ::<AppReadyEvent>()
+        .typ::<CredentialsChangedEvent>()
+        .typ::<StreamerAddedEvent>()
+        .typ::<StreamerRemovedEvent>()
+        .typ::<VodIngestedEvent>()
+        .typ::<VodUpdatedEvent>()
+        .typ::<PollStartedEvent>()
+        .typ::<PollFinishedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace
