@@ -34,7 +34,7 @@ description: Run the full phase-gate quality check and report what passed, what 
    - `pnpm test`
 
 5. **IPC drift.**
-   - `pnpm run check:ipc` (regenerate bindings into a temp file and diff against committed).
+   - `pnpm run check:ipc` — runs `cargo test --test ipc_bindings` (regenerates `src/ipc/bindings.ts` via tauri-specta) and then `git diff --exit-code` on that file. See ADR-0007.
 
 6. **Build.**
    - `pnpm tauri build` (dev build on CI; release build when producing installers).

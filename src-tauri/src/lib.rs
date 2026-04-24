@@ -7,6 +7,7 @@ pub mod commands;
 pub mod domain;
 pub mod error;
 pub mod infra;
+pub mod ipc;
 pub mod services;
 
 use std::sync::Arc;
@@ -31,8 +32,21 @@ pub struct AppState {
 pub fn run() {
     init_tracing();
 
+    let specta_builder = ipc::ipc_builder();
+
+    // Emit TypeScript bindings on every debug build. Release builds read
+    // the committed file instead — see ADR-0007. CI enforces drift with
+    // a dedicated test (`tests/ipc_bindings.rs`).
+    #[cfg(debug_assertions)]
+    if let Err(e) = ipc::export_bindings(&specta_builder) {
+        warn!(error = %e, "tauri-specta export skipped");
+    }
+
     tauri::Builder::default()
-        .setup(|app| {
+        .invoke_handler(specta_builder.invoke_handler())
+        .setup(move |app| {
+            specta_builder.mount_events(app);
+
             let started_at = unix_now();
             let handle = app.handle().clone();
 
@@ -54,7 +68,6 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::health::health])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
             eprintln!("fatal: tauri runtime exited with error: {e}");

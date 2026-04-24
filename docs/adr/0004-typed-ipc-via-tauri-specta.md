@@ -1,6 +1,6 @@
 # ADR-0004 — Typed IPC via tauri-specta
 
-- **Status.** Accepted
+- **Status.** Accepted (operationalized in [ADR-0007](0007-ipc-typegen.md) on 2026-04-24)
 - **Date.** 2026-04-24
 - **Phase.** 1
 - **Deciders.** CTO, Senior Engineer

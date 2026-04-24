@@ -1,8 +1,9 @@
 //! Health-report value type. Shape is canonical for the IPC boundary.
 
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthReport {
     /// Short program identifier. Always `"sightline"`.

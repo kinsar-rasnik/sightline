@@ -9,6 +9,7 @@ use crate::services::health::HealthService;
 /// Used by the frontend on startup to verify that the webview, command
 /// bridge, and database are all alive.
 #[tauri::command]
+#[specta::specta]
 pub async fn health(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::domain::health::HealthReport, AppError> {

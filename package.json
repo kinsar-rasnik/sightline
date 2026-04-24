@@ -19,7 +19,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:ipc": "cd src-tauri && cargo test --test ipc_bindings --quiet && cd .. && git diff --exit-code -- src/ipc/bindings.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",
