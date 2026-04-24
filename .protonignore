@@ -1,0 +1,22 @@
+# Build-Artefakte (liegen physisch in ~/.local/sightline-build/)
+node_modules
+target
+dist
+src-tauri/target
+
+# Test-Artefakte
+coverage
+.vitest-cache
+
+# SQLite Dev-Datenbanken
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Logs
+*.log
+
+# IDE
+.vscode/settings.json
+.idea
