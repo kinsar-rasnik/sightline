@@ -192,7 +192,7 @@ impl TwitchAuthenticator {
 /// integration tests against Helix / GQL don't have to exercise the OAuth
 /// exchange too. Only compiled in tests.
 #[doc(hidden)]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn prime_token_for_tests(
     auth: &TwitchAuthenticator,
     access_token: String,
