@@ -37,7 +37,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 regex = "1"
 once_cell = "1"
-rand = "0.8"
+rand = "0.9"
 async-trait = "0.1"
 url = "2"
 futures = "0.3"
