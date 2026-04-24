@@ -16,4 +16,5 @@ pub mod storage;
 pub mod streamers;
 pub mod time_util;
 pub mod timeline_indexer;
+pub mod tray;
 pub mod vods;

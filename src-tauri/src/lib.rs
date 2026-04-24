@@ -485,6 +485,13 @@ pub fn run() {
                     app_handle: handle.clone(),
                 });
 
+                // Install the tray icon + menu. Failure is non-fatal
+                // (headless CI, Linux without StatusNotifierItem), but
+                // we log it so it shows up in the support bundle.
+                if let Err(e) = install_tray(&handle) {
+                    warn!(error = %e, "tray icon install skipped");
+                }
+
                 handle
                     .emit("app:ready", serde_json::json!({ "startedAt": started_at }))
                     .map_err(|e| error::AppError::Io {
@@ -551,6 +558,44 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Install the platform-native tray icon. Chooses the right icon file
+/// for each platform (macOS → template PNG, so it follows menu-bar
+/// theme; Linux → 22×22 colour; Windows → 32×32 colour) and falls back
+/// to the generic `icon.png` if the expected resource isn't bundled.
+fn install_tray(handle: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::path::BaseDirectory;
+    let is_macos = cfg!(target_os = "macos");
+    // On macOS we want a template PNG so the OS can invert it in dark
+    // mode; on Linux/Windows we want a colour PNG at a size the system
+    // tray renders without blurring.
+    let preferred = if is_macos {
+        &["icons/tray-template.png", "icons/icon.png"][..]
+    } else if cfg!(target_os = "linux") {
+        &["icons/tray-22.png", "icons/icon.png"][..]
+    } else {
+        &["icons/tray-32.png", "icons/icon.png"][..]
+    };
+    let mut resolved: Option<std::path::PathBuf> = None;
+    for candidate in preferred {
+        if let Ok(path) = handle.path().resolve(candidate, BaseDirectory::Resource)
+            && path.exists()
+        {
+            resolved = Some(path);
+            break;
+        }
+        // Dev fallback (not yet bundled as resources).
+        let repo = std::path::PathBuf::from("src-tauri").join(candidate);
+        if repo.exists() {
+            resolved = Some(repo);
+            break;
+        }
+    }
+    let path = resolved.ok_or_else(|| "no tray icon resource found".to_owned())?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("read tray icon {path:?}: {e}"))?;
+    crate::services::tray::install(handle, &bytes, is_macos)
+        .map_err(|e| format!("tray install: {e}"))
 }
 
 /// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's
