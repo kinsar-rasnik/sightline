@@ -30,6 +30,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Share the target cache with the `test` matrix to keep cold-start
+      # `cargo clippy` from climbing past ~2m 30s. hotfix-ci.md §
+      # follow-up #3 flagged this gap.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
       # pnpm version is resolved from `packageManager` in package.json.
       # Do not pass a `version:` input here — it would conflict and fail
       # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
