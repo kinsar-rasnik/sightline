@@ -146,8 +146,55 @@ Events use `tauri::Emitter::emit` from the Rust side. Topics and payload types a
 | `library:migration_completed` | `LibraryMigrationCompletedEvent { migrationId, moved, errors }`  | After a migration finishes (success or partial). |
 | `library:migration_failed`    | `LibraryMigrationFailedEvent { migrationId, reason }`            | Migration aborted before completion.            |
 | `storage:low_disk_warning`    | `StorageLowDiskWarningEvent { path, freeBytes }`                  | Fired once per threshold crossing; not continuous. |
+| `watch:progress_updated`      | `WatchProgressUpdatedEvent { vodId, positionSeconds, state }`     | Debounced DB-write tick for watch-progress (Phase 5). |
+| `watch:state_changed`         | `WatchStateChangedEvent { vodId, from, to }`                      | State-machine transition on a watch_progress row. |
+| `watch:completed`             | `WatchCompletedEvent { vodId }`                                   | One-shot on crossing the completion threshold. |
 
 Frontend cache invalidation subscribes to these in `src/lib/event-subscriptions.ts`. Topic names live in `src/ipc/index.ts::events` and `src-tauri/src/services/events.rs` as paired constants.
+
+---
+
+## Phase 5 commands
+
+### Media assets
+
+- `getVodAssets({ vodId })` → `VodAssets { vodId, videoPath?, thumbnailPath?, previewFramePaths[] }`.
+  Single source of truth for every per-VOD file path the renderer loads.
+  Every returned path has been verified to sit under the library root
+  via `guarded_path` (ADR-0019). Missing / partial / pre-Phase-5
+  downloads return `videoPath=null` and an empty `previewFramePaths`.
+- `regenerateVodThumbnail({ vodId })` → `void`. Force-reextract the
+  single-frame thumbnail at 10%. Useful for pre-Phase-5 rows.
+- `getVideoSource({ vodId })` → `VideoSource { vodId, path?, state }`
+  where `state: "ready" | "missing" | "partial"`. The player's
+  single choke point for `<video src>`; path-validated.
+- `requestRemux({ vodId })` → `void`. In-place staged-swap remux
+  via ffmpeg, used by the player's "Remux file" recovery action.
+
+### Watch progress
+
+- `getWatchProgress({ vodId })` → `WatchProgressRow | null`. `null`
+  when the user has never opened this VOD in the player.
+- `updateWatchProgress({ vodId, positionSeconds, durationSeconds })`
+  → `WatchProgressRow`. Debounced player tick. Service rounds
+  position to 0.5 s, transitions state per ADR-0018's machine, and
+  emits `watch:progress_updated` (+ `watch:state_changed` and
+  `watch:completed` when relevant).
+- `markWatched({ vodId })` → `WatchProgressRow`. Sets state
+  `ManuallyWatched` + position = duration.
+- `markUnwatched({ vodId })` → `WatchProgressRow`. Resets state +
+  position.
+- `listContinueWatching({ limit? })` → `ContinueWatchingEntry[]`.
+  `in_progress` rows sorted by `last_watched_at DESC`, clamped 1..=24.
+- `getWatchStats({ streamerId? })` → `WatchStats { totalWatchSeconds,
+  completedCount, inProgressCount }`.
+
+### Autostart
+
+- `getAutostartStatus()` → `AutostartStatus { osEnabled, dbEnabled }`.
+  OS value is authoritative when the two diverge.
+- `setAutostart({ enabled })` → `AutostartStatus`. Writes the OS
+  registration + mirrors the OS readback into the DB.
 
 ---
 
@@ -192,7 +239,7 @@ The TS side receives this as a discriminated union. Component code narrows on `e
 | ----------------------- | ------- | -------------------------------------------------- |
 | `default.json`          | `main`  | `core:default` (all Phase 2 commands are in-process) |
 | `library.json` *(P4)*     | `main`  | Library read/write commands                          |
-| `player.json` *(P5)*      | `main`  | Watch-progress commands                              |
+| `player.json` *(P5, deferred)* | `main` | Asset-protocol scope narrowing — tracked as a Phase 7 polish follow-up per ADR-0019. The Phase-5 player path validation lives in `MediaAssetsService::guarded_path` — a capability allow-list would be belt-and-braces on top of that. |
 
 Capabilities are declared per-command (allow-list), never `"*"`.
 

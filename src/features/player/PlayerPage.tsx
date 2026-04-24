@@ -19,6 +19,7 @@ import {
   PROGRESS_WRITE_INTERVAL_MS,
   RESTART_THRESHOLD_SECONDS,
 } from "./player-constants";
+import { usePlaybackPrefs } from "./use-playback-prefs";
 import {
   useMarkUnwatched,
   useMarkWatched,
@@ -48,13 +49,18 @@ export interface PlayerPageProps {
 export function PlayerPage({
   vodId,
   initialPositionSeconds,
-  autoplay = DEFAULT_AUTO_PLAY_ON_OPEN,
+  autoplay,
 }: PlayerPageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hasSeekedRef = useRef(false);
   const lastWriteRef = useRef(0);
   const closePlayer = useNavStore((s) => s.closePlayer);
+  const prefs = usePlaybackPrefs();
+  // If the caller explicitly passed `autoplay`, honour that (deep link
+  // scenario); otherwise fall back to the user preference.
+  const effectiveAutoplay =
+    typeof autoplay === "boolean" ? autoplay : prefs.autoplay ?? DEFAULT_AUTO_PLAY_ON_OPEN;
 
   const source = useQuery({
     queryKey: ["video-source", vodId],
@@ -79,7 +85,7 @@ export function PlayerPage({
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1);
+  const [playbackRate, setPlaybackRate] = useState<number>(prefs.defaultSpeed);
   const [showRemaining, setShowRemaining] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pipActive, setPipActive] = useState(false);
@@ -106,6 +112,10 @@ export function PlayerPage({
     if (!Number.isFinite(video.duration) || video.duration === 0) return;
 
     const stored = progress.data?.positionSeconds;
+    const preRoll =
+      typeof prefs.preRollSeconds === "number"
+        ? prefs.preRollSeconds
+        : DEFAULT_PRE_ROLL_SECONDS;
     let target: number;
     if (typeof initialPositionSeconds === "number") {
       target = Math.min(video.duration, Math.max(0, initialPositionSeconds));
@@ -113,14 +123,19 @@ export function PlayerPage({
       if (stored >= video.duration - RESTART_THRESHOLD_SECONDS) {
         target = 0;
       } else {
-        target = Math.max(0, stored - DEFAULT_PRE_ROLL_SECONDS);
+        target = Math.max(0, stored - preRoll);
       }
     } else {
       target = 0;
     }
     video.currentTime = target;
     hasSeekedRef.current = true;
-  }, [initialPositionSeconds, progress.data?.positionSeconds, sourceState]);
+  }, [
+    initialPositionSeconds,
+    prefs.preRollSeconds,
+    progress.data?.positionSeconds,
+    sourceState,
+  ]);
 
   // Debounced DB write — fires every PROGRESS_WRITE_INTERVAL_MS wall
   // clock, on pause, on tab blur, and on unmount. Mutation is
@@ -143,13 +158,30 @@ export function PlayerPage({
   );
 
   useEffect(() => {
-    const onBlur = () => flushProgress(true);
+    const onBlur = () => {
+      flushProgress(true);
+      // Optional: enter Picture-in-Picture when the window loses
+      // focus (Settings → Playback → PiP-on-blur). Best-effort —
+      // some browsers require a prior user gesture, in which case
+      // the call silently rejects.
+      if (
+        prefs.pipOnBlur &&
+        videoRef.current &&
+        !videoRef.current.paused &&
+        "requestPictureInPicture" in videoRef.current
+      ) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        void (videoRef.current as any).requestPictureInPicture?.().catch(() => {
+          /* ignore */
+        });
+      }
+    };
     window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("blur", onBlur);
       flushProgress(true);
     };
-  }, [flushProgress]);
+  }, [flushProgress, prefs.pipOnBlur]);
 
   // ---- Video element event handlers ----
 
@@ -160,13 +192,13 @@ export function PlayerPage({
     video.volume = volume;
     video.muted = muted;
     video.playbackRate = playbackRate;
-    if (autoplay) {
+    if (effectiveAutoplay) {
       void video.play().catch(() => {
         // Some browsers block autoplay without user gesture — the
         // user can just click the button.
       });
     }
-  }, [autoplay, muted, playbackRate, volume]);
+  }, [effectiveAutoplay, muted, playbackRate, volume]);
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
@@ -552,7 +584,7 @@ export function PlayerPage({
             showRemaining={showRemaining}
             isFullscreen={isFullscreen}
             pipActive={pipActive}
-            completionThreshold={DEFAULT_COMPLETION_THRESHOLD}
+            completionThreshold={prefs.completionThreshold ?? DEFAULT_COMPLETION_THRESHOLD}
             resumeSeconds={progress.data?.positionSeconds ?? null}
             onTogglePlay={togglePlay}
             onSeekTo={(seconds) => {

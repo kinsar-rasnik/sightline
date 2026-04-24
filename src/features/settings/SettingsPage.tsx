@@ -8,6 +8,15 @@ import {
   useStagingInfo,
 } from "@/features/downloads/use-downloads";
 import {
+  PLAYBACK_SPEEDS,
+  type PlaybackSpeed,
+} from "@/features/player/player-constants";
+import {
+  setPlaybackPrefs,
+  usePlaybackPrefs,
+  type VolumeMemory,
+} from "@/features/player/use-playback-prefs";
+import {
   useAutostartStatus,
   useSetAutostart,
 } from "@/features/settings/use-autostart";
@@ -57,6 +66,7 @@ export function SettingsPage() {
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}
       />
+      <PlaybackSection />
       <AppearanceSection />
       <NotificationsSection
         settings={data}
@@ -66,6 +76,165 @@ export function SettingsPage() {
         settings={data}
         onUpdate={(patch) => update.mutate(patch)}
       />
+    </div>
+  );
+}
+
+function PlaybackSection() {
+  const prefs = usePlaybackPrefs();
+  return (
+    <section
+      aria-labelledby="playback-heading"
+      className="space-y-3 border-t border-[--color-border] pt-6"
+    >
+      <h3 id="playback-heading" className="text-base font-medium">
+        Playback
+      </h3>
+      <Toggle
+        label="Auto-play when opening a VOD"
+        checked={prefs.autoplay}
+        onChange={(v) => setPlaybackPrefs({ autoplay: v })}
+      />
+
+      <RangeField
+        id="pre-roll-seconds"
+        label="Pre-roll seconds on resume"
+        min={0}
+        max={30}
+        step={1}
+        value={prefs.preRollSeconds}
+        format={(v) => `${v} s`}
+        onChange={(v) => setPlaybackPrefs({ preRollSeconds: v })}
+        description="Seek back this many seconds on resume so the user picks up with context."
+      />
+
+      <RangeField
+        id="completion-threshold"
+        label="Completion threshold"
+        min={0.7}
+        max={1}
+        step={0.01}
+        value={prefs.completionThreshold}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={(v) => setPlaybackPrefs({ completionThreshold: v })}
+        description="VOD is marked completed once watched beyond this fraction."
+      />
+
+      <div className="flex flex-col gap-1 text-xs">
+        <label htmlFor="default-speed" className="text-[--color-muted]">
+          Default playback speed
+        </label>
+        <select
+          id="default-speed"
+          value={String(prefs.defaultSpeed)}
+          onChange={(e) =>
+            setPlaybackPrefs({
+              defaultSpeed: Number(e.target.value) as PlaybackSpeed,
+            })
+          }
+          className="bg-[--color-surface] border border-[--color-border] rounded px-2 py-1 w-24"
+        >
+          {PLAYBACK_SPEEDS.map((s) => (
+            <option key={s} value={String(s)}>
+              {s}×
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex flex-col gap-1 text-xs">
+        <label htmlFor="volume-memory" className="text-[--color-muted]">
+          Volume memory
+        </label>
+        <select
+          id="volume-memory"
+          value={prefs.volumeMemory}
+          onChange={(e) =>
+            setPlaybackPrefs({
+              volumeMemory: e.target.value as VolumeMemory,
+            })
+          }
+          className="bg-[--color-surface] border border-[--color-border] rounded px-2 py-1 w-40"
+        >
+          <option value="global">Global (default)</option>
+          <option value="session">Per session</option>
+          <option value="vod">Per VOD</option>
+        </select>
+      </div>
+
+      <Toggle
+        label="Enter picture-in-picture when the window loses focus"
+        checked={prefs.pipOnBlur}
+        onChange={(v) => setPlaybackPrefs({ pipOnBlur: v })}
+      />
+
+      <Toggle
+        label="Subtitles / captions (Phase 7)"
+        checked={false}
+        onChange={() => {
+          /* no-op */
+        }}
+        disabled
+      />
+
+      <p className="text-xs text-[--color-muted] max-w-prose">
+        Decoding uses the system video pipeline (WebKit on macOS,
+        WebView2 on Windows, WebKitGTK on Linux). If playback stutters
+        or a file refuses to play, see the{" "}
+        <a
+          className="underline text-[--color-accent]"
+          href="../../docs/user-guide/player.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          player troubleshooting guide
+        </a>
+        .
+      </p>
+    </section>
+  );
+}
+
+function RangeField({
+  id,
+  label,
+  description,
+  min,
+  max,
+  step,
+  value,
+  format,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  description?: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1 text-xs max-w-md">
+      <label htmlFor={id} className="text-[--color-muted] flex justify-between">
+        <span>{label}</span>
+        <span className="font-mono">{format(value)}</span>
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="accent-[--color-accent]"
+      />
+      {description && (
+        <p className="text-[10px] text-[--color-muted]">{description}</p>
+      )}
     </div>
   );
 }

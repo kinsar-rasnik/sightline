@@ -246,17 +246,72 @@ Proton Drive / network filesystems).
 
 ## Phase 5 — Watch progress
 
-```sql
--- 0005_watch_progress.sql (draft — lands in Phase 5)
+Phase 5 lands schema version **8** via migration
+`0008_watch_progress.sql`. The shipping shape (see
+[ADR-0018](adr/0018-watch-progress-model.md)):
 
+```sql
 CREATE TABLE watch_progress (
-  twitch_video_id TEXT    PRIMARY KEY REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
-  position_ms     INTEGER NOT NULL DEFAULT 0,
-  duration_ms     INTEGER NOT NULL,
-  last_watched_at INTEGER NOT NULL,
-  marked_watched  INTEGER NOT NULL DEFAULT 0       -- 0/1
+    vod_id                         TEXT    PRIMARY KEY
+                                           REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
+    position_seconds               REAL    NOT NULL DEFAULT 0
+                                           CHECK (position_seconds >= 0),
+    duration_seconds               REAL    NOT NULL
+                                           CHECK (duration_seconds >= 0),
+    -- Generated STORED for "sort by % watched" without a function scan.
+    watched_fraction               REAL    GENERATED ALWAYS AS (
+        CASE WHEN duration_seconds > 0
+             THEN position_seconds / duration_seconds
+             ELSE 0
+        END
+    ) STORED,
+    state                          TEXT    NOT NULL CHECK (state IN (
+        'unwatched','in_progress','completed','manually_watched'
+    )),
+    first_watched_at               INTEGER,
+    last_watched_at                INTEGER NOT NULL,
+    last_session_duration_seconds  REAL    NOT NULL DEFAULT 0,
+    total_watch_seconds            REAL    NOT NULL DEFAULT 0
 );
+CREATE INDEX idx_watch_progress_last_watched ON watch_progress(last_watched_at DESC);
+CREATE INDEX idx_watch_progress_state        ON watch_progress(state);
 ```
+
+### State machine
+
+```
+    unwatched
+      │  first timeupdate > 0
+      ▼
+    in_progress ──► completed   (watched_fraction ≥ threshold; default 0.9)
+                           │
+                           └── mark-as-unwatched ──► unwatched
+
+    any ──► manually_watched   (user clicked "Mark as watched"; position := duration)
+                       │
+                       └── mark-as-unwatched ──► unwatched
+```
+
+`completed` and `manually_watched` are sticky under timeupdate — the
+state machine's `transition_on_update` never moves away from them,
+only the explicit mark-as-unwatched command does. Phase 7 cleanup
+treats the two terminals differently: see ADR-0018.
+
+### Notes
+
+- `watched_fraction` is `STORED`, not `VIRTUAL`, so a future
+  "sort library by progress" index is cheap to add without a
+  migration.
+- `total_watch_seconds` tracks *unique* playback time. The player
+  session manager holds an in-memory interval-merger
+  (`domain::interval_merger::IntervalSet`) and only forwards the
+  cumulative new-coverage delta, so scrubbing back doesn't
+  double-count.
+- Position writes round to 0.5 s resolution
+  (`domain::watch_progress::round_to_half_second`). Cuts write
+  amplification from a 4 Hz `timeupdate` to an effective ~2 writes
+  per second at most, then further throttled to one DB write every
+  5 s wall-clock by the service layer.
 
 ---
 
