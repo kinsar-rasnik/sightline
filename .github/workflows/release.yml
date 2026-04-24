@@ -45,11 +45,11 @@ jobs:
       # pnpm version is resolved from `packageManager` in package.json.
       # Do not pass a `version:` input here — it would conflict and fail
       # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: install linux webview deps
