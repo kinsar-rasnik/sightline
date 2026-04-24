@@ -52,7 +52,7 @@ pub struct ThumbnailSpec {
 }
 
 #[async_trait]
-pub trait Ffmpeg: Send + Sync {
+pub trait Ffmpeg: Send + Sync + std::fmt::Debug {
     async fn version(&self) -> Result<FfmpegVersion, AppError>;
     async fn remux_to_mp4(&self, spec: &RemuxSpec) -> Result<(), AppError>;
     async fn extract_thumbnail(&self, spec: &ThumbnailSpec) -> Result<(), AppError>;

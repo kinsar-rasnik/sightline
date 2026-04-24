@@ -101,6 +101,19 @@ export type AppSettings = {
 	concurrencyCap: number,
 	firstBackfillLimit: number,
 	credentials: CredentialsStatus,
+	/**
+	 *  Absolute path the user chose as library root. `None` until
+	 *  the user picks one via the Settings UI folder picker.
+	 */
+	libraryRoot: string | null,
+	libraryLayout: LibraryLayoutKind,
+	// Optional override. `None` means "use the platform default".
+	stagingPath: string | null,
+	maxConcurrentDownloads: number,
+	// `None` = unlimited.
+	bandwidthLimitBps: number | null,
+	qualityPreset: QualityPreset,
+	autoUpdateYtDlp: boolean,
 };
 
 export type Chapter = {
@@ -151,6 +164,19 @@ export type LastPollSummary = {
 	status: string,
 };
 
+/**
+ *  The two layout options surfaced on the Settings page. Wire strings
+ *  match the `CHECK` constraint on `app_settings.library_layout`.
+ */
+export type LibraryLayoutKind = 
+// Plex / Jellyfin / Infuse — one folder per streamer, Kodi NFO sidecar.
+"plex" | 
+/**
+ *  Hidden-thumb flat layout. Minimal, no sidecars on disk beyond
+ *  the video itself.
+ */
+"flat";
+
 export type ListVodsInput = {
 	filters: VodFilters,
 	sort: VodSort,
@@ -182,6 +208,17 @@ export type PollStatusRow = {
 	lastPoll: LastPollSummary | null,
 };
 
+// The four presets exposed on the UI. Wire strings are stable.
+export type QualityPreset = 
+// Best video + best audio, whatever the source offers.
+"source" | 
+// 1080p60 or less.
+"1080p60" | 
+// 720p60 or less.
+"720p60" | 
+// 480p or less, 30fps cap implied.
+"480p";
+
 export type RemoveStreamerInput = {
 	twitchUserId: string,
 };
@@ -212,6 +249,17 @@ export type SettingsPatch = {
 	pollCeilingSeconds?: number | null,
 	concurrencyCap?: number | null,
 	firstBackfillLimit?: number | null,
+	libraryRoot?: string | null,
+	libraryLayout?: LibraryLayoutKind | null,
+	stagingPath?: string | null,
+	maxConcurrentDownloads?: number | null,
+	/**
+	 *  Sentinel: provide `Some(n)` to set a cap, or `Some(-1)` to
+	 *  clear (unlimited). Omit to leave unchanged.
+	 */
+	bandwidthLimitBps?: number | null,
+	qualityPreset?: QualityPreset | null,
+	autoUpdateYtDlp?: boolean | null,
 };
 
 // Storage-aligned streamer row. The `*_at` fields are unix seconds UTC.

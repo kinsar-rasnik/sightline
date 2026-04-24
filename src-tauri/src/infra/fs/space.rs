@@ -15,7 +15,7 @@ use sysinfo::Disks;
 use crate::error::AppError;
 
 #[async_trait]
-pub trait FreeSpaceProbe: Send + Sync {
+pub trait FreeSpaceProbe: Send + Sync + std::fmt::Debug {
     /// Return the free bytes available at `path` (which may or may
     /// not exist — we fall back to the deepest existing ancestor).
     async fn free_bytes(&self, path: &Path) -> Result<u64, AppError>;
@@ -95,7 +95,7 @@ impl FreeSpaceProbe for FakeFreeSpace {
 /// `size * 1.2`, library must hold `size * 1.1`. Returns `Ok(())` when
 /// both partitions are fine; returns `Err(AppError::DiskFull {path})`
 /// naming the first partition that's short.
-pub async fn check_preflight<P: FreeSpaceProbe>(
+pub async fn check_preflight<P: FreeSpaceProbe + ?Sized>(
     probe: &P,
     staging_path: &Path,
     library_path: &Path,

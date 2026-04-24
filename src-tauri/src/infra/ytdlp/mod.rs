@@ -113,7 +113,7 @@ pub struct DownloadProgress {
 /// `Send + Sync` so the queue service can share a single instance
 /// across worker tasks via `Arc<dyn YtDlp>`.
 #[async_trait]
-pub trait YtDlp: Send + Sync {
+pub trait YtDlp: Send + Sync + std::fmt::Debug {
     /// Return the version of the binary under management. Fails if
     /// the binary isn't on disk, isn't executable, or doesn't answer
     /// `--version`.
