@@ -4,4 +4,5 @@
 pub mod clock;
 pub mod db;
 pub mod keychain;
+pub mod throttle;
 pub mod twitch;
