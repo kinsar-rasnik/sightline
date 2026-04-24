@@ -413,25 +413,38 @@ fn unix_now() -> i64 {
 /// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's
 /// resolver can't find it — callers fall back to the binary on PATH
 /// (dev workflow) or surface a Sidecar error to the user.
+///
+/// Tauri's `bundle.externalBin` convention places binaries at
+/// `binaries/<name>-<target-triple>[.exe]`. `TARGET_TRIPLE` is baked in
+/// at compile time via `build.rs`, matching the filenames produced by
+/// `scripts/bundle-sidecars.sh` (ADR-0013).
 fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::PathBuf> {
     use tauri::path::BaseDirectory;
-    // Tauri bundles sidecars under `binaries/<name>-<target-triple>`.
-    // Naming matches the `src-tauri/binaries/` convention set by
-    // ADR-0003 and `scripts/bundle-sidecars.sh`.
-    let triple = std::env::consts::ARCH;
-    // Just a simple attempt — the sidecar manager in Phase 3 housekeeping
-    // will get fancier. We only need `yt-dlp` and `ffmpeg` to be
-    // available on PATH during `pnpm tauri dev`; CI packages the
-    // bundle.
-    for candidate in [
+    let triple = env!("TARGET_TRIPLE");
+    let ext = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    // Try the canonical bundled path first, then the repo's `src-tauri/binaries`
+    // (covers `pnpm tauri dev` before a `tauri build` has copied resources).
+    let candidates = [
+        format!("binaries/{name}-{triple}{ext}"),
+        format!("binaries/{name}{ext}"),
         format!("binaries/{name}"),
-        format!("binaries/{name}-{triple}"),
-    ] {
-        if let Ok(path) = handle.path().resolve(&candidate, BaseDirectory::Resource)
+    ];
+    for candidate in &candidates {
+        if let Ok(path) = handle.path().resolve(candidate, BaseDirectory::Resource)
             && path.exists()
         {
             return Some(path);
         }
+    }
+    // Dev fallback: look relative to the repo.
+    let repo_candidate =
+        std::path::PathBuf::from("src-tauri/binaries").join(format!("{name}-{triple}{ext}"));
+    if repo_candidate.exists() {
+        return Some(repo_candidate);
     }
     None
 }

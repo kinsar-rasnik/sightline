@@ -11,6 +11,9 @@
 #   ./scripts/verify.sh --fast   # skip the Rust integration tests and the
 #                                # Vite production build (quickest sanity
 #                                # pass — ~30% of full runtime)
+#   ./scripts/verify.sh --no-sidecars  # skip the sidecar hash check
+#                                # (useful on a fresh clone before the
+#                                #  binaries have been fetched)
 #
 # hotfix-camelcase.md §Follow-up #2 and hotfix-ci.md both asked for a
 # scripted gate that runs pre-push. This is that script. Required by
@@ -20,11 +23,13 @@ set -euo pipefail
 
 MODE="all"
 FAST=0
+SKIP_SIDECARS=0
 for arg in "$@"; do
   case "$arg" in
     --rust) MODE="rust" ;;
     --web)  MODE="web" ;;
     --fast) FAST=1 ;;
+    --no-sidecars) SKIP_SIDECARS=1 ;;
     -h|--help)
       sed -n '2,18p' "$0"
       exit 0
@@ -100,10 +105,31 @@ run_web() {
   fi
 }
 
+run_sidecars() {
+  step "Sidecars: scripts/verify-sidecars.sh"
+  # Tolerated if the binaries just aren't downloaded on this machine yet —
+  # the gate flags them with a clear instruction, but we don't hard-fail
+  # the pre-push unless the binaries are present *and* corrupt (exit 1
+  # from verify-sidecars covers both cases; the actionable recovery is the
+  # same: run scripts/bundle-sidecars.sh).
+  if ./scripts/verify-sidecars.sh; then
+    pass "sidecars"
+  else
+    fail "verify-sidecars (run scripts/bundle-sidecars.sh to install pinned yt-dlp + ffmpeg)"
+  fi
+}
+
 case "$MODE" in
-  all)  run_rust; run_web ;;
-  rust) run_rust ;;
-  web)  run_web ;;
+  all)
+    if [ "$SKIP_SIDECARS" -eq 0 ]; then run_sidecars; fi
+    run_rust
+    run_web
+    ;;
+  rust)
+    if [ "$SKIP_SIDECARS" -eq 0 ]; then run_sidecars; fi
+    run_rust
+    ;;
+  web) run_web ;;
 esac
 
 printf '\n%s✓ verify passed%s\n' "$GREEN$BOLD" "$RESET"

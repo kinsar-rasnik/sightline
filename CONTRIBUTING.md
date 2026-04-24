@@ -32,6 +32,27 @@ One-time bootstrap:
 
 This installs pnpm deps, verifies the Rust toolchain, and downloads pinned sidecar binaries (yt-dlp, ffmpeg) into `src-tauri/binaries/`.
 
+### Sidecar binaries
+
+yt-dlp and ffmpeg ship alongside the app. They are **pinned by version and SHA-256** in `scripts/sidecars.lock` and fetched by `scripts/bundle-sidecars.sh` (macOS/Linux) or `scripts/bundle-sidecars.ps1` (Windows). Both scripts verify SHA-256 *before* the binary is ever executed — a mismatch aborts with exit 3. See [ADR-0013](docs/adr/0013-sidecar-bundling.md) for the full design.
+
+Fetch them explicitly:
+
+```bash
+./scripts/bundle-sidecars.sh                # host triple
+./scripts/bundle-sidecars.sh --all          # every triple (release bundles)
+./scripts/bundle-sidecars.sh --dry-run      # print the plan
+```
+
+Quick health check any time:
+
+```bash
+./scripts/verify-sidecars.sh                # existence + hash
+./scripts/verify-sidecars.sh --smoke        # also runs `--version` on each
+```
+
+To refresh to newer upstream versions (yt-dlp ships every few weeks): open `scripts/sidecars.lock`, replace the URL and SHA-256 for each row, then run `./scripts/bundle-sidecars.sh --force` locally to prove the hashes are valid. Commit the lockfile only — the binaries themselves remain gitignored under `src-tauri/binaries/`.
+
 Daily workflow:
 
 ```bash
@@ -56,6 +77,7 @@ Run the bundled script:
 It wraps the same checks CI runs:
 
 ```
+scripts/verify-sidecars.sh
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
@@ -64,6 +86,8 @@ pnpm lint
 pnpm test
 pnpm build
 ```
+
+If the sidecar verify step fails with a "missing" error on a fresh clone, run `./scripts/bundle-sidecars.sh` once to download the pinned binaries. Pass `--no-sidecars` to skip this check (useful in CI contexts that handle the download separately, or on a clone you only need for doc edits).
 
 This script must pass before every `git push` to `main`. Two recent
 hotfixes (`docs/session-reports/hotfix-camelcase.md`,

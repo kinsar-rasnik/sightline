@@ -117,6 +117,29 @@ jobs:
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
+      # Cache the sidecar downloads by the lockfile hash so the huge ffmpeg
+      # + yt-dlp binaries aren't refetched on every CI run. Keyed on OS so
+      # the cache is per-runner.
+      - name: cache sidecar downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sightline-sidecars
+          key: sidecars-${{ runner.os }}-${{ hashFiles('scripts/sidecars.lock') }}
+
+      - name: bundle sidecars (unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: ./scripts/bundle-sidecars.sh
+
+      - name: bundle sidecars (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/bundle-sidecars.ps1
+
+      - name: verify sidecars
+        shell: bash
+        run: ./scripts/verify-sidecars.sh --smoke
+
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --all-features
