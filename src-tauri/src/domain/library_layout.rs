@@ -269,17 +269,27 @@ mod tests {
         }
     }
 
+    /// Walk `path.components()` to return the OS-native
+    /// display of each component. Keeps tests free of `/` vs `\`
+    /// concerns.
+    fn components(path: &std::path::Path) -> Vec<String> {
+        path.components()
+            .filter_map(|c| c.as_os_str().to_str().map(str::to_owned))
+            .collect()
+    }
+
     #[test]
     fn plex_path_has_season_folder_and_nfo_sidecar() {
         let vod = vod_fixture();
         let v = with_streamer(&vod);
         let layout = PlexLayout;
         let path = layout.path_for(&v);
-        let path_str = path.to_string_lossy();
-        assert!(path_str.starts_with("Sampler/"), "got {path_str}");
-        assert!(path_str.contains("Season 2026-04"), "got {path_str}");
-        assert!(path_str.contains("[twitch-v1]"), "got {path_str}");
-        assert!(path_str.ends_with(".mp4"));
+        let parts = components(&path);
+        assert_eq!(parts.first().map(String::as_str), Some("Sampler"));
+        assert!(parts.iter().any(|p| p == "Season 2026-04"), "got {parts:?}");
+        let filename = parts.last().unwrap();
+        assert!(filename.contains("[twitch-v1]"), "got {filename}");
+        assert!(filename.ends_with(".mp4"));
         let sidecars = layout.sidecars_for(&v);
         assert_eq!(sidecars.len(), 2);
         assert!(sidecars.iter().any(|s| s.kind == SidecarKind::Nfo));
@@ -292,17 +302,19 @@ mod tests {
         let v = with_streamer(&vod);
         let layout = FlatLayout;
         let path = layout.path_for(&v);
-        let path_str = path.to_string_lossy();
-        assert!(path_str.starts_with("sampler/"), "got {path_str}");
-        assert!(path_str.contains("2026-04-02_v1_"), "got {path_str}");
-        assert!(path_str.ends_with(".mp4"));
+        let parts = components(&path);
+        assert_eq!(parts.first().map(String::as_str), Some("sampler"));
+        let filename = parts.last().unwrap();
+        assert!(filename.contains("2026-04-02_v1_"), "got {filename}");
+        assert!(filename.ends_with(".mp4"));
         assert!(layout.sidecars_for(&v).is_empty());
-        // Thumbnail lives under `.thumbs/`.
+        // Thumbnail lives under `.thumbs/` — check via components
+        // rather than a `/.thumbs/` substring so the test passes on
+        // Windows where the separator is `\`.
+        let thumb_parts = components(&layout.thumbnail_path(&v));
         assert!(
-            layout
-                .thumbnail_path(&v)
-                .to_string_lossy()
-                .contains("/.thumbs/")
+            thumb_parts.iter().any(|p| p == ".thumbs"),
+            "got {thumb_parts:?}"
         );
     }
 

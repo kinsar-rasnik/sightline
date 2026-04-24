@@ -424,6 +424,16 @@ mod tests {
         assert_eq!(out.first_backfill_limit, 1);
     }
 
+    /// Path string that `std::path::Path::is_absolute` accepts on the
+    /// host — `/tmp/...` on Unix, `C:\tmp\...` on Windows.
+    fn abs(rel: &str) -> String {
+        if cfg!(windows) {
+            format!(r"C:\tmp\{}", rel.trim_start_matches('/'))
+        } else {
+            format!("/tmp/{}", rel.trim_start_matches('/'))
+        }
+    }
+
     #[tokio::test]
     async fn phase_3_fields_have_sensible_defaults() {
         let svc = setup().await;
@@ -440,9 +450,10 @@ mod tests {
     #[tokio::test]
     async fn update_writes_phase_3_fields() {
         let svc = setup().await;
+        let root = abs("lib");
         let out = svc
             .update(SettingsPatch {
-                library_root: Some("/tmp/lib".into()),
+                library_root: Some(root.clone()),
                 library_layout: Some(LibraryLayoutKind::Flat),
                 max_concurrent_downloads: Some(3),
                 bandwidth_limit_bps: Some(5_000_000),
@@ -452,7 +463,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(out.library_root.as_deref(), Some("/tmp/lib"));
+        assert_eq!(out.library_root.as_deref(), Some(root.as_str()));
         assert_eq!(out.library_layout, LibraryLayoutKind::Flat);
         assert_eq!(out.max_concurrent_downloads, 3);
         assert_eq!(out.bandwidth_limit_bps, Some(5_000_000));
@@ -501,7 +512,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn update_rejects_filesystem_root_as_library_root() {
+        // Windows path semantics differ (a path like "/" is treated as
+        // non-absolute by `Path::is_absolute`, so it gets caught by
+        // the earlier "must be absolute" arm). The Unix assertion is
+        // the one we want to pin.
         let svc = setup().await;
         let err = svc
             .update(SettingsPatch {
@@ -516,15 +532,18 @@ mod tests {
     #[tokio::test]
     async fn update_rejects_staging_under_library_root() {
         let svc = setup().await;
+        let root = abs("lib");
         svc.update(SettingsPatch {
-            library_root: Some("/tmp/lib".into()),
+            library_root: Some(root.clone()),
             ..Default::default()
         })
         .await
         .unwrap();
+        let separator = if cfg!(windows) { '\\' } else { '/' };
+        let nested = format!("{root}{separator}staging");
         let err = svc
             .update(SettingsPatch {
-                staging_path: Some("/tmp/lib/staging".into()),
+                staging_path: Some(nested),
                 ..Default::default()
             })
             .await
@@ -536,8 +555,8 @@ mod tests {
     async fn update_accepts_absolute_non_nested_staging() {
         let svc = setup().await;
         svc.update(SettingsPatch {
-            library_root: Some("/tmp/lib".into()),
-            staging_path: Some("/tmp/staging".into()),
+            library_root: Some(abs("lib")),
+            staging_path: Some(abs("staging")),
             ..Default::default()
         })
         .await

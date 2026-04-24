@@ -96,7 +96,9 @@ describe("DownloadsPage", () => {
       stubRow({ state: "paused" })
     );
     renderWith(<DownloadsPage />);
-    const pauseButton = await screen.findByRole("button", { name: /pause/i });
+    // Use an exact match — the state-filter chip says "Paused" which
+    // also matches /pause/i.
+    const pauseButton = await screen.findByRole("button", { name: "Pause" });
     await userEvent.click(pauseButton);
     await waitFor(() =>
       expect(vi.mocked(commands.pauseDownload)).toHaveBeenCalledWith({
@@ -113,7 +115,8 @@ describe("DownloadsPage", () => {
       stubRow({ state: "queued" })
     );
     renderWith(<DownloadsPage />);
-    const retryButton = await screen.findByRole("button", { name: /retry/i });
+    // Exact match — the "Retrying" filter chip would otherwise win.
+    const retryButton = await screen.findByRole("button", { name: "Retry" });
     await userEvent.click(retryButton);
     await waitFor(() =>
       expect(vi.mocked(commands.retryDownload)).toHaveBeenCalledWith({
