@@ -36,6 +36,7 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0005](docs/adr/0005-background-polling-architecture.md) — Tokio-based background polling model
 - [ADR-0006](docs/adr/0006-package-manager-and-lockfile-policy.md) — pnpm, pinned lockfiles
 - [ADR-0007](docs/adr/0007-ipc-typegen.md) — Generated TS IPC bindings via tauri-specta 2.x (operationalizes ADR-0004)
+- [ADR-0008](docs/adr/0008-chapters-via-twitch-gql.md) — VOD chapters via the public Twitch GraphQL endpoint
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

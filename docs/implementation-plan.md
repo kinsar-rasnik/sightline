@@ -35,23 +35,45 @@
 
 ---
 
-## Phase 2 — Twitch ingest and polling
+## Phase 2 — Twitch ingest, metadata, chapters, polling
 
-**Goal.** Poll the Twitch Helix API on a configurable interval, discover new VODs for followed streamers, filter by game whitelist, and record them locally.
+**Goal.** Poll the Twitch Helix API on a configurable adaptive interval, discover new VODs for followed streamers, fetch chapter metadata from the Twitch GraphQL endpoint, filter VODs by a game whitelist (default GTA V), enforce the live-stream gate, flag sub-only VODs, and surface the results in a minimal but real UI.
+
+### Housekeeping first
+
+- [x] Commit the Phase 1 working tree as logical Conventional Commits and tag `phase-1-complete`.
+- [x] Wire typed IPC generation via `tauri-specta`; file [ADR-0007](adr/0007-ipc-typegen.md); regenerate bindings; update the `add-tauri-command` skill to reflect the new flow.
 
 ### Acceptance criteria
 
-- [ ] `AppConfig` persists Twitch Client ID + Secret via the OS keyring (never plaintext on disk).
-- [ ] `HelixClient` handles App Access Token acquisition, refresh, rate-limit awareness, and exponential backoff on 5xx.
-- [ ] `follow_streamer(login)` resolves to a `user_id` + profile blob and enqueues for polling.
-- [ ] The `Poller` task runs on a schedule, batches requests, and respects live-state (live streams are deferred).
-- [ ] New VODs landing on disk trigger a `vod:discovered` event on the IPC bus.
-- [ ] Integration tests cover: 200 OK, 401 (token refresh), 429 (backoff), malformed payload, empty VOD list.
-- [ ] `docs/adr/000N-helix-client-design.md` documents the client contract.
+- [x] [ADR-0007](adr/0007-ipc-typegen.md) records the typed-IPC decision and drift-check flow.
+- [ ] [ADR-0008](adr/0008-chapters-via-twitch-gql.md) records the decision to use the public Twitch GQL endpoint for chapters, with trade-offs and defensive-coding notes.
+- [ ] Schema migrations `0002_streamers_vods_chapters.sql` and `0003_poll_log.sql` land reversibly and pass `PRAGMA user_version`.
+- [ ] `AppConfig` persists Twitch Client ID + Secret via the OS keyring. Secrets never serialize to disk in plaintext; the frontend sees a masked `client_id` + a boolean `configured`.
+- [ ] `HelixClient` handles App Access Token acquisition + refresh, conservative 600 points/min budget, exponential backoff on 401 (re-auth) and 429 (respect `Ratelimit-Reset`), and tests against a `wiremock`-mocked Helix.
+- [ ] `GqlClient` fetches `VideoPlayer_VODSeekbarPreviewVideo` chapter moments with a hardcoded public Client-Id, defensive parsing, and fixture-based tests.
+- [ ] `cmd_add_streamer(login)` resolves the user via Helix and registers them for polling; `cmd_remove_streamer` soft-deletes, preserving VOD history; `cmd_list_streamers` returns enriched rows (`vod_count`, `live_now`, `next_poll_eta`).
+- [ ] `cmd_list_vods` supports filters (streamer_ids, status, game_ids, since/until), chronological sort by `stream_started_at`, paging.
+- [ ] `cmd_get_vod(id)` returns the VOD plus its chapters.
+- [ ] `cmd_trigger_poll` performs an ad-hoc poll that respects the global rate limit.
+- [ ] `cmd_get_poll_status` returns per-streamer schedule state with `next_eta` + last result.
+- [ ] `cmd_update_settings` / `cmd_get_settings` handle game filter, poll floor/ceiling, and credentials status (but not secrets).
+- [ ] Polling scheduler runs on its own Tokio task, survives frontend close, honors an adaptive interval (10min live / 30min recent / 2h dormant) with ±10% jitter and a global concurrency cap; graceful shutdown on exit signal.
+- [ ] `poll_log` table records every poll with counts + outcome.
+- [ ] VOD ingest lifecycle (`pending → chapters_fetched → eligible | skipped_game | skipped_sub_only | skipped_live | error`) is invariant-tested end-to-end with a Helix+GQL double.
+- [ ] Unit tests cover: duration parser (`1h23m45s`), chapter merger (gap fill), game-id matcher, poll-schedule decider, live-gate transition.
+- [ ] Integration tests cover: happy-path Helix ingest + chapter merge + game filter; 401 → token refresh; 429 → backoff; cursor pagination; malformed GQL response; sub-only flag; first-backfill vs incremental-first-seen stop; polling scheduler with `tokio::time::pause` verifying intervals/jitter/cap.
+- [ ] Frontend ships three real pages: Settings (credentials form with mask-on-save, game filter, interval sliders), Streamers (add-by-login, list with avatar / last-polled / VOD count / manual-poll / remove), Library stub (chronological list + filter chips + detail drawer with chapters).
+- [ ] `security-reviewer` subagent passes the change set: no credentials logged, no credentials cross IPC after initial paste, keyring usage matches each OS.
+- [ ] Docs freshness: `data-model.md`, `api-contracts.md`, and the README Quickstart are updated to match what landed.
+- [ ] `docs/session-reports/phase-02.md` exists.
+- [ ] Quality gate: `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features && pnpm typecheck && pnpm lint --max-warnings=0 && pnpm test && pnpm build && pnpm tauri build --no-bundle`.
 
 ### Out of scope
 
-- Downloading VOD video bytes — queue only.
+- Downloading VOD video bytes — queue only (Phase 3).
+- User-account OAuth, end-user Twitch login — perpetually out of scope (see tech-spec).
+- Player, watch progress, multi-view, cleanup, installer signing.
 
 ---
 
