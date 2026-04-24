@@ -35,7 +35,7 @@ jobs:
       # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
@@ -91,7 +91,7 @@ jobs:
       # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
@@ -134,7 +134,7 @@ jobs:
       # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
