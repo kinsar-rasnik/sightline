@@ -87,6 +87,11 @@ sep=""
 while IFS='|' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
   # Skip comments / blanks.
   case "$name" in ""|\#*) continue ;; esac
+  # Belt-and-braces: .gitattributes forces LF on scripts/*.lock, but a
+  # Windows runner with an overriding `core.autocrlf=true` could still
+  # produce CRLF. Strip trailing `\r` from the last field so an empty
+  # `extracted_sha` doesn't become $'\r' and trip the hash-mismatch branch.
+  extracted_sha="${extracted_sha%$'\r'}"
   [ "$triple" = "$TRIPLE" ] || continue
   suffix="$(suffix_for "$triple")"
   final="$OUT_DIR/${name}-${triple}${suffix}"

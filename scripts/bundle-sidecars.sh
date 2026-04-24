@@ -263,6 +263,11 @@ matching_rows() {
   local target="${1:-}"
   # Strip comments and blank lines; leave pipe-delimited rows intact.
   grep -v -E '^\s*(#|$)' "$LOCKFILE" | while IFS='|' read -r name triple url sha binary archive_kind archive_entry extracted_sha; do
+    # Belt-and-braces for Windows dev runs: if .gitattributes is bypassed
+    # and the lockfile arrives with CRLF, the last pipe-delimited field
+    # keeps the `\r`. Strip it so downstream comparisons (sha matches,
+    # empty-extracted_sha pin path) behave identically on every OS.
+    extracted_sha="${extracted_sha%$'\r'}"
     if [ "$FETCH_ALL" -eq 1 ] || [ "$triple" = "$target" ]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$name" "$triple" "$url" "$sha" "$binary" "$archive_kind" "$archive_entry" "${extracted_sha-}"
