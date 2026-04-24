@@ -326,10 +326,17 @@ kickoff steps:
 ## CI run
 
 - PR: [#14 — Phase 5: player, watch progress, continue watching + housekeeping](https://github.com/kinsar-rasnik/sightline/pull/14)
-- Head-commit CI run: [`run 24906982316`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906982316) — all five jobs green: `checks (fmt · lint · typecheck)`, `audit (cargo · pnpm)`, `test (macos-latest)`, `test (ubuntu-latest)`, `test (windows-latest)`.
-- Preceding runs (same PR, earlier commits):
+- **Head-commit CI run** (`85baef8`, the session-report polish):
+  [`run 24907161835`](https://github.com/kinsar-rasnik/sightline/actions/runs/24907161835) —
+  **all five jobs green**: `checks (fmt · lint · typecheck)`,
+  `audit (cargo · pnpm)`, `test (macos-latest)`,
+  `test (ubuntu-latest)`, `test (windows-latest)`.
+- Security-fix commit CI (`fd0805d` → `c8c8a5f`):
+  [`run 24906982316`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906982316) —
+  all five jobs green.
+- Earlier runs superseded by the concurrency policy or pre-security-fix:
   - [`run 24905043416`](https://github.com/kinsar-rasnik/sightline/actions/runs/24905043416) — green, pre-security-fix snapshot.
-  - [`run 24906838079`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906838079) — cancelled by the concurrency policy when the session-report commit superseded it (expected; not a failure).
+  - [`run 24906838079`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906838079) — cancelled by the concurrency policy when the next push superseded it (expected; not a failure).
 
 Per the Rules of Engagement, the `phase-5-complete` tag is NOT applied
 yet — it lands only after the PR merges to `main`. The CTO-sign-off
