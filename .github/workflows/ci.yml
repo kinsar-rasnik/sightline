@@ -30,9 +30,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # pnpm version is resolved from `packageManager` in package.json.
+      # Do not pass a `version:` input here — it would conflict and fail
+      # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -85,9 +86,10 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      # pnpm version is resolved from `packageManager` in package.json.
+      # Do not pass a `version:` input here — it would conflict and fail
+      # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -127,9 +129,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # pnpm version is resolved from `packageManager` in package.json.
+      # Do not pass a `version:` input here — it would conflict and fail
+      # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -140,6 +143,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: cargo audit
+        working-directory: src-tauri
         run: cargo audit --deny warnings
 
       - name: pnpm install
