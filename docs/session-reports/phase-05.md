@@ -326,17 +326,21 @@ kickoff steps:
 ## CI run
 
 - PR: [#14 — Phase 5: player, watch progress, continue watching + housekeeping](https://github.com/kinsar-rasnik/sightline/pull/14)
-- **Head-commit CI run** (`85baef8`, the session-report polish):
-  [`run 24907161835`](https://github.com/kinsar-rasnik/sightline/actions/runs/24907161835) —
-  **all five jobs green**: `checks (fmt · lint · typecheck)`,
-  `audit (cargo · pnpm)`, `test (macos-latest)`,
-  `test (ubuntu-latest)`, `test (windows-latest)`.
-- Security-fix commit CI (`fd0805d` → `c8c8a5f`):
-  [`run 24906982316`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906982316) —
-  all five jobs green.
-- Earlier runs superseded by the concurrency policy or pre-security-fix:
+- **Head-commit CI run** (`fb7989a`, this report's final state):
+  [`run 24907407786`](https://github.com/kinsar-rasnik/sightline/actions/runs/24907407786) —
+  **all five jobs green on all three OS**:
+  `checks (fmt · lint · typecheck)` · `audit (cargo · pnpm)` ·
+  `test (macos-latest)` · `test (ubuntu-latest)` ·
+  `test (windows-latest)`.
+- Earlier green runs on the same branch, in reverse chronological order:
+  - [`run 24907161835`](https://github.com/kinsar-rasnik/sightline/actions/runs/24907161835) — green, for commit `85baef8`.
+  - [`run 24906982316`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906982316) — green, for commit `c8c8a5f` (post-security-fix code snapshot).
   - [`run 24905043416`](https://github.com/kinsar-rasnik/sightline/actions/runs/24905043416) — green, pre-security-fix snapshot.
-  - [`run 24906838079`](https://github.com/kinsar-rasnik/sightline/actions/runs/24906838079) — cancelled by the concurrency policy when the next push superseded it (expected; not a failure).
+- One intervening run was cancelled by the workflow's
+  `concurrency.cancel-in-progress = true` policy when a doc-only
+  push superseded it
+  ([run 24906838079](https://github.com/kinsar-rasnik/sightline/actions/runs/24906838079)) —
+  expected behaviour, not a failure.
 
 Per the Rules of Engagement, the `phase-5-complete` tag is NOT applied
 yet — it lands only after the PR merges to `main`. The CTO-sign-off
