@@ -20,7 +20,7 @@ export function StreamersPage() {
   const byUserId = useMemo(() => {
     const m = new Map<string, PollStatusRow>();
     for (const row of pollStatus.data ?? []) {
-      m.set(row.streamer.streamer.twitch_user_id, row);
+      m.set(row.streamer.streamer.twitchUserId, row);
     }
     return m;
   }, [pollStatus.data]);
@@ -48,9 +48,9 @@ export function StreamersPage() {
           <ul className="divide-y divide-[--color-border] rounded border border-[--color-border] bg-[--color-surface]">
             {streamers.data.map((s) => (
               <StreamerRow
-                key={s.streamer.twitch_user_id}
+                key={s.streamer.twitchUserId}
                 summary={s}
-                poll={byUserId.get(s.streamer.twitch_user_id) ?? null}
+                poll={byUserId.get(s.streamer.twitchUserId) ?? null}
               />
             ))}
           </ul>
@@ -117,13 +117,13 @@ function StreamerRow({
   const trigger = useTriggerPoll();
   const s = summary.streamer;
 
-  const lastPolled = s.last_polled_at ?? poll?.last_poll?.started_at ?? null;
+  const lastPolled = s.lastPolledAt ?? poll?.lastPoll?.startedAt ?? null;
 
   return (
     <li className="flex items-center gap-4 px-4 py-3">
-      {s.profile_image_url ? (
+      {s.profileImageUrl ? (
         <img
-          src={s.profile_image_url}
+          src={s.profileImageUrl}
           alt=""
           className="h-10 w-10 rounded-full object-cover"
         />
@@ -135,34 +135,34 @@ function StreamerRow({
       )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium">{s.display_name}</span>
+          <span className="font-medium">{s.displayName}</span>
           <span className="text-xs text-[--color-muted] font-mono">
             {s.login}
           </span>
-          {summary.live_now && (
+          {summary.liveNow && (
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
               Live
             </span>
           )}
         </div>
         <div className="text-xs text-[--color-muted] flex gap-4 mt-1">
-          <span>{summary.vod_count} VODs</span>
-          <span>{summary.eligible_vod_count} eligible</span>
+          <span>{summary.vodCount} VODs</span>
+          <span>{summary.eligibleVodCount} eligible</span>
           <span>Last polled: {formatUnixSeconds(lastPolled)}</span>
-          <span>Next in: {formatRelative(summary.next_poll_eta_seconds)}</span>
+          <span>Next in: {formatRelative(summary.nextPollEtaSeconds)}</span>
         </div>
       </div>
       <div className="flex gap-2 shrink-0">
         <Button
           variant="secondary"
-          onClick={() => trigger.mutate(s.twitch_user_id)}
+          onClick={() => trigger.mutate(s.twitchUserId)}
           disabled={trigger.isPending}
         >
           Poll now
         </Button>
         <Button
           variant="danger"
-          onClick={() => remove.mutate(s.twitch_user_id)}
+          onClick={() => remove.mutate(s.twitchUserId)}
           disabled={remove.isPending}
         >
           Remove

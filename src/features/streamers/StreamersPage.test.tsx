@@ -38,23 +38,23 @@ function renderWith(ui: React.ReactElement) {
 function stubStreamer(overrides: Partial<StreamerSummary["streamer"]> = {}): StreamerSummary {
   return {
     streamer: {
-      twitch_user_id: "100",
+      twitchUserId: "100",
       login: "sampler",
-      display_name: "Sampler",
-      profile_image_url: null,
-      broadcaster_type: "",
-      twitch_created_at: 0,
-      added_at: 1_700_000_000,
-      deleted_at: null,
-      last_polled_at: 1_700_000_100,
-      next_poll_at: 1_700_000_700,
-      last_live_at: null,
+      displayName: "Sampler",
+      profileImageUrl: null,
+      broadcasterType: "",
+      twitchCreatedAt: 0,
+      addedAt: 1_700_000_000,
+      deletedAt: null,
+      lastPolledAt: 1_700_000_100,
+      nextPollAt: 1_700_000_700,
+      lastLiveAt: null,
       ...overrides,
     },
-    vod_count: 10,
-    eligible_vod_count: 4,
-    live_now: false,
-    next_poll_eta_seconds: 600,
+    vodCount: 10,
+    eligibleVodCount: 4,
+    liveNow: false,
+    nextPollEtaSeconds: 600,
   };
 }
 
@@ -120,11 +120,11 @@ describe("StreamersPage", () => {
   test("poll status is fetched alongside the list", async () => {
     const row: PollStatusRow = {
       streamer: stubStreamer(),
-      last_poll: {
-        started_at: 1_700_000_000,
-        finished_at: 1_700_000_100,
-        vods_new: 1,
-        vods_updated: 2,
+      lastPoll: {
+        startedAt: 1_700_000_000,
+        finishedAt: 1_700_000_100,
+        vodsNew: 1,
+        vodsUpdated: 2,
         status: "ok",
       },
     };

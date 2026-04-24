@@ -32,7 +32,7 @@ export function useRemoveStreamer() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (twitchUserId: string) =>
-      commands.removeStreamer({ twitch_user_id: twitchUserId }),
+      commands.removeStreamer({ twitchUserId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["streamers"] });
       qc.invalidateQueries({ queryKey: ["poll-status"] });
@@ -44,9 +44,7 @@ export function useTriggerPoll() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (twitchUserId: string | null) =>
-      commands.triggerPoll({
-        twitch_user_id: twitchUserId,
-      }),
+      commands.triggerPoll({ twitchUserId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["poll-status"] });
     },

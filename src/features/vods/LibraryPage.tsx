@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 
-import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
 import { useStreamers } from "@/features/streamers/use-streamers";
 import { useVods } from "@/features/vods/use-vods";
@@ -26,15 +25,15 @@ export function LibraryPage() {
 
   const input = useMemo(() => {
     const statuses =
-      statusFilter === "all" ? undefined : [statusFilter as string];
-    const streamerIds = streamerId ? [streamerId] : undefined;
+      statusFilter === "all" ? null : [statusFilter as string];
+    const streamerIds = streamerId ? [streamerId] : null;
     return {
       filters: {
-        streamer_ids: streamerIds,
+        streamerIds,
         statuses,
-        game_ids: undefined,
-        since: undefined,
-        until: undefined,
+        gameIds: null,
+        since: null,
+        until: null,
       },
       sort: "stream_started_at_desc" as const,
       limit: 200,
@@ -71,8 +70,8 @@ export function LibraryPage() {
           >
             <option value="">All streamers</option>
             {streamers.data?.map((s) => (
-              <option key={s.streamer.twitch_user_id} value={s.streamer.twitch_user_id}>
-                {s.streamer.display_name}
+              <option key={s.streamer.twitchUserId} value={s.streamer.twitchUserId}>
+                {s.streamer.displayName}
               </option>
             ))}
           </select>
@@ -95,10 +94,10 @@ export function LibraryPage() {
           <ul className="divide-y divide-[--color-border] rounded border border-[--color-border] bg-[--color-surface] max-h-[calc(100vh-200px)] overflow-y-auto">
             {vods.data.map((v) => (
               <VodRow
-                key={v.vod.twitch_video_id}
+                key={v.vod.twitchVideoId}
                 row={v}
-                selected={selected === v.vod.twitch_video_id}
-                onSelect={() => setSelected(v.vod.twitch_video_id)}
+                selected={selected === v.vod.twitchVideoId}
+                onSelect={() => setSelected(v.vod.twitchVideoId)}
               />
             ))}
           </ul>
@@ -111,7 +110,7 @@ export function LibraryPage() {
       >
         <VodDetail
           vod={
-            vods.data?.find((v) => v.vod.twitch_video_id === selected) ?? null
+            vods.data?.find((v) => v.vod.twitchVideoId === selected) ?? null
           }
         />
       </aside>
@@ -142,13 +141,13 @@ function VodRow({
         <div className="flex items-baseline justify-between gap-4">
           <span className="font-medium truncate">{v.title}</span>
           <span className="text-[10px] uppercase tracking-wider text-[--color-muted] whitespace-nowrap">
-            {v.ingest_status}
+            {v.ingestStatus}
           </span>
         </div>
         <div className="text-xs text-[--color-muted] mt-1 flex gap-4">
-          <span>{row.streamer_display_name}</span>
-          <span>{formatUnixSeconds(v.stream_started_at)}</span>
-          <span>{formatDurationSeconds(v.duration_seconds)}</span>
+          <span>{row.streamerDisplayName}</span>
+          <span>{formatUnixSeconds(v.streamStartedAt)}</span>
+          <span>{formatDurationSeconds(v.durationSeconds)}</span>
           <span>{row.chapters.length} chapter{row.chapters.length === 1 ? "" : "s"}</span>
         </div>
       </button>
@@ -170,24 +169,24 @@ function VodDetail({ vod }: { vod: VodWithChapters | null }) {
       <div className="space-y-1">
         <h3 className="text-base font-medium">{v.title}</h3>
         <p className="text-xs text-[--color-muted]">
-          {vod.streamer_display_name} · {formatUnixSeconds(v.stream_started_at)}
+          {vod.streamerDisplayName} · {formatUnixSeconds(v.streamStartedAt)}
         </p>
       </div>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         <dt className="text-[--color-muted]">Status</dt>
-        <dd>{v.ingest_status}</dd>
-        {v.status_reason && (
+        <dd>{v.ingestStatus}</dd>
+        {v.statusReason && (
           <>
             <dt className="text-[--color-muted]">Reason</dt>
-            <dd>{v.status_reason}</dd>
+            <dd>{v.statusReason}</dd>
           </>
         )}
         <dt className="text-[--color-muted]">Duration</dt>
-        <dd>{formatDurationSeconds(v.duration_seconds)}</dd>
+        <dd>{formatDurationSeconds(v.durationSeconds)}</dd>
         <dt className="text-[--color-muted]">Views</dt>
-        <dd>{v.view_count.toLocaleString()}</dd>
+        <dd>{v.viewCount.toLocaleString()}</dd>
         <dt className="text-[--color-muted]">Sub-only</dt>
-        <dd>{v.is_sub_only ? "yes" : "no"}</dd>
+        <dd>{v.isSubOnly ? "yes" : "no"}</dd>
       </dl>
 
       <a
@@ -206,17 +205,17 @@ function VodDetail({ vod }: { vod: VodWithChapters | null }) {
         <ol className="space-y-1 text-xs">
           {vod.chapters.map((c, i) => (
             <li
-              key={`${c.position_ms}-${i}`}
+              key={`${c.positionMs}-${i}`}
               className="flex justify-between gap-4 border-b border-[--color-border]/50 pb-1"
             >
               <span>
-                {c.game_name || "Unknown game"}{" "}
-                {c.chapter_type === "SYNTHETIC" && (
+                {c.gameName || "Unknown game"}{" "}
+                {c.chapterType === "SYNTHETIC" && (
                   <span className="text-[--color-muted]">(single-game)</span>
                 )}
               </span>
               <span className="font-mono text-[--color-muted]">
-                {formatDurationSeconds(Math.floor(c.position_ms / 1000))}
+                {formatDurationSeconds(Math.floor(c.positionMs / 1000))}
               </span>
             </li>
           ))}
@@ -226,7 +225,7 @@ function VodDetail({ vod }: { vod: VodWithChapters | null }) {
         </ol>
       </section>
 
-      {vod.vod.is_sub_only && (
+      {vod.vod.isSubOnly && (
         <p className="text-xs text-[--color-muted] border-t border-[--color-border] pt-3">
           This VOD is restricted to the streamer's subscribers. Sightline
           won't retry downloading it, but it will re-check on every poll in

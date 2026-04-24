@@ -38,8 +38,8 @@ describe("CredentialsForm", () => {
   test("renders the unconfigured form with inputs", () => {
     const status: CredentialsStatus = {
       configured: false,
-      client_id_masked: null,
-      last_token_acquired_at: null,
+      clientIdMasked: null,
+      lastTokenAcquiredAt: null,
     };
     renderWith(<CredentialsForm status={status} />);
     expect(screen.getByLabelText(/client id/i)).toBeInTheDocument();
@@ -52,8 +52,8 @@ describe("CredentialsForm", () => {
   test("rejects empty submission with a local validation error", async () => {
     const status: CredentialsStatus = {
       configured: false,
-      client_id_masked: null,
-      last_token_acquired_at: null,
+      clientIdMasked: null,
+      lastTokenAcquiredAt: null,
     };
     renderWith(<CredentialsForm status={status} />);
     await userEvent.click(
@@ -68,13 +68,13 @@ describe("CredentialsForm", () => {
   test("submits trimmed values and calls the IPC", async () => {
     const status: CredentialsStatus = {
       configured: false,
-      client_id_masked: null,
-      last_token_acquired_at: null,
+      clientIdMasked: null,
+      lastTokenAcquiredAt: null,
     };
     vi.mocked(commands.setTwitchCredentials).mockResolvedValue({
       configured: true,
-      client_id_masked: "abcd••••",
-      last_token_acquired_at: 1_700_000_000,
+      clientIdMasked: "abcd••••",
+      lastTokenAcquiredAt: 1_700_000_000,
     });
     renderWith(<CredentialsForm status={status} />);
     await userEvent.type(screen.getByLabelText(/client id/i), "abcdWXYZ");
@@ -93,8 +93,8 @@ describe("CredentialsForm", () => {
   test("renders the masked Client ID when configured and supports Replace", async () => {
     const status: CredentialsStatus = {
       configured: true,
-      client_id_masked: "abcd••••",
-      last_token_acquired_at: 1_700_000_000,
+      clientIdMasked: "abcd••••",
+      lastTokenAcquiredAt: 1_700_000_000,
     };
     vi.mocked(commands.clearTwitchCredentials).mockResolvedValue(undefined);
     renderWith(<CredentialsForm status={status} />);

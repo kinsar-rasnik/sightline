@@ -45,11 +45,11 @@ export function CredentialsForm({ status }: Props) {
             Twitch credentials
           </h3>
           <span className="text-xs text-[--color-muted]">
-            Configured · Client ID {status.client_id_masked ?? "••••"}
+            Configured · Client ID {status.clientIdMasked ?? "••••"}
           </span>
         </div>
         <p className="text-sm text-[--color-muted]">
-          Last token acquired: {formatUnixSeconds(status.last_token_acquired_at)}
+          Last token acquired: {formatUnixSeconds(status.lastTokenAcquiredAt)}
         </p>
         <div className="flex gap-2">
           <Button

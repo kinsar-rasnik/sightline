@@ -12,7 +12,7 @@ export function useVods(input: ListVodsInput) {
 export function useVod(twitchVideoId: string | null) {
   return useQuery<VodWithChapters>({
     queryKey: ["vod", twitchVideoId],
-    queryFn: () => commands.getVod({ twitch_video_id: twitchVideoId ?? "" }),
+    queryFn: () => commands.getVod({ twitchVideoId: twitchVideoId ?? "" }),
     enabled: twitchVideoId !== null,
   });
 }

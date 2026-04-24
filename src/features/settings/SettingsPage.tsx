@@ -4,6 +4,19 @@ import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
 import { CredentialsForm } from "@/features/credentials/CredentialsForm";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
+import type { SettingsPatch } from "@/ipc";
+
+// tauri-specta emits `Option<T>` as `T | null` required fields, so every
+// `update_settings` call must carry all 6 keys even for a partial change.
+// Spread this baseline and override the keys the user is actually editing.
+const EMPTY_PATCH: SettingsPatch = {
+  enabledGameIds: null,
+  pollFloorSeconds: null,
+  pollRecentSeconds: null,
+  pollCeilingSeconds: null,
+  concurrencyCap: null,
+  firstBackfillLimit: null,
+};
 
 const KNOWN_GAMES: Array<{ id: string; name: string }> = [
   { id: "32982", name: "Grand Theft Auto V" },
@@ -23,18 +36,18 @@ export function SettingsPage() {
     <div className="space-y-10">
       <CredentialsForm status={data.credentials} />
       <GameFilterSection
-        selectedIds={data.enabled_game_ids}
+        selectedIds={data.enabledGameIds}
         onChange={(next) =>
-          update.mutate({ enabled_game_ids: next })
+          update.mutate({ ...EMPTY_PATCH, enabledGameIds: next })
         }
         pending={update.isPending}
         error={update.error}
       />
       <PollIntervalsSection
-        floor={data.poll_floor_seconds}
-        recent={data.poll_recent_seconds}
-        ceiling={data.poll_ceiling_seconds}
-        concurrency={data.concurrency_cap}
+        floor={data.pollFloorSeconds}
+        recent={data.pollRecentSeconds}
+        ceiling={data.pollCeilingSeconds}
+        concurrency={data.concurrencyCap}
         onSubmit={(patch) => update.mutate(patch)}
         pending={update.isPending}
       />
@@ -119,12 +132,7 @@ function PollIntervalsSection({
   recent: number;
   ceiling: number;
   concurrency: number;
-  onSubmit: (patch: {
-    poll_floor_seconds?: number;
-    poll_recent_seconds?: number;
-    poll_ceiling_seconds?: number;
-    concurrency_cap?: number;
-  }) => void;
+  onSubmit: (patch: SettingsPatch) => void;
   pending: boolean;
 }) {
   const [localFloor, setFloor] = useState(floor);
@@ -196,10 +204,11 @@ function PollIntervalsSection({
         disabled={!dirty || pending}
         onClick={() =>
           onSubmit({
-            poll_floor_seconds: localFloor,
-            poll_recent_seconds: localRecent,
-            poll_ceiling_seconds: localCeiling,
-            concurrency_cap: localConcurrency,
+            ...EMPTY_PATCH,
+            pollFloorSeconds: localFloor,
+            pollRecentSeconds: localRecent,
+            pollCeilingSeconds: localCeiling,
+            concurrencyCap: localConcurrency,
           })
         }
       >
