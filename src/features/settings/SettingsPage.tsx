@@ -6,18 +6,6 @@ import { CredentialsForm } from "@/features/credentials/CredentialsForm";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
 import type { SettingsPatch } from "@/ipc";
 
-// tauri-specta emits `Option<T>` as `T | null` required fields, so every
-// `update_settings` call must carry all 6 keys even for a partial change.
-// Spread this baseline and override the keys the user is actually editing.
-const EMPTY_PATCH: SettingsPatch = {
-  enabledGameIds: null,
-  pollFloorSeconds: null,
-  pollRecentSeconds: null,
-  pollCeilingSeconds: null,
-  concurrencyCap: null,
-  firstBackfillLimit: null,
-};
-
 const KNOWN_GAMES: Array<{ id: string; name: string }> = [
   { id: "32982", name: "Grand Theft Auto V" },
   { id: "515025", name: "Overwatch 2" },
@@ -37,9 +25,7 @@ export function SettingsPage() {
       <CredentialsForm status={data.credentials} />
       <GameFilterSection
         selectedIds={data.enabledGameIds}
-        onChange={(next) =>
-          update.mutate({ ...EMPTY_PATCH, enabledGameIds: next })
-        }
+        onChange={(next) => update.mutate({ enabledGameIds: next })}
         pending={update.isPending}
         error={update.error}
       />
@@ -204,7 +190,6 @@ function PollIntervalsSection({
         disabled={!dirty || pending}
         onClick={() =>
           onSubmit({
-            ...EMPTY_PATCH,
             pollFloorSeconds: localFloor,
             pollRecentSeconds: localRecent,
             pollCeilingSeconds: localCeiling,

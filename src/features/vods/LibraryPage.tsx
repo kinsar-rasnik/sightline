@@ -23,23 +23,18 @@ export function LibraryPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const streamers = useStreamers();
 
-  const input = useMemo(() => {
-    const statuses =
-      statusFilter === "all" ? null : [statusFilter as string];
-    const streamerIds = streamerId ? [streamerId] : null;
-    return {
+  const input = useMemo(
+    () => ({
       filters: {
-        streamerIds,
-        statuses,
-        gameIds: null,
-        since: null,
-        until: null,
+        ...(streamerId && { streamerIds: [streamerId] }),
+        ...(statusFilter !== "all" && { statuses: [statusFilter] }),
       },
       sort: "stream_started_at_desc" as const,
       limit: 200,
       offset: 0,
-    };
-  }, [statusFilter, streamerId]);
+    }),
+    [statusFilter, streamerId]
+  );
 
   const vods = useVods(input);
 

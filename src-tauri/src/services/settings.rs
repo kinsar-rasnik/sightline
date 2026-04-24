@@ -33,14 +33,25 @@ pub struct CredentialsStatus {
 }
 
 /// Partial settings update — any subset may be supplied by the frontend.
+///
+/// `#[specta(optional)]` on each `Option<T>` field makes tauri-specta
+/// emit `T?: T` rather than `T | null` required keys, so the frontend
+/// can pass literal `{ enabledGameIds: ... }` objects without having to
+/// spread a full "empty patch" baseline. See ADR-0009.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
+    #[specta(optional)]
     pub enabled_game_ids: Option<Vec<String>>,
+    #[specta(optional)]
     pub poll_floor_seconds: Option<i64>,
+    #[specta(optional)]
     pub poll_recent_seconds: Option<i64>,
+    #[specta(optional)]
     pub poll_ceiling_seconds: Option<i64>,
+    #[specta(optional)]
     pub concurrency_cap: Option<i64>,
+    #[specta(optional)]
     pub first_backfill_limit: Option<i64>,
 }
 

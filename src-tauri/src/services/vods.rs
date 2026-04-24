@@ -9,15 +9,23 @@ use crate::domain::vod::{IngestStatus, MutedSegment, Vod};
 use crate::error::AppError;
 use crate::infra::db::Db;
 
+/// VOD list filter. Every field is optional; omitted keys mean
+/// "no constraint". `#[specta(optional)]` ensures the TS emission is
+/// `T?: T` rather than `T | null` required keys — see ADR-0009.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct VodFilters {
+    #[specta(optional)]
     pub streamer_ids: Option<Vec<String>>,
     /// Mirrors `IngestStatus` db strings; caller may send any subset.
+    #[specta(optional)]
     pub statuses: Option<Vec<String>>,
+    #[specta(optional)]
     pub game_ids: Option<Vec<String>>,
     /// Unix seconds UTC.
+    #[specta(optional)]
     pub since: Option<i64>,
+    #[specta(optional)]
     pub until: Option<i64>,
 }
 

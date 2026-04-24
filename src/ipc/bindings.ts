@@ -173,14 +173,21 @@ export type SetTwitchCredentialsInput = {
 	clientSecret: string,
 };
 
-// Partial settings update — any subset may be supplied by the frontend.
+/**
+ *  Partial settings update — any subset may be supplied by the frontend.
+ * 
+ *  `#[specta(optional)]` on each `Option<T>` field makes tauri-specta
+ *  emit `T?: T` rather than `T | null` required keys, so the frontend
+ *  can pass literal `{ enabledGameIds: ... }` objects without having to
+ *  spread a full "empty patch" baseline. See ADR-0009.
+ */
 export type SettingsPatch = {
-	enabledGameIds: string[] | null,
-	pollFloorSeconds: number | null,
-	pollRecentSeconds: number | null,
-	pollCeilingSeconds: number | null,
-	concurrencyCap: number | null,
-	firstBackfillLimit: number | null,
+	enabledGameIds?: string[] | null,
+	pollFloorSeconds?: number | null,
+	pollRecentSeconds?: number | null,
+	pollCeilingSeconds?: number | null,
+	concurrencyCap?: number | null,
+	firstBackfillLimit?: number | null,
 };
 
 // Storage-aligned streamer row. The `*_at` fields are unix seconds UTC.
@@ -245,14 +252,19 @@ export type Vod = {
 	lastSeenAt: number,
 };
 
+/**
+ *  VOD list filter. Every field is optional; omitted keys mean
+ *  "no constraint". `#[specta(optional)]` ensures the TS emission is
+ *  `T?: T` rather than `T | null` required keys — see ADR-0009.
+ */
 export type VodFilters = {
-	streamerIds: string[] | null,
+	streamerIds?: string[] | null,
 	// Mirrors `IngestStatus` db strings; caller may send any subset.
-	statuses: string[] | null,
-	gameIds: string[] | null,
+	statuses?: string[] | null,
+	gameIds?: string[] | null,
 	// Unix seconds UTC.
-	since: number | null,
-	until: number | null,
+	since?: number | null,
+	until?: number | null,
 };
 
 export type VodIngestedEvent = {
