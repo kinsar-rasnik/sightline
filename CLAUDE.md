@@ -41,6 +41,9 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0010](docs/adr/0010-bandwidth-throttle.md) — Bandwidth throttle via per-worker yt-dlp `--limit-rate`
 - [ADR-0011](docs/adr/0011-library-layout-pluggability.md) — Pluggable library layout (Plex / Flat)
 - [ADR-0012](docs/adr/0012-staging-atomic-move.md) — Staging + atomic-move + SHA-256 verify on cross-FS
+- [ADR-0013](docs/adr/0013-sidecar-bundling.md) — Pinned, verified sidecar bundling (yt-dlp + ffmpeg)
+- [ADR-0014](docs/adr/0014-tray-daemon-architecture.md) — Tray / headless daemon mode + graceful shutdown
+- [ADR-0015](docs/adr/0015-timeline-data-model.md) — `stream_intervals` materialised view + indexer
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.
