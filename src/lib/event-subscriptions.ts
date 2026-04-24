@@ -6,7 +6,8 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { QueryClient } from "@tanstack/react-query";
 
-import { events } from "@/ipc";
+import { events, type PollFinishedEvent, type PollStartedEvent } from "@/ipc";
+import { useActivePollsStore } from "@/stores/active-polls-store";
 
 export function subscribeEventsToQueryClient(client: QueryClient): Promise<UnlistenFn[]> {
   const topicsToKeys: Array<[string, string[][]]> = [
@@ -18,13 +19,24 @@ export function subscribeEventsToQueryClient(client: QueryClient): Promise<Unlis
     [events.pollFinished, [["poll-status"], ["streamers"]]],
   ];
 
-  return Promise.all(
-    topicsToKeys.map(([topic, keys]) =>
+  const store = useActivePollsStore.getState();
+
+  const subscriptions: Array<Promise<UnlistenFn>> = [
+    ...topicsToKeys.map(([topic, keys]) =>
       listen(topic, () => {
         for (const key of keys) {
           client.invalidateQueries({ queryKey: key });
         }
       })
-    )
-  );
+    ),
+    // Poll lifecycle drives the per-row "polling now" UI indicator.
+    listen<PollStartedEvent>(events.pollStarted, (e) => {
+      store.add(e.payload.twitchUserId);
+    }),
+    listen<PollFinishedEvent>(events.pollFinished, (e) => {
+      store.remove(e.payload.twitchUserId);
+    }),
+  ];
+
+  return Promise.all(subscriptions);
 }

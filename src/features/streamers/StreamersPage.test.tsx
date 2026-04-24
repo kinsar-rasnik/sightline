@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { StreamersPage } from "@/features/streamers/StreamersPage";
 import type { PollStatusRow, StreamerSummary } from "@/ipc";
+import { useActivePollsStore } from "@/stores/active-polls-store";
 
 import type * as IpcModule from "@/ipc";
 
@@ -62,6 +63,7 @@ describe("StreamersPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(commands.getPollStatus).mockResolvedValue([]);
+    useActivePollsStore.getState().clear();
   });
 
   test("empty state message when no streamers are registered", async () => {
@@ -133,6 +135,33 @@ describe("StreamersPage", () => {
     renderWith(<StreamersPage />);
     await waitFor(() =>
       expect(vi.mocked(commands.getPollStatus)).toHaveBeenCalled()
+    );
+  });
+
+  test("shows a polling indicator when active-polls store has this streamer", async () => {
+    vi.mocked(commands.listStreamers).mockResolvedValue([stubStreamer()]);
+    renderWith(<StreamersPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Sampler")).toBeInTheDocument()
+    );
+
+    // No indicator initially.
+    expect(screen.queryByRole("status", { name: /polling/i })).toBeNull();
+
+    // Flip the store — mimics `poll:started` arriving from the backend.
+    act(() => {
+      useActivePollsStore.getState().add("100");
+    });
+    expect(
+      await screen.findByRole("status", { name: /polling/i })
+    ).toBeInTheDocument();
+
+    // `poll:finished` clears it again.
+    act(() => {
+      useActivePollsStore.getState().remove("100");
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: /polling/i })).toBeNull()
     );
   });
 });

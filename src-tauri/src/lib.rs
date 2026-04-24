@@ -24,12 +24,12 @@ use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
 use crate::services::credentials::CredentialsService;
 use crate::services::events::{
-    CredentialsChangedEvent, EV_CREDENTIALS_CHANGED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED,
-    EV_VOD_INGESTED, EV_VOD_UPDATED, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent,
-    VodUpdatedEvent,
+    CredentialsChangedEvent, EV_CREDENTIALS_CHANGED, EV_POLL_FINISHED, EV_POLL_STARTED,
+    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED, PollFinishedEvent,
+    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
-use crate::services::poller::{PollerHandle, PollerService};
+use crate::services::poller::{PollerEvent, PollerHandle, PollerService};
 use crate::services::settings::SettingsService;
 use crate::services::streamers::StreamerService;
 use crate::services::vods::VodReadService;
@@ -149,15 +149,48 @@ pub fn run() {
                     ingest_svc,
                 ));
 
-                // Event sink: forward IngestEvent to the Tauri event bus.
+                // Event sink: dispatch each PollerEvent variant to the
+                // matching Tauri topic. Keeping all event construction
+                // in one closure makes it trivial to trace the surface
+                // the webview actually sees.
                 let sink_handle = handle.clone();
-                let sink = Arc::new(move |ev: IngestEvent| match ev {
-                    IngestEvent::VodIngested {
+                let sink = Arc::new(move |ev: PollerEvent| match ev {
+                    PollerEvent::PollStarted {
+                        twitch_user_id,
+                        started_at,
+                    } => {
+                        let _ = sink_handle.emit(
+                            EV_POLL_STARTED,
+                            PollStartedEvent {
+                                twitch_user_id,
+                                started_at,
+                            },
+                        );
+                    }
+                    PollerEvent::PollFinished {
+                        twitch_user_id,
+                        finished_at,
+                        vods_new,
+                        vods_updated,
+                        status,
+                    } => {
+                        let _ = sink_handle.emit(
+                            EV_POLL_FINISHED,
+                            PollFinishedEvent {
+                                twitch_user_id,
+                                finished_at,
+                                vods_new,
+                                vods_updated,
+                                status,
+                            },
+                        );
+                    }
+                    PollerEvent::Ingest(IngestEvent::VodIngested {
                         twitch_video_id,
                         twitch_user_id,
                         ingest_status,
                         stream_started_at,
-                    } => {
+                    }) => {
                         let _ = sink_handle.emit(
                             EV_VOD_INGESTED,
                             VodIngestedEvent {
@@ -168,10 +201,10 @@ pub fn run() {
                             },
                         );
                     }
-                    IngestEvent::VodUpdated {
+                    PollerEvent::Ingest(IngestEvent::VodUpdated {
                         twitch_video_id,
                         ingest_status,
-                    } => {
+                    }) => {
                         let _ = sink_handle.emit(
                             EV_VOD_UPDATED,
                             VodUpdatedEvent {

@@ -14,6 +14,12 @@
 //!
 //! Graceful shutdown: the task listens for `tokio::sync::broadcast::Receiver`
 //! ticks from `PollerHandle::shutdown` and drains in-flight work.
+//!
+//! The service emits three classes of event through a single
+//! [`EventSink`] — ingest-level (one event per VOD processed) and
+//! poll-lifecycle (`PollStarted` when a streamer enters `poll_one`,
+//! `PollFinished` once the log row is finalized). The commands layer
+//! fans them out to the Tauri event bus.
 
 use std::sync::Arc;
 
@@ -66,10 +72,29 @@ impl PollerHandle {
     }
 }
 
+/// Events the poller fans out to the commands layer. The variants map
+/// 1-to-1 with the `poll:*` and `vod:*` Tauri topics in
+/// [`crate::services::events`].
+#[derive(Debug, Clone)]
+pub enum PollerEvent {
+    PollStarted {
+        twitch_user_id: String,
+        started_at: i64,
+    },
+    PollFinished {
+        twitch_user_id: String,
+        finished_at: i64,
+        vods_new: i64,
+        vods_updated: i64,
+        status: String,
+    },
+    Ingest(IngestEvent),
+}
+
 /// Tauri-agnostic callback the `commands` layer hands in so the poller
 /// can emit events without depending on `tauri::AppHandle` directly —
 /// makes unit tests possible without a running runtime.
-pub type EventSink = Arc<dyn Fn(IngestEvent) + Send + Sync>;
+pub type EventSink = Arc<dyn Fn(PollerEvent) + Send + Sync>;
 
 pub struct PollerSpawn {
     pub handle: PollerHandle,
@@ -227,13 +252,18 @@ impl SharedPollerState {
         let started_at = self.clock.unix_seconds();
         let log_id = self.begin_poll_log(streamer_id, started_at).await?;
 
+        (events)(PollerEvent::PollStarted {
+            twitch_user_id: streamer_id.to_owned(),
+            started_at,
+        });
+
         let report_result = self.ingest.run(streamer_id, IngestOptions::default()).await;
 
         let finished_at = self.clock.unix_seconds();
         let (status, report_for_log) = match report_result {
             Ok((report, ingest_events)) => {
                 for ev in ingest_events {
-                    (events)(ev);
+                    (events)(PollerEvent::Ingest(ev));
                 }
                 let status = derive_status(&report);
                 self.schedule_next(streamer_id, intervals, &report).await?;
@@ -257,6 +287,15 @@ impl SharedPollerState {
         self.streamers
             .mark_polled(streamer_id, finished_at + intervals.floor_seconds)
             .await?;
+
+        (events)(PollerEvent::PollFinished {
+            twitch_user_id: streamer_id.to_owned(),
+            finished_at,
+            vods_new: report_for_log.vods_new,
+            vods_updated: report_for_log.vods_updated,
+            status,
+        });
+
         Ok(())
     }
 

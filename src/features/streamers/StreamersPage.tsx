@@ -4,6 +4,7 @@ import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
 import type { PollStatusRow, StreamerSummary } from "@/ipc";
 import { formatRelative, formatUnixSeconds } from "@/lib/format";
+import { useIsPolling } from "@/stores/active-polls-store";
 
 import {
   useAddStreamer,
@@ -116,6 +117,7 @@ function StreamerRow({
   const remove = useRemoveStreamer();
   const trigger = useTriggerPoll();
   const s = summary.streamer;
+  const isPolling = useIsPolling(s.twitchUserId);
 
   const lastPolled = s.lastPolledAt ?? poll?.lastPoll?.startedAt ?? null;
 
@@ -144,6 +146,7 @@ function StreamerRow({
               Live
             </span>
           )}
+          {isPolling && <PollingIndicator />}
         </div>
         <div className="text-xs text-[--color-muted] flex gap-4 mt-1">
           <span>{summary.vodCount} VODs</span>
@@ -156,7 +159,7 @@ function StreamerRow({
         <Button
           variant="secondary"
           onClick={() => trigger.mutate(s.twitchUserId)}
-          disabled={trigger.isPending}
+          disabled={trigger.isPending || isPolling}
         >
           Poll now
         </Button>
@@ -169,5 +172,22 @@ function StreamerRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+function PollingIndicator() {
+  return (
+    <span
+      role="status"
+      aria-label="Polling"
+      title="Polling"
+      className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 motion-safe:animate-pulse"
+    >
+      <span
+        aria-hidden
+        className="inline-block h-1.5 w-1.5 rounded-full bg-blue-300 motion-safe:animate-ping"
+      />
+      Polling
+    </span>
   );
 }

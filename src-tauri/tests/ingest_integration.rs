@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sightline_lib::infra::clock::{Clock, FixedClock};
 use sightline_lib::infra::db::Db;
@@ -21,6 +21,7 @@ use sightline_lib::infra::twitch::auth::{TwitchAuthenticator, prime_token_for_te
 use sightline_lib::infra::twitch::gql::GqlClient;
 use sightline_lib::infra::twitch::helix::HelixClient;
 use sightline_lib::services::ingest::{IngestOptions, IngestService};
+use sightline_lib::services::poller::{EventSink, PollerEvent, PollerService};
 use sightline_lib::services::settings::SettingsService;
 use sightline_lib::services::streamers::StreamerService;
 use wiremock::matchers::{method, path, query_param};
@@ -30,6 +31,9 @@ struct Harness {
     db: Db,
     ingest: IngestService,
     streamers: Arc<StreamerService>,
+    helix: Arc<HelixClient>,
+    gql: Arc<GqlClient>,
+    clock: Arc<dyn Clock>,
 }
 
 async fn harness(helix_server: &MockServer, gql_server: &MockServer) -> Harness {
@@ -66,12 +70,22 @@ async fn harness(helix_server: &MockServer, gql_server: &MockServer) -> Harness 
         helix.clone(),
         clock.clone(),
     ));
-    let ingest = IngestService::new(db.clone(), helix, gql, clock, settings, streamers.clone());
+    let ingest = IngestService::new(
+        db.clone(),
+        helix.clone(),
+        gql.clone(),
+        clock.clone(),
+        settings,
+        streamers.clone(),
+    );
 
     Harness {
         db,
         ingest,
         streamers,
+        helix,
+        gql,
+        clock,
     }
 }
 
@@ -353,4 +367,105 @@ async fn empty_videos_list_is_fine() {
     let (report, _) = h.ingest.run("100", IngestOptions::default()).await.unwrap();
     assert_eq!(report.vods_seen, 0);
     assert_eq!(report.vods_new, 0);
+}
+
+// ---------------------------------------------------------------------
+// Poller emit path — confirms `poll:started` / `poll:finished` and the
+// wrapped ingest events all flow through the same `EventSink` for a
+// single streamer cycle.
+// ---------------------------------------------------------------------
+#[tokio::test]
+async fn poller_emits_start_ingest_finish_events_in_order() {
+    let helix_server = MockServer::start().await;
+    let gql_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users"))
+        .and(query_param("login", "emitter"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "id": "100", "login": "emitter", "display_name": "Emitter",
+                "profile_image_url": "", "broadcaster_type": "",
+                "created_at": "2020-01-01T00:00:00Z"
+            }], "pagination": {}
+        })))
+        .mount(&helix_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/streams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [], "pagination": {}
+        })))
+        .mount(&helix_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/videos"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [ video_json("vE", "2026-04-01T00:00:00Z", "public", "archive") ],
+            "pagination": {}
+        })))
+        .mount(&helix_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(""))
+        .respond_with(ResponseTemplate::new(200).set_body_json(gql_two_chapters("32982")))
+        .mount(&gql_server)
+        .await;
+
+    let h = harness(&helix_server, &gql_server).await;
+    h.streamers.add("emitter").await.unwrap();
+
+    let poller = Arc::new(PollerService::new(
+        h.db.clone(),
+        h.clock.clone(),
+        SettingsService::new(h.db.clone(), h.clock.clone()),
+        h.streamers.clone(),
+        Arc::new(IngestService::new(
+            h.db.clone(),
+            h.helix.clone(),
+            h.gql.clone(),
+            h.clock.clone(),
+            SettingsService::new(h.db.clone(), h.clock.clone()),
+            h.streamers.clone(),
+        )),
+    ));
+
+    let captured: Arc<Mutex<Vec<PollerEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_sink = captured.clone();
+    let sink: EventSink = Arc::new(move |ev| {
+        captured_for_sink.lock().unwrap().push(ev);
+    });
+
+    poller.tick_with_target(&sink, Some("100")).await.unwrap();
+
+    let events = captured.lock().unwrap();
+    assert!(
+        events.len() >= 3,
+        "expected start + ingest + finish, got {:?}",
+        events.len()
+    );
+    assert!(matches!(
+        events.first(),
+        Some(PollerEvent::PollStarted { .. })
+    ));
+    assert!(
+        matches!(events.last(), Some(PollerEvent::PollFinished { status, .. }) if status == "ok")
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, PollerEvent::Ingest(_))),
+        "expected at least one ingest event in the middle: {events:?}"
+    );
+
+    // The finished event should carry the report counts the UI uses.
+    match events.last().expect("poll finished event") {
+        PollerEvent::PollFinished {
+            twitch_user_id,
+            vods_new,
+            ..
+        } => {
+            assert_eq!(twitch_user_id, "100");
+            assert_eq!(*vods_new, 1);
+        }
+        other => panic!("unexpected last event: {other:?}"),
+    }
 }
