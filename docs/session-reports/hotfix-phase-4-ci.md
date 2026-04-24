@@ -194,8 +194,95 @@ the branch tip passes the full gate.
 
 ## PR and CI
 
-**PR:** _filled in after push_
-**CI runs:** _filled in after CI green_
+**PR:** [#13 — fix(ci): three Phase-4 defects surfaced by cross-platform CI](https://github.com/kinsar-rasnik/sightline/pull/13)
+**First CI run (red):** [run 24901165984](https://github.com/kinsar-rasnik/sightline/actions/runs/24901165984)
+**Green CI run:** _filled in after the fallout fixes push_
+
+## Fallout: two more defects exposed by CI on the first push
+
+Pushing the three above to PR #13 exposed two more bugs that the local
+macOS-arm64 gate could not have caught. Both are now fixed on the branch.
+
+### 4. `extract_entry` RETURN trap leaks into the caller's scope
+
+`scripts/bundle-sidecars.sh:135` set
+`trap 'rm -rf "$tmp"' RETURN` inside `extract_entry`. Bash's RETURN
+trap is NOT function-scoped without `set -o functrace` (off by default
+in this script), so the trap fired on EVERY subsequent function return
+and failed under `set -u` because `$tmp` was out of scope in the
+caller:
+
+```
+./scripts/bundle-sidecars.sh: line 160: tmp: unbound variable
+```
+
+(Line 160 is `process_row() {` — bash attributes the failed-trap body
+to the function-definition line of the function returning when the
+trap fires.)
+
+Reproduced locally in eight lines of bash: `set -euo pipefail`,
+nested functions, same trap pattern → same "tmp: unbound variable"
+on the outer function's return.
+
+**Why Phase 4 CI didn't catch it:** the bug only triggers after
+`extract_entry` runs once. Phase 4's first green run may have exited
+via `fail` mid-extraction (no `RETURN` fires on `exit`), or the path
+was simply not exercised the same way. The hotfix branch's cold-cache
+→ warm-cache sequence made every matrix row run extract_entry → hit
+the leaked trap on process_row's return.
+
+**Fix:** drop the RETURN trap, do explicit `rm -rf "$tmp"` on every
+exit path. `fail` always `exit 3`s the whole script, so any tmp-dir
+leak on those paths is the OS temp cleaner's problem.
+
+**Commit:** `fix(scripts): explicit cleanup in extract_entry — no
+RETURN trap leak`
+
+### 5. CRLF on Windows checkout breaks the pipe-parsed lockfile
+
+`scripts/sidecars.lock` rows end with `|` (empty `extracted_sha`). On
+the Windows runner Git-for-Windows converts LF → CRLF on checkout
+(default `core.autocrlf=true`), so `IFS='|' read -r … extracted_sha`
+captures `extracted_sha=$'\r'` instead of `""`. In
+`verify-sidecars.sh` this makes `[ -n "$extracted_sha" ]` true and
+the hash-mismatch branch fires:
+
+```
+FAIL ffmpeg-x86_64-pc-windows-msvc  hash_mismatch —
+  expected extracted  got dd540236…
+```
+
+**Root-cause fix:** add a repo-wide `.gitattributes` forcing LF
+line endings on `*.sh`, `*.bash`, and `*.lock` (plus a binary-file
+list and `* text=auto` for everything else). `.ps1` stays
+flexible — PowerShell handles both.
+
+**Defence-in-depth:** both parsers now strip trailing `\r` from
+`extracted_sha` immediately after the read. A developer who clones
+with a local `core.autocrlf` override won't silently break.
+
+**Verified locally** on macOS by simulating CRLF with
+`sed 's/$/\r/' sidecars.lock > …`: verify-sidecars prints `ok` for
+both binaries; bundle-sidecars dry-run and full run both exit 0.
+
+**Commit:** `chore(repo): normalize LF via .gitattributes + strip
+stray \r in lockfile parsers`
+
+## Complete commit history on the branch
+
+```
+ee7f221 chore(repo): normalize LF via .gitattributes + strip stray \r in lockfile parsers
+d32bcee fix(scripts): explicit cleanup in extract_entry — no RETURN trap leak
+d298ea5 docs(session-report): hotfix-phase-4-ci
+9a2d9b9 fix(ci): audit policy — drop --deny warnings, ignore transitive rsa
+dd4e71e fix(ci): bundle sidecars in checks job before clippy
+ae0dcfa fix(scripts): brace PowerShell variables before colons in interpolation
+```
+
+Five fix commits + one docs commit. The CTO's original instruction
+("one commit per defect") expanded with two more commits for the
+fallout — documented here and in each commit body. I did not amend or
+squash; each commit is independently buildable with a clean message.
 
 ## Follow-ups (Phase 7)
 
