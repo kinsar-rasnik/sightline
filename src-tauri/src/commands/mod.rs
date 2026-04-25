@@ -12,6 +12,7 @@ pub mod poll;
 pub mod settings;
 pub mod storage;
 pub mod streamers;
+pub mod sync;
 pub mod timeline;
 pub mod vods;
 pub mod watch;

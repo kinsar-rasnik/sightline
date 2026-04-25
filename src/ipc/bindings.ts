@@ -110,6 +110,17 @@ export const commands = {
 	getWatchStats: (input: GetWatchStatsInput) => typedError<WatchStats, AppError>(__TAURI_INVOKE("get_watch_stats", { input })),
 	getAutostartStatus: () => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("get_autostart_status")),
 	setAutostart: (input: SetAutostartInput) => typedError<AutostartStatus, AppError>(__TAURI_INVOKE("set_autostart", { input })),
+	openSyncGroup: (input: OpenSyncGroupInput) => typedError<SyncSession, AppError>(__TAURI_INVOKE("open_sync_group", { input })),
+	closeSyncGroup: (input: SyncSessionIdInput) => typedError<null, AppError>(__TAURI_INVOKE("close_sync_group", { input })),
+	getSyncGroup: (input: SyncSessionIdInput) => typedError<SyncSession, AppError>(__TAURI_INVOKE("get_sync_group", { input })),
+	setSyncLeader: (input: SetSyncLeaderInput) => typedError<SyncSession, AppError>(__TAURI_INVOKE("set_sync_leader", { input })),
+	syncSeek: (input: SyncSeekInput) => typedError<null, AppError>(__TAURI_INVOKE("sync_seek", { input })),
+	syncPlay: (input: SyncSessionIdInput) => typedError<null, AppError>(__TAURI_INVOKE("sync_play", { input })),
+	syncPause: (input: SyncSessionIdInput) => typedError<null, AppError>(__TAURI_INVOKE("sync_pause", { input })),
+	syncSetSpeed: (input: SyncSetSpeedInput) => typedError<null, AppError>(__TAURI_INVOKE("sync_set_speed", { input })),
+	getOverlap: (input: GetOverlapInput) => typedError<OverlapResult, AppError>(__TAURI_INVOKE("get_overlap", { input })),
+	recordSyncDrift: (input: RecordSyncDriftInput) => typedError<null, AppError>(__TAURI_INVOKE("record_sync_drift", { input })),
+	reportSyncOutOfRange: (input: ReportSyncOutOfRangeInput) => typedError<null, AppError>(__TAURI_INVOKE("report_sync_out_of_range", { input })),
 };
 
 /* Types */
@@ -211,6 +222,25 @@ export type AppSettings = {
 	 *  constraint failure rather than silently skipping the transition.
 	 */
 	completionThreshold: number,
+	/**
+	 *  Drift tolerance in milliseconds for the multi-view sync loop.
+	 *  Persisted in `app_settings.sync_drift_threshold_ms` (migration
+	 *  0011); the column-level CHECK enforces `[50.0, 1000.0]`.  See
+	 *  ADR-0022 for the rationale on the default of 250 ms.
+	 */
+	syncDriftThresholdMs: number,
+	/**
+	 *  Layout the multi-view page mounts when the user opens a fresh
+	 *  session.  v1 only ships `Split5050`.
+	 */
+	syncDefaultLayout: SyncLayout,
+	/**
+	 *  Strategy for picking the leader pane when a session starts.
+	 *  `'first-opened'` selects pane index 0 (the primary VOD the
+	 *  user clicked).  Modeled as a string rather than an enum so v2
+	 *  can add `'longest'` etc. without an IPC contract bump.
+	 */
+	syncDefaultLeader: string,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -365,6 +395,19 @@ export type DownloadStateChangedEvent = {
 	state: string,
 };
 
+/**
+ *  One pane's drift measurement, fed back from the frontend sync
+ *  loop.  The values describe a single observation; the services
+ *  layer turns these into `sync:drift_corrected` events when the
+ *  magnitude exceeds the configured threshold.
+ */
+export type DriftMeasurement = {
+	paneIndex: number,
+	followerPositionSeconds: number,
+	expectedPositionSeconds: number,
+	driftMs: number,
+};
+
 export type EnqueueDownloadInput = {
 	vodId: string,
 	priority?: number | null,
@@ -372,6 +415,10 @@ export type EnqueueDownloadInput = {
 
 export type GetCoStreamsInput = {
 	vodId: string,
+};
+
+export type GetOverlapInput = {
+	vodIds: string[],
 };
 
 export type GetVodInput = {
@@ -525,6 +572,32 @@ export type NotificationPayload = {
 	emittedAt: number,
 };
 
+export type OpenSyncGroupInput = {
+	vodIds: string[],
+	layout: SyncLayout,
+};
+
+/**
+ *  Snapshot exposed via `cmd_get_overlap` and `cmd_open_sync_group`'s
+ *  pre-validation.  Wraps [`OverlapWindow`] with the input vod_ids
+ *  echoed back so the renderer can correlate without an extra query.
+ */
+export type OverlapResult = {
+	vodIds: string[],
+	window: OverlapWindow,
+};
+
+/**
+ *  Wall-clock window every member of a sync group has video for.  The
+ *  `/multiview` route uses this to bound its seek slider.
+ */
+export type OverlapWindow = {
+	// Maximum of all members' `stream_started_at`s.
+	startAt: number,
+	// Minimum of all members' (`stream_started_at + duration`)s.
+	endAt: number,
+};
+
 export type PollFinishedEvent = {
 	twitchUserId: string,
 	finishedAt: number,
@@ -554,8 +627,18 @@ export type QualityPreset =
 // 480p or less, 30fps cap implied.
 "480p";
 
+export type RecordSyncDriftInput = {
+	sessionId: number,
+	measurement: DriftMeasurement,
+};
+
 export type RemoveStreamerInput = {
 	twitchUserId: string,
+};
+
+export type ReportSyncOutOfRangeInput = {
+	sessionId: number,
+	paneIndex: number,
 };
 
 export type ReprioritizeInput = {
@@ -570,6 +653,11 @@ export type SetAutostartInput = {
 export type SetShortcutInput = {
 	actionId: string,
 	keys: string,
+};
+
+export type SetSyncLeaderInput = {
+	sessionId: number,
+	paneIndex: number,
 };
 
 /**
@@ -622,6 +710,9 @@ export type SettingsPatch = {
 	notifyFavoritesIngest?: boolean | null,
 	notifyStorageLow?: boolean | null,
 	completionThreshold?: number | null,
+	syncDriftThresholdMs?: number | null,
+	syncDefaultLayout?: SyncLayout | null,
+	syncDefaultLeader?: string | null,
 };
 
 /**
@@ -692,6 +783,93 @@ export type StreamerSummary = {
 export type StreamerUnfavoritedEvent = {
 	twitchUserId: string,
 };
+
+export type SyncDriftCorrectedEvent = {
+	sessionId: number,
+	paneIndex: number,
+	driftMs: number,
+	correctedToSeconds: number,
+};
+
+export type SyncGroupClosedEvent = {
+	sessionId: number,
+};
+
+/**
+ *  Layout vocabulary mirroring `sync_sessions.layout`.  v1 only ships
+ *  one variant; the enum exists so the frontend's `MultiViewPage` can
+ *  switch on the discriminant when v2 adds PiP / 2x2 grid options.
+ */
+export type SyncLayout = 
+// Two panes, fixed 50/50 horizontal split.  ADR-0021.
+"split-50-50";
+
+export type SyncLeaderChangedEvent = {
+	sessionId: number,
+	leaderPaneIndex: number,
+};
+
+/**
+ *  One pane's membership inside a session.  Mirrors a
+ *  `sync_session_panes` row plus the joined `vod_id` in raw form
+ *  (the services layer dereferences it via `vods` for any UI surface
+ *  that wants the title / streamer).
+ */
+export type SyncMember = {
+	paneIndex: number,
+	vodId: string,
+	volume: number,
+	muted: boolean,
+	joinedAt: number,
+};
+
+export type SyncMemberOutOfRangeEvent = {
+	sessionId: number,
+	paneIndex: number,
+};
+
+export type SyncSeekInput = {
+	sessionId: number,
+	wallClockTs: number,
+};
+
+// Snapshot of a sync session as exposed to the frontend.
+export type SyncSession = {
+	id: number,
+	createdAt: number,
+	closedAt: number | null,
+	layout: SyncLayout,
+	/**
+	 *  `None` only during the brief window between a session's
+	 *  `INSERT` and the follow-up `UPDATE` that sets the leader. The
+	 *  services layer never returns a `None` leader to the frontend
+	 *  — the open path is a single transaction.
+	 */
+	leaderPaneIndex: number | null,
+	status: SyncStatus,
+	panes: SyncMember[],
+};
+
+export type SyncSessionIdInput = {
+	sessionId: number,
+};
+
+export type SyncSetSpeedInput = {
+	sessionId: number,
+	speed: number,
+};
+
+export type SyncStateChangedEvent = {
+	sessionId: number,
+	// Mirrors `SyncStatus` db strings (`active` | `closed`).
+	status: string,
+};
+
+/**
+ *  Lifecycle of a `sync_sessions` row.  `Active` is the steady state;
+ *  `Closed` is terminal — no transitions back, by design.
+ */
+export type SyncStatus = "active" | "closed";
 
 /**
  *  Filter predicate for the `list_timeline` read. Each field is

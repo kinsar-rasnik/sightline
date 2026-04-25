@@ -76,8 +76,28 @@ import {
   type TrayActionKind,
   type TriggerPollInput,
   type ContinueWatchingEntry,
+  type DriftMeasurement,
+  type GetOverlapInput,
   type GetWatchStatsInput,
   type ListContinueWatchingInput,
+  type OpenSyncGroupInput,
+  type OverlapResult,
+  type OverlapWindow,
+  type RecordSyncDriftInput,
+  type ReportSyncOutOfRangeInput,
+  type SetSyncLeaderInput,
+  type SyncDriftCorrectedEvent,
+  type SyncGroupClosedEvent,
+  type SyncLayout,
+  type SyncLeaderChangedEvent,
+  type SyncMember,
+  type SyncMemberOutOfRangeEvent,
+  type SyncSeekInput,
+  type SyncSession,
+  type SyncSessionIdInput,
+  type SyncSetSpeedInput,
+  type SyncStateChangedEvent,
+  type SyncStatus,
   type UpdateWatchProgressInput,
   type VideoSource,
   type VideoSourceState,
@@ -164,8 +184,28 @@ export type {
   TrayActionKind,
   TriggerPollInput,
   ContinueWatchingEntry,
+  DriftMeasurement,
+  GetOverlapInput,
   GetWatchStatsInput,
   ListContinueWatchingInput,
+  OpenSyncGroupInput,
+  OverlapResult,
+  OverlapWindow,
+  RecordSyncDriftInput,
+  ReportSyncOutOfRangeInput,
+  SetSyncLeaderInput,
+  SyncDriftCorrectedEvent,
+  SyncGroupClosedEvent,
+  SyncLayout,
+  SyncLeaderChangedEvent,
+  SyncMember,
+  SyncMemberOutOfRangeEvent,
+  SyncSeekInput,
+  SyncSession,
+  SyncSessionIdInput,
+  SyncSetSpeedInput,
+  SyncStateChangedEvent,
+  SyncStatus,
   UpdateWatchProgressInput,
   VideoSource,
   VideoSourceState,
@@ -236,6 +276,11 @@ export const events = {
   watchProgressUpdated: "watch:progress_updated",
   watchStateChanged: "watch:state_changed",
   watchCompleted: "watch:completed",
+  syncStateChanged: "sync:state_changed",
+  syncDriftCorrected: "sync:drift_corrected",
+  syncLeaderChanged: "sync:leader_changed",
+  syncMemberOutOfRange: "sync:member_out_of_range",
+  syncGroupClosed: "sync:group_closed",
 } as const;
 
 /**
@@ -373,6 +418,38 @@ export const commands = {
     unwrap(await generatedCommands.getAutostartStatus()),
   setAutostart: async (input: SetAutostartInput): Promise<AutostartStatus> =>
     unwrap(await generatedCommands.setAutostart(input)),
+  // --- Phase 6: multi-view sync engine ---
+  openSyncGroup: async (input: OpenSyncGroupInput): Promise<SyncSession> =>
+    unwrap(await generatedCommands.openSyncGroup(input)),
+  closeSyncGroup: async (input: SyncSessionIdInput): Promise<void> => {
+    unwrap(await generatedCommands.closeSyncGroup(input));
+  },
+  getSyncGroup: async (input: SyncSessionIdInput): Promise<SyncSession> =>
+    unwrap(await generatedCommands.getSyncGroup(input)),
+  setSyncLeader: async (input: SetSyncLeaderInput): Promise<SyncSession> =>
+    unwrap(await generatedCommands.setSyncLeader(input)),
+  syncSeek: async (input: SyncSeekInput): Promise<void> => {
+    unwrap(await generatedCommands.syncSeek(input));
+  },
+  syncPlay: async (input: SyncSessionIdInput): Promise<void> => {
+    unwrap(await generatedCommands.syncPlay(input));
+  },
+  syncPause: async (input: SyncSessionIdInput): Promise<void> => {
+    unwrap(await generatedCommands.syncPause(input));
+  },
+  syncSetSpeed: async (input: SyncSetSpeedInput): Promise<void> => {
+    unwrap(await generatedCommands.syncSetSpeed(input));
+  },
+  getOverlap: async (input: GetOverlapInput): Promise<OverlapResult> =>
+    unwrap(await generatedCommands.getOverlap(input)),
+  recordSyncDrift: async (input: RecordSyncDriftInput): Promise<void> => {
+    unwrap(await generatedCommands.recordSyncDrift(input));
+  },
+  reportSyncOutOfRange: async (
+    input: ReportSyncOutOfRangeInput
+  ): Promise<void> => {
+    unwrap(await generatedCommands.reportSyncOutOfRange(input));
+  },
 };
 
 /**

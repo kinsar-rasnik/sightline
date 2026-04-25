@@ -6,6 +6,7 @@ import { useHealth } from "@/hooks/use-health";
 import { useNavStore, type NavPage } from "@/stores/nav-store";
 import { LibraryPage } from "@/features/vods/LibraryPage";
 import { DownloadsPage } from "@/features/downloads/DownloadsPage";
+import { MultiViewPage } from "@/features/multiview/MultiViewPage";
 import { PlayerPage } from "@/features/player/PlayerPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { StreamersPage } from "@/features/streamers/StreamersPage";
@@ -30,6 +31,7 @@ const NAV_ITEMS: Array<{ id: NavPage; label: string }> = [
 export function AppShell() {
   const page = useNavStore((s) => s.page);
   const watchContext = useNavStore((s) => s.watch);
+  const multiViewContext = useNavStore((s) => s.multiView);
   const setPage = useNavStore((s) => s.setPage);
   const health = useHealth();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -175,6 +177,9 @@ export function AppShell() {
             initialPositionSeconds={watchContext.initialPositionSeconds}
             autoplay={watchContext.autoplay}
           />
+        )}
+        {page === "multiview" && multiViewContext && (
+          <MultiViewPage vodIds={multiViewContext.vodIds} />
         )}
       </main>
 

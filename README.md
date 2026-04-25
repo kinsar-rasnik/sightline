@@ -3,7 +3,7 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>Status: Phase 4 — tray daemon, timeline, UI polish, real sidecar bundling. Pre-alpha. No binaries yet.</em>
+  <em>Status: Phase 6 — multi-view sync engine. Pre-alpha. No binaries yet.</em>
 </p>
 
 ---
@@ -145,11 +145,39 @@ Run `pnpm tauri dev` (or the prebuilt binary once Phase 7 ships).
   Switching layouts later runs a background migrator that moves
   existing files atomically.
 
-### 6. (Phase 5+) Watch
+### 6. Watch
 
-The player, watch-progress, and sync view arrive in later phases —
-see the [Roadmap](#roadmap). Phase 3 ends with a populated on-disk
-library ready for an external player or the Phase 5 built-in one.
+The Phase-5 player handles single-VOD playback with resume-from-
+position, chapter navigation, and customisable shortcuts.
+
+### 7. Multi-View
+
+Phase 6 adds **`/multiview`** — open two VODs side-by-side, locked to
+a shared wall-clock. Open the library detail drawer for any VOD, tick
+a co-stream in the **Co-streams** panel (only available for VODs
+already on disk), and click **Open Multi-View**.
+
+Once mounted:
+
+- **Group transport.** Play / pause / seek / speed apply to both
+  panes simultaneously. The seek slider is wall-clock anchored —
+  dragging it computes the leader's new `currentTime` and the
+  follower corrects to match on the next sync-loop tick.
+- **Leader pane.** The first opened pane is leader by default.
+  Promote the other pane any time via the **Promote to leader**
+  button on its hover chrome.
+- **Per-pane audio mix.** Each pane has its own volume slider + mute
+  toggle. The crossfader is a v2 affordance.
+- **Out-of-range handling.** When the leader's wall-clock falls
+  outside a follower's VOD window, the follower pauses and shows an
+  "Out of range" overlay. The leader keeps playing.
+- **Drift correction.** Followers re-sync via a corrective seek when
+  drift exceeds 250 ms (configurable in Settings under
+  `syncDriftThresholdMs`). The detection loop runs at 250 ms with a
+  1 s per-pane cooldown to avoid feedback. See
+  [ADR-0022](docs/adr/0022-sync-math-and-drift.md).
+
+> _Screenshots TODO — Phase 7 marketing pass._
 
 ---
 
@@ -187,8 +215,8 @@ Deep dives:
 | 3     | Download engine (yt-dlp orchestration, queue, throttle, library layout) | ✅             |
 | 4     | Tray daemon, timeline foundation, UI polish, sidecar bundling | ✅             |
 | 5     | Player, watch progress, Continue Watching, cross-streamer deep link | ✅             |
-| 6     | Multi-View Sync (split-screen) — deep-link math already lands in Phase 5 | **Next** |
-| 7     | Auto-cleanup, sub-only handling, polish, v1.0          | Planned       |
+| 6     | Multi-View Sync engine (split-view v1) — two-pane wall-clock-locked playback with leader-led drift correction | ✅             |
+| 7     | Auto-cleanup, sub-only handling, polish, v1.0          | **Next**      |
 
 ---
 

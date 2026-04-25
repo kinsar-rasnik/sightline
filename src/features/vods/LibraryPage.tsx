@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
@@ -325,6 +325,8 @@ function VodDetail({
  */
 function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
   const openPlayer = useNavStore((s) => s.openPlayer);
+  const openMultiView = useNavStore((s) => s.openMultiView);
+  const [multiSelected, setMultiSelected] = useState<string | null>(null);
   const coStreams = useQuery<CoStream[]>({
     queryKey: ["co-streams", vod.vod.twitchVideoId],
     queryFn: () =>
@@ -348,6 +350,13 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
     return m;
   }, [streamers.data]);
 
+  // Reset the multi-view companion selection when the user picks a
+  // different primary VOD — otherwise it would carry across drawer
+  // navigations.
+  useEffect(() => {
+    setMultiSelected(null);
+  }, [vod.vod.twitchVideoId]);
+
   if (!coStreams.data || coStreams.data.length === 0) return null;
 
   // Use the current VOD's midpoint as the "moment the user wants to
@@ -357,11 +366,26 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
   const selfMomentOffset = Math.floor(vod.vod.durationSeconds / 2);
   const selfMoment = vod.vod.streamStartedAt + selfMomentOffset;
 
+  const handleOpenMultiView = () => {
+    if (!multiSelected) return;
+    openMultiView({ vodIds: [vod.vod.twitchVideoId, multiSelected] });
+  };
+
   return (
     <section aria-labelledby="co-streams-heading" className="space-y-2">
-      <h4 id="co-streams-heading" className="text-sm font-medium">
-        Co-streams
-      </h4>
+      <div className="flex items-center justify-between gap-3">
+        <h4 id="co-streams-heading" className="text-sm font-medium">
+          Co-streams
+        </h4>
+        {multiSelected && (
+          <Button
+            variant="primary"
+            onClick={handleOpenMultiView}
+          >
+            Open Multi-View
+          </Button>
+        )}
+      </div>
       <ul className="space-y-2">
         {coStreams.data.map((cs) => {
           const intervalDuration = Math.max(0, cs.interval.endAt - cs.interval.startAt);
@@ -372,6 +396,7 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
           const downloaded = other?.state === "completed";
           const streamerName =
             streamerNameById.get(cs.interval.streamerId) ?? cs.interval.streamerId;
+          const isMultiSelected = multiSelected === cs.interval.vodId;
           const handleClick = () => {
             if (!downloaded) {
               void commands.enqueueDownload({
@@ -388,8 +413,22 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
           return (
             <li
               key={cs.interval.vodId}
-              className="text-xs flex items-center gap-3 border border-[--color-border]/50 rounded p-2"
+              className={`text-xs flex items-center gap-3 border rounded p-2 ${
+                isMultiSelected
+                  ? "border-[--color-accent] bg-[--color-accent]/5"
+                  : "border-[--color-border]/50"
+              }`}
             >
+              <input
+                type="checkbox"
+                aria-label={`Select ${streamerName} for multi-view`}
+                checked={isMultiSelected}
+                disabled={!downloaded}
+                onChange={(e) =>
+                  setMultiSelected(e.target.checked ? cs.interval.vodId : null)
+                }
+                className="accent-[--color-accent]"
+              />
               <div className="flex-1 min-w-0">
                 <p className="font-medium truncate">{streamerName}</p>
                 <p className="text-[--color-muted]">
@@ -404,6 +443,12 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
           );
         })}
       </ul>
+      {!coStreams.data.some((cs) => downloadMap.get(cs.interval.vodId)?.state === "completed") && (
+        <p className="text-[10px] text-[--color-muted] italic">
+          Multi-view requires a downloaded co-stream. Use the action button to
+          download one first.
+        </p>
+      )}
     </section>
   );
 }

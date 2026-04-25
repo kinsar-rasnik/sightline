@@ -47,6 +47,7 @@ use crate::services::settings::SettingsService;
 use crate::services::shortcuts::ShortcutsService;
 use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
+use crate::services::sync::{SyncEvent, SyncEventSink, SyncService};
 use crate::services::timeline_indexer::TimelineIndexerService;
 use crate::services::vods::VodReadService;
 use crate::services::watch_progress::{WatchEvent, WatchEventSink, WatchProgressService};
@@ -76,6 +77,9 @@ pub struct AppState {
     pub media_assets: Arc<MediaAssetsService>,
     pub watch_progress: Arc<WatchProgressService>,
     pub watch_progress_sink: WatchEventSink,
+    // --- Phase 6: multi-view sync engine ---
+    pub sync: Arc<SyncService>,
+    pub sync_sink: SyncEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -296,6 +300,71 @@ pub fn run() {
                         let _ = watch_handle.emit(
                             crate::services::events::EV_WATCH_COMPLETED,
                             crate::services::events::WatchCompletedEvent { vod_id },
+                        );
+                    }
+                });
+
+                // Phase 6: multi-view sync engine + event sink.
+                let sync_svc = Arc::new(SyncService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+                let sync_handle = handle.clone();
+                let sync_sink: SyncEventSink = Arc::new(move |ev| match ev {
+                    SyncEvent::StateChanged { session_id, status } => {
+                        let _ = sync_handle.emit(
+                            crate::services::events::EV_SYNC_STATE_CHANGED,
+                            crate::services::events::SyncStateChangedEvent {
+                                session_id,
+                                status: status.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    SyncEvent::DriftCorrected {
+                        session_id,
+                        pane_index,
+                        drift_ms,
+                        corrected_to_seconds,
+                    } => {
+                        let _ = sync_handle.emit(
+                            crate::services::events::EV_SYNC_DRIFT_CORRECTED,
+                            crate::services::events::SyncDriftCorrectedEvent {
+                                session_id,
+                                pane_index,
+                                drift_ms,
+                                corrected_to_seconds,
+                            },
+                        );
+                    }
+                    SyncEvent::LeaderChanged {
+                        session_id,
+                        leader_pane_index,
+                    } => {
+                        let _ = sync_handle.emit(
+                            crate::services::events::EV_SYNC_LEADER_CHANGED,
+                            crate::services::events::SyncLeaderChangedEvent {
+                                session_id,
+                                leader_pane_index,
+                            },
+                        );
+                    }
+                    SyncEvent::MemberOutOfRange {
+                        session_id,
+                        pane_index,
+                    } => {
+                        let _ = sync_handle.emit(
+                            crate::services::events::EV_SYNC_MEMBER_OUT_OF_RANGE,
+                            crate::services::events::SyncMemberOutOfRangeEvent {
+                                session_id,
+                                pane_index,
+                            },
+                        );
+                    }
+                    SyncEvent::GroupClosed { session_id } => {
+                        let _ = sync_handle.emit(
+                            crate::services::events::EV_SYNC_GROUP_CLOSED,
+                            crate::services::events::SyncGroupClosedEvent { session_id },
                         );
                     }
                 });
@@ -557,6 +626,8 @@ pub fn run() {
                     media_assets: media_assets_svc,
                     watch_progress: watch_progress_svc,
                     watch_progress_sink: watch_sink,
+                    sync: sync_svc,
+                    sync_sink,
                     close_behavior,
                     app_handle: handle.clone(),
                 });

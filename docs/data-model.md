@@ -342,6 +342,73 @@ truth: `app_settings.completion_threshold`.
 
 ---
 
+## Phase 6 — Multi-View Sync sessions
+
+Phase 6 lands schema version **11** via migrations
+`0010_sync_sessions.sql` and `0011_sync_settings.sql`.  See
+[ADR-0021](adr/0021-split-view-layout.md),
+[ADR-0022](adr/0022-sync-math-and-drift.md), and
+[ADR-0023](adr/0023-group-wide-transport.md) for the design.
+
+```sql
+-- 0010_sync_sessions.sql — multi-view session definitions.
+CREATE TABLE sync_sessions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        INTEGER NOT NULL,
+    closed_at         INTEGER,
+    layout            TEXT    NOT NULL DEFAULT 'split-50-50' CHECK (layout IN ('split-50-50')),
+    leader_pane_index INTEGER CHECK (leader_pane_index IS NULL OR leader_pane_index >= 0),
+    status            TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))
+);
+CREATE INDEX idx_sync_sessions_status_created
+    ON sync_sessions(status, created_at DESC);
+
+-- Per-pane membership; v1 caps `pane_index` at 0..=1.
+CREATE TABLE sync_session_panes (
+    session_id  INTEGER NOT NULL REFERENCES sync_sessions(id) ON DELETE CASCADE,
+    pane_index  INTEGER NOT NULL CHECK (pane_index >= 0 AND pane_index <= 1),
+    vod_id      TEXT    NOT NULL REFERENCES vods(twitch_video_id) ON DELETE CASCADE,
+    volume      REAL    NOT NULL DEFAULT 1.0 CHECK (volume >= 0.0 AND volume <= 1.0),
+    muted       INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1)),
+    joined_at   INTEGER NOT NULL,
+    PRIMARY KEY (session_id, pane_index)
+);
+CREATE UNIQUE INDEX idx_sync_session_panes_one_vod_per_session
+    ON sync_session_panes(session_id, vod_id);
+```
+
+```sql
+-- 0011_sync_settings.sql — runtime knobs for the sync engine.
+ALTER TABLE app_settings
+    ADD COLUMN sync_drift_threshold_ms REAL NOT NULL DEFAULT 250.0
+        CHECK (sync_drift_threshold_ms >= 50.0 AND sync_drift_threshold_ms <= 1000.0);
+ALTER TABLE app_settings
+    ADD COLUMN sync_default_layout TEXT NOT NULL DEFAULT 'split-50-50'
+        CHECK (sync_default_layout IN ('split-50-50'));
+ALTER TABLE app_settings
+    ADD COLUMN sync_default_leader TEXT NOT NULL DEFAULT 'first-opened'
+        CHECK (sync_default_leader IN ('first-opened'));
+```
+
+### Notes
+
+- `leader_pane_index` is `NULL` only during the brief window between
+  `INSERT INTO sync_sessions` and the follow-up `UPDATE` that sets the
+  leader; the services layer wraps both writes in a single transaction
+  so external callers never observe `NULL` mid-session.
+- `sync_session_panes(session_id, vod_id)` has a unique partial-style
+  index so the DB rejects "two panes pointing at the same VOD".  Live
+  v2 PiP layouts that *do* want the same VOD twice would supersede
+  this constraint via a new migration.
+- Live frame-by-frame state (each pane's `currentTime`, drift history)
+  stays in frontend memory.  The DB row describes the session
+  *definition*, not its instantaneous playback state.
+- `sync_default_leader = 'first-opened'` selects pane index 0 (the
+  primary VOD the user clicked).  Modeled as TEXT so v2 can add
+  `'longest'` etc. without a contract bump.
+
+---
+
 ## Referential integrity and cascading
 
 - Deleting a streamer (hard delete path, rarely used) cascades to their VODs, download tasks, and watch progress.

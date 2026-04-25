@@ -29,9 +29,11 @@ pub fn ipc_builder() -> Builder<Wry> {
         DownloadStateChangedEvent, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
         LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
         StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerFavoritedEvent,
-        StreamerRemovedEvent, StreamerUnfavoritedEvent, TimelineIndexRebuildingEvent,
-        TimelineIndexRebuiltEvent, VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent,
-        WatchProgressUpdatedEvent, WatchStateChangedEvent,
+        StreamerRemovedEvent, StreamerUnfavoritedEvent, SyncDriftCorrectedEvent,
+        SyncGroupClosedEvent, SyncLeaderChangedEvent, SyncMemberOutOfRangeEvent,
+        SyncStateChangedEvent, TimelineIndexRebuildingEvent, TimelineIndexRebuiltEvent,
+        VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent, WatchProgressUpdatedEvent,
+        WatchStateChangedEvent,
     };
     use crate::services::notifications::NotificationPayload;
 
@@ -91,6 +93,18 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::watch::get_watch_stats,
             commands::autostart::get_autostart_status,
             commands::autostart::set_autostart,
+            // Phase 6: multi-view sync engine
+            commands::sync::open_sync_group,
+            commands::sync::close_sync_group,
+            commands::sync::get_sync_group,
+            commands::sync::set_sync_leader,
+            commands::sync::sync_seek,
+            commands::sync::sync_play,
+            commands::sync::sync_pause,
+            commands::sync::sync_set_speed,
+            commands::sync::get_overlap,
+            commands::sync::record_sync_drift,
+            commands::sync::report_sync_out_of_range,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -126,6 +140,12 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<WatchProgressUpdatedEvent>()
         .typ::<WatchStateChangedEvent>()
         .typ::<WatchCompletedEvent>()
+        // Phase 6
+        .typ::<SyncStateChangedEvent>()
+        .typ::<SyncDriftCorrectedEvent>()
+        .typ::<SyncLeaderChangedEvent>()
+        .typ::<SyncMemberOutOfRangeEvent>()
+        .typ::<SyncGroupClosedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace
