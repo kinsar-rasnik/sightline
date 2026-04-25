@@ -16,6 +16,7 @@ pub mod settings;
 pub mod shortcuts;
 pub mod storage;
 pub mod streamers;
+pub mod sync;
 pub mod time_util;
 pub mod timeline_indexer;
 pub mod tray;
