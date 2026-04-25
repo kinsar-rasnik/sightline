@@ -31,8 +31,15 @@ import {
   type CoStream,
   type CredentialsChangedEvent,
   type CredentialsStatus,
+  type CheckForUpdateInput,
   type DiskUsage,
   type ExecuteCleanupInput,
+  type OpenReleaseUrlInput,
+  type SkipUpdateVersionInput,
+  type UpdateInfo,
+  type UpdateStatus,
+  type UpdaterCheckFailedEvent,
+  type UpdaterUpdateAvailableEvent,
   type DownloadCompletedEvent,
   type DownloadFailedEvent,
   type DownloadFilters,
@@ -150,8 +157,15 @@ export type {
   CoStream,
   CredentialsChangedEvent,
   CredentialsStatus,
+  CheckForUpdateInput,
   DiskUsage,
   ExecuteCleanupInput,
+  OpenReleaseUrlInput,
+  SkipUpdateVersionInput,
+  UpdateInfo,
+  UpdateStatus,
+  UpdaterCheckFailedEvent,
+  UpdaterUpdateAvailableEvent,
   DownloadCompletedEvent,
   DownloadFailedEvent,
   DownloadFilters,
@@ -490,6 +504,21 @@ export const commands = {
     unwrap(await generatedCommands.getCleanupHistory(input)),
   getDiskUsage: async (): Promise<DiskUsage> =>
     unwrap(await generatedCommands.getDiskUsage()),
+  // --- Phase 7: update checker ---
+  checkForUpdate: async (
+    input: CheckForUpdateInput
+  ): Promise<UpdateInfo | null> =>
+    unwrap(await generatedCommands.checkForUpdate(input)),
+  getUpdateStatus: async (): Promise<UpdateStatus> =>
+    unwrap(await generatedCommands.getUpdateStatus()),
+  skipUpdateVersion: async (
+    input: SkipUpdateVersionInput
+  ): Promise<void> => {
+    unwrap(await generatedCommands.skipUpdateVersion(input));
+  },
+  openReleaseUrl: async (input: OpenReleaseUrlInput): Promise<void> => {
+    unwrap(await generatedCommands.openReleaseUrl(input));
+  },
 };
 
 /**

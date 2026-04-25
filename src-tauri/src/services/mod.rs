@@ -21,5 +21,6 @@ pub mod sync;
 pub mod time_util;
 pub mod timeline_indexer;
 pub mod tray;
+pub mod updater;
 pub mod vods;
 pub mod watch_progress;

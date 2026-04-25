@@ -34,10 +34,11 @@ use crate::services::events::{
     EV_CLEANUP_DISK_PRESSURE, EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
     EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED, EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED,
     EV_LIBRARY_MIGRATING, EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED,
-    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED,
-    EV_VOD_UPDATED, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
-    LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent, StreamerAddedEvent,
-    StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED,
+    EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
+    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
+    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, UpdaterUpdateAvailableEvent,
+    VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -52,6 +53,7 @@ use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
 use crate::services::sync::{SyncEvent, SyncEventSink, SyncService};
 use crate::services::timeline_indexer::TimelineIndexerService;
+use crate::services::updater::{UpdaterEvent, UpdaterEventSink, UpdaterService};
 use crate::services::vods::VodReadService;
 use crate::services::watch_progress::{WatchEvent, WatchEventSink, WatchProgressService};
 
@@ -86,6 +88,9 @@ pub struct AppState {
     // --- Phase 7: auto-cleanup ---
     pub cleanup: Arc<CleanupService>,
     pub cleanup_sink: CleanupEventSink,
+    // --- Phase 7: update checker ---
+    pub updater: Arc<UpdaterService>,
+    pub updater_sink: UpdaterEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -192,7 +197,8 @@ pub fn run() {
                     keychain.clone(),
                 ));
                 let helix = Arc::new(HelixClient::new(http.clone(), auth.clone(), clock.clone()));
-                let gql = Arc::new(GqlClient::new(http));
+                let gql = Arc::new(GqlClient::new(http.clone()));
+                let updater_http = http;
 
                 let settings_svc = Arc::new(SettingsService::new(db.clone(), clock.clone()));
                 let credentials_svc = Arc::new(CredentialsService::new(
@@ -306,6 +312,32 @@ pub fn run() {
                         let _ = watch_handle.emit(
                             crate::services::events::EV_WATCH_COMPLETED,
                             crate::services::events::WatchCompletedEvent { vod_id },
+                        );
+                    }
+                });
+
+                // Phase 7: update-checker service + event sink.
+                let updater_svc = Arc::new(UpdaterService::new(
+                    updater_http,
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
+                let updater_handle = handle.clone();
+                let updater_sink: UpdaterEventSink = Arc::new(move |ev| match ev {
+                    UpdaterEvent::UpdateAvailable(info) => {
+                        let _ = updater_handle.emit(
+                            EV_UPDATER_UPDATE_AVAILABLE,
+                            UpdaterUpdateAvailableEvent {
+                                version: info.version,
+                                release_url: info.release_url,
+                                body: info.body,
+                            },
+                        );
+                    }
+                    UpdaterEvent::CheckFailed { reason } => {
+                        let _ = updater_handle.emit(
+                            crate::services::events::EV_UPDATER_CHECK_FAILED,
+                            crate::services::events::UpdaterCheckFailedEvent { reason },
                         );
                     }
                 });
@@ -687,6 +719,8 @@ pub fn run() {
                     sync_sink,
                     cleanup: cleanup_svc.clone(),
                     cleanup_sink: cleanup_sink.clone(),
+                    updater: updater_svc.clone(),
+                    updater_sink: updater_sink.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });
@@ -711,6 +745,29 @@ pub fn run() {
                             if let Err(e) = svc.schedule_tick(&sink).await {
                                 warn!(error = ?e, "cleanup tick failed");
                             }
+                        }
+                    });
+                }
+
+                // Phase 7: spawn the update-checker tray-daemon tick.
+                // The 60-minute interval combined with the in-service
+                // 24h gate means GitHub's API sees at most one GET per
+                // day even on a long-running daemon.
+                {
+                    let svc = updater_svc.clone();
+                    let sink = updater_sink.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            std::time::Duration::from_secs(3600),
+                        );
+                        // Skip the immediate first tick so cold start
+                        // doesn't burn the user's once-per-day budget
+                        // before the user has had a chance to enable
+                        // the feature.
+                        interval.tick().await;
+                        loop {
+                            interval.tick().await;
+                            svc.schedule_tick(&sink).await;
                         }
                     });
                 }

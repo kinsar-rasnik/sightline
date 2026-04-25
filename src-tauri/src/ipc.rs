@@ -111,6 +111,11 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::cleanup::execute_cleanup,
             commands::cleanup::get_cleanup_history,
             commands::cleanup::get_disk_usage,
+            // Phase 7: update checker
+            commands::updater::check_for_update,
+            commands::updater::get_update_status,
+            commands::updater::skip_update_version,
+            commands::updater::open_release_url,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS

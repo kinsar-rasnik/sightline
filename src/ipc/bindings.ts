@@ -125,6 +125,21 @@ export const commands = {
 	executeCleanup: (input: ExecuteCleanupInput) => typedError<CleanupResult, AppError>(__TAURI_INVOKE("execute_cleanup", { input })),
 	getCleanupHistory: (input: CleanupHistoryInput) => typedError<CleanupLogEntry[], AppError>(__TAURI_INVOKE("get_cleanup_history", { input })),
 	getDiskUsage: () => typedError<DiskUsage, AppError>(__TAURI_INVOKE("get_disk_usage")),
+	checkForUpdate: (input: CheckForUpdateInput) => typedError<{
+	version: string,
+	releaseUrl: string,
+	body: string,
+	publishedAt: number | null,
+} | null, AppError>(__TAURI_INVOKE("check_for_update", { input })),
+	getUpdateStatus: () => typedError<UpdateStatus, AppError>(__TAURI_INVOKE("get_update_status")),
+	skipUpdateVersion: (input: SkipUpdateVersionInput) => typedError<null, AppError>(__TAURI_INVOKE("skip_update_version", { input })),
+	/**
+	 *  Open an http(s) URL in the user's default browser.  Used by the
+	 *  "View release" button on the update banner; any other URL is
+	 *  rejected so a malicious release body can't trick the renderer
+	 *  into spawning a `file:///` or `javascript:` URL.
+	 */
+	openReleaseUrl: (input: OpenReleaseUrlInput) => typedError<null, AppError>(__TAURI_INVOKE("open_release_url", { input })),
 };
 
 /* Types */
@@ -345,6 +360,14 @@ export type Chapter = {
 };
 
 export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
+
+export type CheckForUpdateInput = {
+	/**
+	 *  Skip the once-per-24h gate.  The Settings UI's "Check now"
+	 *  button passes `true`; the scheduled tick uses `false`.
+	 */
+	force: boolean,
+};
 
 /**
  *  One row in a cleanup plan — a VOD the service has flagged as
@@ -742,6 +765,10 @@ export type NotificationPayload = {
 	emittedAt: number,
 };
 
+export type OpenReleaseUrlInput = {
+	url: string,
+};
+
 export type OpenSyncGroupInput = {
 	vodIds: string[],
 	layout: SyncLayout,
@@ -905,6 +932,11 @@ export type SettingsPatch = {
 export type Shortcut = {
 	actionId: string,
 	keys: string,
+};
+
+export type SkipUpdateVersionInput = {
+	// Empty string clears any prior skip.
+	version: string,
 };
 
 export type StagingInfo = {
@@ -1106,6 +1138,26 @@ export type TrayActionKind = "open_sightline" | "open_library" | "open_timeline"
 export type TriggerPollInput = {
 	// If omitted, the poller re-evaluates every due streamer on its next tick.
 	twitchUserId: string | null,
+};
+
+/**
+ *  Surfaced to the renderer.  `version` is normalised (no leading
+ *  `v`) so the UI can compare against `process.env.npm_package_version`
+ *  equivalents directly.
+ */
+export type UpdateInfo = {
+	version: string,
+	releaseUrl: string,
+	body: string,
+	publishedAt: number | null,
+};
+
+export type UpdateStatus = {
+	enabled: boolean,
+	currentVersion: string,
+	lastCheckedAt: number | null,
+	skipVersion: string | null,
+	available: UpdateInfo | null,
 };
 
 export type UpdateWatchProgressInput = {
