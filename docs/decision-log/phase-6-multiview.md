@@ -109,3 +109,102 @@ within the natural model.
 
 <!-- New entries get appended below. Keep entries terse: title +
 context + chosen option + reasoning + reversibility. -->
+
+---
+
+## 2026-04-25 19:40 — 11 sync commands instead of "8"
+
+**Kontext:** Mission spec said *"8 neue Tauri-Commands"* but the
+explicit list contained 9 (the 8 + `cmd_get_overlap`). Plus the spec
+also required 5 events to fire from somewhere; two of them
+(`sync:drift_corrected`, `sync:member_out_of_range`) only make sense
+when fired from a frontend report path.
+
+**Optionen:**
+- A. Land 9 commands as listed; have the events fire from existing
+  open/close paths only (drift / out-of-range would never fire).
+- B. Land 11 commands: 9 from the spec + 2 dedicated report commands
+  (`cmd_record_sync_drift`, `cmd_report_sync_out_of_range`) that
+  the frontend sync loop calls when it detects a condition.
+- C. Land 9 commands and have the renderer emit the two
+  remaining events directly via Tauri's frontend `emit` API.
+
+**Gewählt:** B. 11 commands.
+
+**Begründung:**
+1. Both events need to be observable backend-side for v2 (multiple
+   windows, automated tests, telemetry). Frontend-only emit (option
+   C) loses that.
+2. The spec's "8" appears to be an under-count in the mission text;
+   the listed surface plus the event delivery story require 11.
+3. The two report commands are 4-line wrappers around
+   already-tested service methods. Low marginal complexity.
+
+**Reversibilität:** medium. Removing a command means removing the
+backend handler, the IPC binding, and any frontend caller. All local
+to the multi-view feature; no public API consumers.
+
+---
+
+## 2026-04-25 21:20 — Drop StateChanged emission from apply_transport
+
+**Kontext:** Code review (P0) flagged that `apply_transport` was
+emitting `SyncEvent::StateChanged { status: SyncStatus::Active }`
+on every play / pause / seek / set_speed call. The session's
+lifecycle status doesn't change on transport — it stays `Active`
+before and after. Emitting the event was misleading: any future
+listener that re-fetches the session row on `sync:state_changed`
+would do so spuriously on every transport tick.
+
+**Optionen:**
+- A. Keep emitting; document the semantics as "any service write".
+- B. Drop the emission entirely from transport; lifecycle events
+  fire only on open + close.
+- C. Replace with a new dedicated event topic
+  (`sync:transport_applied`) that carries the command discriminant.
+
+**Gewählt:** B. Drop the emission.
+
+**Begründung:**
+1. The current frontend doesn't subscribe to `sync:state_changed`
+   for any logic — the multi-view store mirrors transport
+   optimistically. Dropping the emission has no v1 user impact.
+2. Option C would need a new event payload, an IPC binding regen,
+   and a docs update for an event nothing currently consumes.
+   Adding it back is trivial if v2 needs it.
+3. Option A locks in a contract that lies about its semantics; the
+   next engineer would be confused.
+
+**Reversibilität:** high. Re-adding the emission is one line. The
+sync_smoke integration test was updated to remove the corresponding
+event from the expected sequence — re-adding would shift the
+sequence back.
+
+---
+
+## 2026-04-25 21:30 — Validate session existence + finiteness in record_drift / report_out_of_range
+
+**Kontext:** Both subagent reviews (code P0, security MEDIUM) called
+out the same gap: the two renderer-driven report commands accepted
+any payload without verifying the session exists / is active or that
+the floats were finite. NaN drift_ms passes the `abs < threshold`
+gate silently (IEEE-754) and would emit `corrected_to_seconds: NaN`.
+
+**Optionen:**
+- A. Defer to follow-up (mission allows MEDIUM/LOW deferral).
+- B. Fix inline before the session report.
+
+**Gewählt:** B. Fix inline.
+
+**Begründung:**
+1. Code-review tagged P0 ("must fix before merge") for the same
+   issue — that's a stronger signal than the security MEDIUM alone.
+2. The fix is ~30 lines per method, mirrors the validation pattern
+   already in `apply_transport` / `set_leader`, and added 7 unit
+   tests' worth of coverage.
+3. Carrying a known phantom-event risk into v2 would compound the
+   debt — the resume-session UI in v2 will read these events and
+   choke on bad data.
+
+**Reversibilität:** high. The validation is additive; removing it
+means weakening guarantees. No external API change.
