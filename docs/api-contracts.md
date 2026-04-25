@@ -158,6 +158,11 @@ Events use `tauri::Emitter::emit` from the Rust side. Topics and payload types a
 | `sync:leader_changed`         | `SyncLeaderChangedEvent { sessionId, leaderPaneIndex }`           | Multi-view leader pane was changed (open path or explicit promote). |
 | `sync:member_out_of_range`    | `SyncMemberOutOfRangeEvent { sessionId, paneIndex }`              | A follower pane fell outside the leader's wall-clock window. |
 | `sync:group_closed`           | `SyncGroupClosedEvent { sessionId }`                              | Multi-view session was closed (explicit or unmount). |
+| `cleanup:plan_ready`          | `CleanupPlanReadyEvent { candidateCount, projectedFreedBytes }`   | Scheduled-tick path computed a plan that will be executed (Phase 7). |
+| `cleanup:executed`            | `CleanupExecutedEvent { mode, status, freedBytes, deletedVodCount }` | Cleanup run finished (any mode). |
+| `cleanup:disk_pressure`       | `CleanupDiskPressureEvent { usedFraction, freeBytes }`            | Library disk crossed the high watermark (fired even when cleanup is disabled). |
+| `updater:update_available`    | `UpdaterUpdateAvailableEvent { version, releaseUrl, body }`       | Update checker found a newer GitHub release the user hasn't skipped (Phase 7). |
+| `updater:check_failed`        | `UpdaterCheckFailedEvent { reason }`                              | Manual update check failed (network or API). Scheduled checks swallow failures. |
 
 Frontend cache invalidation subscribes to these in `src/lib/event-subscriptions.ts`. Topic names live in `src/ipc/index.ts::events` and `src-tauri/src/services/events.rs` as paired constants.
 
@@ -254,6 +259,53 @@ See [ADR-0021](adr/0021-split-view-layout.md),
   leader's wall-clock window. Emits `sync:member_out_of_range`.
 
 Errors: `AppError::Db`, `AppError::InvalidInput`, `AppError::NotFound`.
+
+---
+
+## Phase 7 commands
+
+### Auto-cleanup
+
+See [ADR-0024](adr/0024-auto-cleanup-service.md).
+
+- `getCleanupPlan()` → `CleanupPlan`. Pure read of the current disk
+  snapshot + DB candidate set; never modifies anything. Errors:
+  `AppError::Cleanup` if `library_root` isn't configured;
+  `AppError::Io` if the disk probe fails.
+- `executeCleanup({ dryRun })` → `CleanupResult`. Computes the plan
+  inline, then runs it. `dryRun: true` writes a `dry_run` row to
+  `cleanup_log` without touching disk; `dryRun: false` deletes files
+  and flips the matching `downloads` rows to `failed_permanent`.
+  Emits `cleanup:executed` (always) and `cleanup:plan_ready` (only on
+  the scheduled-tick path).
+- `getCleanupHistory({ limit? })` → `CleanupLogEntry[]`. Most-recent
+  first. `limit` clamps to `[1, 200]`, defaults to 25.
+- `getDiskUsage()` → `DiskUsage`. Live snapshot for the Settings UI's
+  Storage section; includes `aboveHighWatermark` so the renderer can
+  render the badge without a separate settings query.
+
+### Update checker
+
+See [ADR-0026](adr/0026-update-checker.md). Lands in Phase 7 with
+the cleanup work; documented here for completeness.
+
+- `checkForUpdate({ force })` → `UpdateCheckResult`. Calls the
+  GitHub Releases API. `force: false` honours the once-per-24-h
+  gate; `force: true` bypasses it (used by the Settings "Check now"
+  button). Emits `updater:update_available` when a newer version is
+  found; emits `updater:check_failed` on the manual path when the
+  request fails.
+- `getUpdateStatus()` → `UpdateStatus`. Surfaces the last-checked
+  timestamp + the most-recent fetched release info from
+  `app_settings`; the Settings UI uses this to render the
+  "Updates" section without a re-fetch. Returns `available: false`
+  when the user has skipped the latest version.
+- `skipUpdateVersion({ version })` → `void`. Persists the supplied
+  tag in `app_settings.update_check_skip_version`; an empty string
+  clears the skip.
+
+Errors for both groups: `AppError::Cleanup`, `AppError::UpdateCheck`,
+`AppError::Db`.
 
 ---
 
