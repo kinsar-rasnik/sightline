@@ -22,6 +22,7 @@ import {
 } from "@/features/settings/use-autostart";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
 import { StorageSection } from "@/features/storage/StorageSection";
+import { UpdateSettingsSection } from "@/features/updater/UpdateSettingsSection";
 import { commands } from "@/ipc";
 import type {
   AppSettings,
@@ -68,6 +69,11 @@ export function SettingsPage() {
         pending={update.isPending}
       />
       <StorageSection
+        settings={data}
+        onUpdate={(patch) => update.mutate(patch)}
+        pending={update.isPending}
+      />
+      <UpdateSettingsSection
         settings={data}
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}
