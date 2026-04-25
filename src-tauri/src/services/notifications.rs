@@ -218,6 +218,13 @@ mod tests {
             sync_drift_threshold_ms: 250.0,
             sync_default_layout: crate::domain::sync::SyncLayout::Split5050,
             sync_default_leader: "first-opened".to_string(),
+            cleanup_enabled: false,
+            cleanup_high_watermark: 0.9,
+            cleanup_low_watermark: 0.75,
+            cleanup_schedule_hour: 3,
+            update_check_enabled: false,
+            update_check_last_run: None,
+            update_check_skip_version: None,
         };
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
         s.notifications_enabled = false;
@@ -252,11 +259,18 @@ mod tests {
             notify_download_complete: false,
             notify_download_failed: true,
             notify_favorites_ingest: true,
-            notify_storage_low: true,
+            notify_storage_low: false,
             completion_threshold: 0.9,
             sync_drift_threshold_ms: 250.0,
             sync_default_layout: crate::domain::sync::SyncLayout::Split5050,
             sync_default_leader: "first-opened".to_string(),
+            cleanup_enabled: false,
+            cleanup_high_watermark: 0.9,
+            cleanup_low_watermark: 0.75,
+            cleanup_schedule_hour: 3,
+            update_check_enabled: false,
+            update_check_last_run: None,
+            update_check_skip_version: None,
         };
         assert!(!NotificationCategory::DownloadComplete.is_enabled(&s));
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
