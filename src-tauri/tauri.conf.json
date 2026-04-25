@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sightline",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "dev.sightline.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -50,7 +50,23 @@
       "binaries/ffmpeg"
     ],
     "category": "Entertainment",
+    "publisher": "Sightline contributors",
+    "homepage": "https://github.com/kinsar-rasnik/sightline",
+    "copyright": "MIT (c) Sightline contributors",
     "shortDescription": "Multi-streamer GTA-RP VOD viewer.",
-    "longDescription": "Aggregate VODs from every streamer you follow, order them by stream start time, and watch them in sync."
+    "longDescription": "Aggregate Twitch VODs from every streamer you follow, order them by stream start time, and watch them in sync. Local-first, MIT-licensed, runs on macOS, Windows, and Linux.",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "wix": {
+        "language": ["en-US"]
+      }
+    }
   }
 }

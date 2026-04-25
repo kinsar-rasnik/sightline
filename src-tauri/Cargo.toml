@@ -1,12 +1,12 @@
 [package]
 name = "sightline"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.90"
 description = "Sightline — multi-streamer GTA-RP VOD aggregator."
 authors = ["Jan and Sightline contributors"]
 license = "MIT"
-repository = "https://github.com/sightline/sightline"
+repository = "https://github.com/kinsar-rasnik/sightline"
 default-run = "sightline"
 
 [lib]
