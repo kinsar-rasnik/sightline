@@ -121,6 +121,10 @@ export const commands = {
 	getOverlap: (input: GetOverlapInput) => typedError<OverlapResult, AppError>(__TAURI_INVOKE("get_overlap", { input })),
 	recordSyncDrift: (input: RecordSyncDriftInput) => typedError<null, AppError>(__TAURI_INVOKE("record_sync_drift", { input })),
 	reportSyncOutOfRange: (input: ReportSyncOutOfRangeInput) => typedError<null, AppError>(__TAURI_INVOKE("report_sync_out_of_range", { input })),
+	getCleanupPlan: () => typedError<CleanupPlan, AppError>(__TAURI_INVOKE("get_cleanup_plan")),
+	executeCleanup: (input: ExecuteCleanupInput) => typedError<CleanupResult, AppError>(__TAURI_INVOKE("execute_cleanup", { input })),
+	getCleanupHistory: (input: CleanupHistoryInput) => typedError<CleanupLogEntry[], AppError>(__TAURI_INVOKE("get_cleanup_history", { input })),
+	getDiskUsage: () => typedError<DiskUsage, AppError>(__TAURI_INVOKE("get_disk_usage")),
 };
 
 /* Types */
@@ -178,7 +182,20 @@ export type AppError = { kind: "db"; detail: string } | { kind: "io"; detail: st
  *  copy+verify, or sidecar write). Individual per-file errors are
  *  logged; this variant reports the overall failure to the user.
  */
-{ kind: "library_migration"; detail: string };
+{ kind: "library_migration"; detail: string } | 
+/**
+ *  Auto-cleanup operation failed before any deletion happened
+ *  (settings inversion, missing library_root, no probe data).
+ *  Per-file deletion errors are aggregated into the
+ *  `partial`/`error` status on the cleanup_log row instead.
+ */
+{ kind: "cleanup"; detail: string } | 
+/**
+ *  Update-checker operation failed (network, parse, semver
+ *  comparison).  Surfaced verbatim to the Settings UI's
+ *  "Couldn't reach GitHub" line.
+ */
+{ kind: "update_check"; detail: string };
 
 export type AppReadyEvent = {
 	startedAt: number,
@@ -241,6 +258,43 @@ export type AppSettings = {
 	 *  can add `'longest'` etc. without an IPC contract bump.
 	 */
 	syncDefaultLeader: string,
+	/**
+	 *  Master toggle for the auto-cleanup service. Default off
+	 *  (ADR-0024); the UI confirms the plan before flipping this on.
+	 */
+	cleanupEnabled: boolean,
+	/**
+	 *  Used-fraction threshold above which the scheduled tick runs
+	 *  (default 0.9, range 0.5..=0.99).
+	 */
+	cleanupHighWatermark: number,
+	/**
+	 *  Used-fraction stop threshold the cleanup run targets
+	 *  (default 0.75, range 0.4..=0.95). Service-layer write enforces
+	 *  `cleanup_low_watermark < cleanup_high_watermark`.
+	 */
+	cleanupLowWatermark: number,
+	/**
+	 *  Local hour of day at which the scheduled tick fires
+	 *  (default 3, range 0..=23).
+	 */
+	cleanupScheduleHour: number,
+	/**
+	 *  Master toggle for the GitHub Releases update checker.
+	 *  Default off (ADR-0026, privacy posture).
+	 */
+	updateCheckEnabled: boolean,
+	/**
+	 *  Wall-clock seconds at which the daily check most recently ran
+	 *  (any outcome).  None when the user has just enabled the
+	 *  feature.
+	 */
+	updateCheckLastRun: number | null,
+	/**
+	 *  Tag the user explicitly suppressed via "Skip this version".
+	 *  Empty / cleared when the user clicks "Don't skip".
+	 */
+	updateCheckSkipVersion: string | null,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -293,6 +347,104 @@ export type Chapter = {
 export type ChapterType = "GAME_CHANGE" | "SYNTHETIC" | "OTHER";
 
 /**
+ *  One row in a cleanup plan — a VOD the service has flagged as
+ *  safe to delete.  Returned to the UI verbatim so the user can
+ *  review before confirming.
+ */
+export type CleanupCandidate = {
+	vodId: string,
+	streamerLogin: string,
+	streamStartedAt: number,
+	lastWatchedAt: number,
+	/**
+	 *  Mirrors `watch_progress.state` wire strings.  Only `completed`
+	 *  or `manually_watched` ever appear in a plan; the comparator
+	 *  rejects anything else.
+	 */
+	watchState: string,
+	sizeBytes: number,
+	finalPath: string,
+};
+
+export type CleanupDiskPressureEvent = {
+	usedFraction: number,
+	freeBytes: number,
+};
+
+export type CleanupExecutedEvent = {
+	mode: string,
+	status: string,
+	freedBytes: number,
+	deletedVodCount: number,
+};
+
+export type CleanupHistoryInput = {
+	/**
+	 *  Maximum entries to return.  Clamped to `[1, 200]` server-side.
+	 *  Default 25.
+	 */
+	limit?: number | null,
+};
+
+/**
+ *  One row from the `cleanup_log` audit table.  The History view in
+ *  Settings consumes this directly.
+ */
+export type CleanupLogEntry = {
+	id: number,
+	ranAt: number,
+	mode: string,
+	freedBytes: number,
+	deletedVodCount: number,
+	status: string,
+};
+
+export type CleanupMode = "scheduled" | "manual" | "dry_run";
+
+/**
+ *  What `compute_plan` returns: the candidates ranked in deletion
+ *  order plus the disk-usage snapshot the plan was built against.
+ *  `target_free_after_bytes` is non-negative even when no work is
+ *  projected — `0` simply means "the plan would not delete anything",
+ *  which is distinct from `candidates.is_empty() && disk pressure is
+ *  below the high watermark` (status: skipped).
+ */
+export type CleanupPlan = {
+	candidates: CleanupCandidate[],
+	totalBytes: number,
+	freeBytesBefore: number,
+	// Sum of `size_bytes` across `candidates`.
+	projectedFreedBytes: number,
+	/**
+	 *  Used-fraction snapshot at plan time (0.0..=1.0).  A renderer
+	 *  can compare to the live watermarks without needing a separate
+	 *  settings query.
+	 */
+	usedFractionBefore: number,
+	/**
+	 *  Settings snapshot used to build the plan.  Mirrored so the UI
+	 *  can label the plan ("would shrink to 75 % of disk capacity").
+	 */
+	highWatermark: number,
+	lowWatermark: number,
+};
+
+export type CleanupPlanReadyEvent = {
+	candidateCount: number,
+	projectedFreedBytes: number,
+};
+
+// What `execute_plan` returns once it has actually written to disk.
+export type CleanupResult = {
+	mode: CleanupMode,
+	// Mirrors `cleanup_log.status` wire strings.
+	status: string,
+	freedBytes: number,
+	deletedVodCount: number,
+	logId: number,
+};
+
+/**
  *  Co-stream hit: another interval overlapping a reference, paired
  *  with the number of seconds of overlap (> 0).
  */
@@ -327,6 +479,20 @@ export type CredentialsStatus = {
 	configured: boolean,
 	clientIdMasked: string | null,
 	lastTokenAcquiredAt: number | null,
+};
+
+/**
+ *  Live disk-usage snapshot exposed via `cmd_get_disk_usage`.  The
+ *  fields land verbatim on the Settings UI's Storage section.
+ */
+export type DiskUsage = {
+	libraryPath: boolean | null,
+	totalBytes: number,
+	freeBytes: number,
+	usedFraction: number,
+	highWatermark: number,
+	lowWatermark: number,
+	aboveHighWatermark: boolean,
 };
 
 export type DownloadCompletedEvent = {
@@ -411,6 +577,10 @@ export type DriftMeasurement = {
 export type EnqueueDownloadInput = {
 	vodId: string,
 	priority?: number | null,
+};
+
+export type ExecuteCleanupInput = {
+	dryRun: boolean,
 };
 
 export type GetCoStreamsInput = {
@@ -713,6 +883,16 @@ export type SettingsPatch = {
 	syncDriftThresholdMs?: number | null,
 	syncDefaultLayout?: SyncLayout | null,
 	syncDefaultLeader?: string | null,
+	cleanupEnabled?: boolean | null,
+	cleanupHighWatermark?: number | null,
+	cleanupLowWatermark?: number | null,
+	cleanupScheduleHour?: number | null,
+	updateCheckEnabled?: boolean | null,
+	/**
+	 *  Pass an empty string to clear; pass `Some("v1.2.3")` to skip
+	 *  that release.  Omit to leave unchanged.
+	 */
+	updateCheckSkipVersion?: string | null,
 };
 
 /**
@@ -932,6 +1112,16 @@ export type UpdateWatchProgressInput = {
 	vodId: string,
 	positionSeconds: number,
 	durationSeconds: number,
+};
+
+export type UpdaterCheckFailedEvent = {
+	reason: string,
+};
+
+export type UpdaterUpdateAvailableEvent = {
+	version: string,
+	releaseUrl: string,
+	body: string,
 };
 
 /**

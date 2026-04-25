@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod autostart;
+pub mod cleanup;
 pub mod credentials;
 pub mod downloads;
 pub mod health;

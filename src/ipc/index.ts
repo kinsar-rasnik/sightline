@@ -19,9 +19,20 @@ import {
   type AppTrayActionEvent,
   type AutostartStatus,
   type Chapter,
+  type CleanupCandidate,
+  type CleanupDiskPressureEvent,
+  type CleanupExecutedEvent,
+  type CleanupHistoryInput,
+  type CleanupLogEntry,
+  type CleanupMode,
+  type CleanupPlan,
+  type CleanupPlanReadyEvent,
+  type CleanupResult,
   type CoStream,
   type CredentialsChangedEvent,
   type CredentialsStatus,
+  type DiskUsage,
+  type ExecuteCleanupInput,
   type DownloadCompletedEvent,
   type DownloadFailedEvent,
   type DownloadFilters,
@@ -127,9 +138,20 @@ export type {
   AppTrayActionEvent,
   AutostartStatus,
   Chapter,
+  CleanupCandidate,
+  CleanupDiskPressureEvent,
+  CleanupExecutedEvent,
+  CleanupHistoryInput,
+  CleanupLogEntry,
+  CleanupMode,
+  CleanupPlan,
+  CleanupPlanReadyEvent,
+  CleanupResult,
   CoStream,
   CredentialsChangedEvent,
   CredentialsStatus,
+  DiskUsage,
+  ExecuteCleanupInput,
   DownloadCompletedEvent,
   DownloadFailedEvent,
   DownloadFilters,
@@ -281,6 +303,11 @@ export const events = {
   syncLeaderChanged: "sync:leader_changed",
   syncMemberOutOfRange: "sync:member_out_of_range",
   syncGroupClosed: "sync:group_closed",
+  cleanupPlanReady: "cleanup:plan_ready",
+  cleanupExecuted: "cleanup:executed",
+  cleanupDiskPressure: "cleanup:disk_pressure",
+  updaterUpdateAvailable: "updater:update_available",
+  updaterCheckFailed: "updater:check_failed",
 } as const;
 
 /**
@@ -450,6 +477,19 @@ export const commands = {
   ): Promise<void> => {
     unwrap(await generatedCommands.reportSyncOutOfRange(input));
   },
+  // --- Phase 7: auto-cleanup ---
+  getCleanupPlan: async (): Promise<CleanupPlan> =>
+    unwrap(await generatedCommands.getCleanupPlan()),
+  executeCleanup: async (
+    input: ExecuteCleanupInput
+  ): Promise<CleanupResult> =>
+    unwrap(await generatedCommands.executeCleanup(input)),
+  getCleanupHistory: async (
+    input: CleanupHistoryInput
+  ): Promise<CleanupLogEntry[]> =>
+    unwrap(await generatedCommands.getCleanupHistory(input)),
+  getDiskUsage: async (): Promise<DiskUsage> =>
+    unwrap(await generatedCommands.getDiskUsage()),
 };
 
 /**

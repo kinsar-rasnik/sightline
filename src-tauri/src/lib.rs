@@ -23,18 +23,21 @@ use crate::infra::keychain::{Credentials, OsKeychainCredentials};
 use crate::infra::twitch::auth::TwitchAuthenticator;
 use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
+use crate::services::cleanup::{CleanupEvent, CleanupEventSink, CleanupService};
 use crate::services::credentials::CredentialsService;
 use crate::services::downloads::{
     DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
 };
 use crate::services::events::{
-    CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
-    DownloadStateChangedEvent, EV_CREDENTIALS_CHANGED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
-    EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
-    EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
-    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
-    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
-    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+    CleanupDiskPressureEvent, CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
+    DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
+    EV_CLEANUP_DISK_PRESSURE, EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
+    EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED, EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED,
+    EV_LIBRARY_MIGRATING, EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED,
+    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED,
+    EV_VOD_UPDATED, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
+    LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent, StreamerAddedEvent,
+    StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -80,6 +83,9 @@ pub struct AppState {
     // --- Phase 6: multi-view sync engine ---
     pub sync: Arc<SyncService>,
     pub sync_sink: SyncEventSink,
+    // --- Phase 7: auto-cleanup ---
+    pub cleanup: Arc<CleanupService>,
+    pub cleanup_sink: CleanupEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -300,6 +306,57 @@ pub fn run() {
                         let _ = watch_handle.emit(
                             crate::services::events::EV_WATCH_COMPLETED,
                             crate::services::events::WatchCompletedEvent { vod_id },
+                        );
+                    }
+                });
+
+                // Phase 7: auto-cleanup service + event sink.
+                let cleanup_svc = Arc::new(CleanupService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                    Arc::new(SystemFreeSpace),
+                ));
+                let cleanup_handle = handle.clone();
+                let cleanup_sink: CleanupEventSink = Arc::new(move |ev| match ev {
+                    CleanupEvent::PlanReady {
+                        candidate_count,
+                        projected_freed_bytes,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_PLAN_READY,
+                            CleanupPlanReadyEvent {
+                                candidate_count,
+                                projected_freed_bytes,
+                            },
+                        );
+                    }
+                    CleanupEvent::Executed {
+                        mode,
+                        status,
+                        freed_bytes,
+                        deleted_vod_count,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_EXECUTED,
+                            CleanupExecutedEvent {
+                                mode: mode.as_db_str().to_owned(),
+                                status,
+                                freed_bytes,
+                                deleted_vod_count,
+                            },
+                        );
+                    }
+                    CleanupEvent::DiskPressure {
+                        used_fraction,
+                        free_bytes,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_DISK_PRESSURE,
+                            CleanupDiskPressureEvent {
+                                used_fraction,
+                                free_bytes,
+                            },
                         );
                     }
                 });
@@ -628,9 +685,35 @@ pub fn run() {
                     watch_progress_sink: watch_sink,
                     sync: sync_svc,
                     sync_sink,
+                    cleanup: cleanup_svc.clone(),
+                    cleanup_sink: cleanup_sink.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });
+
+                // Phase 7: spawn the cleanup tray-daemon tick.  It
+                // wakes every 5 minutes, checks disk pressure, and
+                // — if `cleanup_enabled` and the schedule hour has
+                // crossed today — runs a plan + execute pass.
+                {
+                    let svc = cleanup_svc.clone();
+                    let sink = cleanup_sink.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            std::time::Duration::from_secs(300),
+                        );
+                        // First tick fires immediately; skip it so a
+                        // cold-start doesn't fight the migrator's
+                        // initialization for DB locks.
+                        interval.tick().await;
+                        loop {
+                            interval.tick().await;
+                            if let Err(e) = svc.schedule_tick(&sink).await {
+                                warn!(error = ?e, "cleanup tick failed");
+                            }
+                        }
+                    });
+                }
 
                 // Install the tray icon + menu. Failure is non-fatal
                 // (headless CI, Linux without StatusNotifierItem), but

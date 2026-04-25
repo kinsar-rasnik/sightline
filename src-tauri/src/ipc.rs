@@ -24,7 +24,8 @@ use crate::commands;
 pub fn ipc_builder() -> Builder<Wry> {
     use crate::services::autostart::AutostartStatus;
     use crate::services::events::{
-        AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CredentialsChangedEvent,
+        AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CleanupDiskPressureEvent,
+        CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
         DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
         DownloadStateChangedEvent, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
         LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
@@ -32,8 +33,8 @@ pub fn ipc_builder() -> Builder<Wry> {
         StreamerRemovedEvent, StreamerUnfavoritedEvent, SyncDriftCorrectedEvent,
         SyncGroupClosedEvent, SyncLeaderChangedEvent, SyncMemberOutOfRangeEvent,
         SyncStateChangedEvent, TimelineIndexRebuildingEvent, TimelineIndexRebuiltEvent,
-        VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent, WatchProgressUpdatedEvent,
-        WatchStateChangedEvent,
+        UpdaterCheckFailedEvent, UpdaterUpdateAvailableEvent, VodIngestedEvent, VodUpdatedEvent,
+        WatchCompletedEvent, WatchProgressUpdatedEvent, WatchStateChangedEvent,
     };
     use crate::services::notifications::NotificationPayload;
 
@@ -105,6 +106,11 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::sync::get_overlap,
             commands::sync::record_sync_drift,
             commands::sync::report_sync_out_of_range,
+            // Phase 7: auto-cleanup
+            commands::cleanup::get_cleanup_plan,
+            commands::cleanup::execute_cleanup,
+            commands::cleanup::get_cleanup_history,
+            commands::cleanup::get_disk_usage,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -146,6 +152,12 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<SyncLeaderChangedEvent>()
         .typ::<SyncMemberOutOfRangeEvent>()
         .typ::<SyncGroupClosedEvent>()
+        // Phase 7
+        .typ::<CleanupPlanReadyEvent>()
+        .typ::<CleanupExecutedEvent>()
+        .typ::<CleanupDiskPressureEvent>()
+        .typ::<UpdaterUpdateAvailableEvent>()
+        .typ::<UpdaterCheckFailedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace

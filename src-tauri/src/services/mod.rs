@@ -3,6 +3,7 @@
 //! infra sources; commands should never do so directly.
 
 pub mod autostart;
+pub mod cleanup;
 pub mod credentials;
 pub mod downloads;
 pub mod events;
