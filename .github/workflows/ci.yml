@@ -64,7 +64,7 @@ jobs:
       # reuse the same checksum-verified script and per-OS cache as the
       # test matrix. See ADR-0016.
       - name: cache sidecar downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sightline-sidecars
           key: sidecars-${{ runner.os }}-${{ hashFiles('scripts/sidecars.lock') }}
@@ -144,7 +144,7 @@ jobs:
       # + yt-dlp binaries aren't refetched on every CI run. Keyed on OS so
       # the cache is per-runner.
       - name: cache sidecar downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sightline-sidecars
           key: sidecars-${{ runner.os }}-${{ hashFiles('scripts/sidecars.lock') }}
