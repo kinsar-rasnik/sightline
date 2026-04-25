@@ -10,6 +10,7 @@ use sqlx::Row;
 use crate::domain::library_layout::LibraryLayoutKind;
 use crate::domain::poll_schedule::PollIntervals;
 use crate::domain::quality_preset::QualityPreset;
+use crate::domain::sync::SyncLayout;
 use crate::error::AppError;
 use crate::infra::clock::Clock;
 use crate::infra::db::Db;
@@ -59,6 +60,21 @@ pub struct AppSettings {
     /// frontend that hand-rolls an out-of-range value gets a SQLite
     /// constraint failure rather than silently skipping the transition.
     pub completion_threshold: f64,
+
+    // --- Phase 6: multi-view sync engine knobs. ---
+    /// Drift tolerance in milliseconds for the multi-view sync loop.
+    /// Persisted in `app_settings.sync_drift_threshold_ms` (migration
+    /// 0011); the column-level CHECK enforces `[50.0, 1000.0]`.  See
+    /// ADR-0022 for the rationale on the default of 250 ms.
+    pub sync_drift_threshold_ms: f64,
+    /// Layout the multi-view page mounts when the user opens a fresh
+    /// session.  v1 only ships `Split5050`.
+    pub sync_default_layout: SyncLayout,
+    /// Strategy for picking the leader pane when a session starts.
+    /// `'first-opened'` selects pane index 0 (the primary VOD the
+    /// user clicked).  Modeled as a string rather than an enum so v2
+    /// can add `'longest'` etc. without an IPC contract bump.
+    pub sync_default_leader: String,
 }
 
 /// What happens when the user clicks the window close button.
@@ -159,6 +175,12 @@ pub struct SettingsPatch {
     // --- Phase 6 fields. ---
     #[specta(optional)]
     pub completion_threshold: Option<f64>,
+    #[specta(optional)]
+    pub sync_drift_threshold_ms: Option<f64>,
+    #[specta(optional)]
+    pub sync_default_layout: Option<SyncLayout>,
+    #[specta(optional)]
+    pub sync_default_leader: Option<String>,
 }
 
 #[derive(Debug)]
@@ -184,7 +206,8 @@ impl SettingsService {
                     notifications_enabled, notify_download_complete,
                     notify_download_failed, notify_favorites_ingest,
                     notify_storage_low,
-                    completion_threshold
+                    completion_threshold,
+                    sync_drift_threshold_ms, sync_default_layout, sync_default_leader
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -213,6 +236,11 @@ impl SettingsService {
         let notify_favorites_ingest: i64 = row.try_get(19)?;
         let notify_storage_low: i64 = row.try_get(20)?;
         let completion_threshold: f64 = row.try_get(21)?;
+        let sync_drift_threshold_ms: f64 = row.try_get(22)?;
+        let sync_default_layout_str: String = row.try_get(23)?;
+        let sync_default_layout =
+            SyncLayout::from_db_str(&sync_default_layout_str).unwrap_or(SyncLayout::Split5050);
+        let sync_default_leader: String = row.try_get(24)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -238,6 +266,9 @@ impl SettingsService {
             notify_favorites_ingest: notify_favorites_ingest != 0,
             notify_storage_low: notify_storage_low != 0,
             completion_threshold,
+            sync_drift_threshold_ms,
+            sync_default_layout,
+            sync_default_leader,
         })
     }
 
@@ -336,6 +367,32 @@ impl SettingsService {
             .unwrap_or(current.completion_threshold)
             .clamp(0.7, 1.0);
 
+        // Mirrors the [50, 1000] CHECK on `sync_drift_threshold_ms` (migration
+        // 0011 / ADR-0022).  Clamp client-side so a Settings slider can't
+        // end up with a SQLite constraint failure surfaced to the user.
+        let sync_drift_threshold_ms = patch
+            .sync_drift_threshold_ms
+            .unwrap_or(current.sync_drift_threshold_ms)
+            .clamp(50.0, 1000.0);
+        let sync_default_layout = patch
+            .sync_default_layout
+            .unwrap_or(current.sync_default_layout);
+        // The column-level CHECK enforces `'first-opened'` for v1; we
+        // validate the input matches the vocabulary so an unknown
+        // string fails fast with a typed error rather than at the
+        // SQLite layer.
+        let sync_default_leader = match patch.sync_default_leader {
+            Some(value) => {
+                if value != "first-opened" {
+                    return Err(AppError::InvalidInput {
+                        detail: format!("unsupported sync_default_leader '{value}'"),
+                    });
+                }
+                value
+            }
+            None => current.sync_default_leader,
+        };
+
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
 
@@ -363,6 +420,9 @@ impl SettingsService {
                  notify_favorites_ingest = ?,
                  notify_storage_low = ?,
                  completion_threshold = ?,
+                 sync_drift_threshold_ms = ?,
+                 sync_default_layout = ?,
+                 sync_default_leader = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -388,6 +448,9 @@ impl SettingsService {
         .bind(if notify_favorites_ingest { 1 } else { 0 })
         .bind(if notify_storage_low { 1 } else { 0 })
         .bind(completion_threshold)
+        .bind(sync_drift_threshold_ms)
+        .bind(sync_default_layout.as_db_str())
+        .bind(&sync_default_leader)
         .bind(now)
         .execute(self.db.pool())
         .await?;
@@ -746,6 +809,62 @@ mod tests {
             .await
             .unwrap();
         assert!((out.completion_threshold - 0.85).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn sync_settings_have_documented_defaults() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        assert!((s.sync_drift_threshold_ms - 250.0).abs() < f64::EPSILON);
+        assert_eq!(s.sync_default_layout, SyncLayout::Split5050);
+        assert_eq!(s.sync_default_leader, "first-opened");
+    }
+
+    #[tokio::test]
+    async fn sync_drift_threshold_clamped_to_50_to_1000() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                sync_drift_threshold_ms: Some(5_000.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((high.sync_drift_threshold_ms - 1_000.0).abs() < f64::EPSILON);
+        let low = svc
+            .update(SettingsPatch {
+                sync_drift_threshold_ms: Some(10.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((low.sync_drift_threshold_ms - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn sync_drift_threshold_round_trips_in_range() {
+        let svc = setup().await;
+        let out = svc
+            .update(SettingsPatch {
+                sync_drift_threshold_ms: Some(180.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((out.sync_drift_threshold_ms - 180.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn unsupported_sync_default_leader_is_rejected() {
+        let svc = setup().await;
+        let err = svc
+            .update(SettingsPatch {
+                sync_default_leader: Some("random".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 
     #[tokio::test]

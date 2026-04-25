@@ -215,6 +215,9 @@ mod tests {
             notify_favorites_ingest: true,
             notify_storage_low: true,
             completion_threshold: 0.9,
+            sync_drift_threshold_ms: 250.0,
+            sync_default_layout: crate::domain::sync::SyncLayout::Split5050,
+            sync_default_leader: "first-opened".to_string(),
         };
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
         s.notifications_enabled = false;
@@ -251,6 +254,9 @@ mod tests {
             notify_favorites_ingest: true,
             notify_storage_low: true,
             completion_threshold: 0.9,
+            sync_drift_threshold_ms: 250.0,
+            sync_default_layout: crate::domain::sync::SyncLayout::Split5050,
+            sync_default_leader: "first-opened".to_string(),
         };
         assert!(!NotificationCategory::DownloadComplete.is_enabled(&s));
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
