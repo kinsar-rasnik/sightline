@@ -217,19 +217,25 @@ impl UpdaterService {
                 detail: format!("github api status {}", resp.status().as_u16()),
             });
         }
-        let bytes = resp.bytes().await.map_err(|e| AppError::UpdateCheck {
+        // Stream-cap: a malicious or oversized body must never cause
+        // us to allocate beyond the documented `MAX_RESPONSE_BYTES`.
+        // `Response::chunk()` pulls one chunk at a time without
+        // requiring the `stream` reqwest feature; we bail the moment
+        // the running total would cross the cap, before extending
+        // the buffer.
+        let mut resp = resp;
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|e| AppError::UpdateCheck {
             detail: format!("read body: {e}"),
-        })?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(AppError::UpdateCheck {
-                detail: format!(
-                    "release body too large: {} bytes > {} cap",
-                    bytes.len(),
-                    MAX_RESPONSE_BYTES
-                ),
-            });
+        })? {
+            if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(AppError::UpdateCheck {
+                    detail: format!("release body too large: > {MAX_RESPONSE_BYTES} bytes"),
+                });
+            }
+            buf.extend_from_slice(&chunk);
         }
-        String::from_utf8(bytes.to_vec()).map_err(|e| AppError::UpdateCheck {
+        String::from_utf8(buf).map_err(|e| AppError::UpdateCheck {
             detail: format!("utf8: {e}"),
         })
     }

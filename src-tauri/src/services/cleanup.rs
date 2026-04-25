@@ -13,6 +13,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -34,7 +35,10 @@ use crate::services::settings::SettingsService;
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskUsage {
-    pub library_path: Option<bool>,
+    /// True iff the user has chosen a `library_root` in Settings.
+    /// When false, the `*_bytes` and `used_fraction` fields are zero
+    /// — the renderer renders a "no library configured" state.
+    pub library_root_configured: bool,
     pub total_bytes: i64,
     pub free_bytes: i64,
     pub used_fraction: f64,
@@ -72,6 +76,12 @@ pub struct CleanupService {
     clock: Arc<dyn Clock>,
     settings: SettingsService,
     probe: Arc<dyn FreeSpaceProbe>,
+    /// Guards against concurrent `execute_plan` calls (two renderer
+    /// windows triggering manual cleanup at the same time, or the
+    /// scheduled tick firing while a manual run is in flight).  Set
+    /// to `true` for the duration of `execute_plan` and reset on
+    /// every exit path.
+    executing: AtomicBool,
 }
 
 impl CleanupService {
@@ -86,6 +96,7 @@ impl CleanupService {
             clock,
             settings,
             probe,
+            executing: AtomicBool::new(false),
         }
     }
 
@@ -119,7 +130,7 @@ impl CleanupService {
             Some(p) => p,
             None => {
                 return Ok(DiskUsage {
-                    library_path: Some(false),
+                    library_root_configured: false,
                     total_bytes: 0,
                     free_bytes: 0,
                     used_fraction: 0.0,
@@ -132,7 +143,7 @@ impl CleanupService {
         let snapshot = self.snapshot_disk(library_root).await?;
         let used_fraction = snapshot.used_fraction();
         Ok(DiskUsage {
-            library_path: Some(true),
+            library_root_configured: true,
             total_bytes: snapshot.total_bytes as i64,
             free_bytes: snapshot.free_bytes as i64,
             used_fraction,
@@ -174,6 +185,29 @@ impl CleanupService {
             });
         }
 
+        // Concurrency guard — fail fast when a second caller arrives
+        // while the first is still in flight.  Two windows hitting
+        // "Run cleanup now" simultaneously would otherwise produce
+        // double-deletion attempts and two log rows for the same
+        // batch.
+        if self
+            .executing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(AppError::Cleanup {
+                detail: "another cleanup run is already in progress".into(),
+            });
+        }
+        // RAII guard: any return path below resets the flag.
+        struct ExecuteGuard<'a>(&'a AtomicBool);
+        impl Drop for ExecuteGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _guard = ExecuteGuard(&self.executing);
+
         if plan.candidates.is_empty() {
             // For scheduled mode this is the "no work" path; manual
             // mode should never arrive here because the UI gates on
@@ -188,12 +222,19 @@ impl CleanupService {
             });
         }
 
+        // Resolve the configured library root once per execute pass
+        // — the `delete_candidate` containment check uses it.  If
+        // it's not configured, refuse to delete (the plan should not
+        // have been computed in this state but defence-in-depth).
+        let library_root = require_library_root(&self.settings.get().await?.library_root)?;
+        let library_root_path = std::path::PathBuf::from(library_root);
+
         let mut freed_bytes: i64 = 0;
         let mut deleted_vod_count: i64 = 0;
         let mut errors: i64 = 0;
         for candidate in &plan.candidates {
             match self
-                .delete_candidate(&candidate.vod_id, &candidate.final_path)
+                .delete_candidate(&candidate.vod_id, &candidate.final_path, &library_root_path)
                 .await
             {
                 Ok(removed_bytes) => {
@@ -375,7 +416,12 @@ impl CleanupService {
             let stream_started_at: i64 = row.try_get(2)?;
             let last_watched_at: i64 = row.try_get(3)?;
             let state_str: String = row.try_get(4)?;
-            let size_bytes: i64 = row.try_get(5).unwrap_or(0);
+            // bytes_done has `DEFAULT 0` and bytes_total is nullable; the
+            // SQL COALESCE collapses both to a non-null integer, so the
+            // typed read here propagates *type* errors (which would
+            // indicate a schema regression) while still tolerating the
+            // documented NULL→0 path.
+            let size_bytes: i64 = row.try_get::<Option<i64>, _>(5)?.unwrap_or(0);
             let final_path: String = row.try_get(6)?;
             out.push(CandidateInput {
                 vod_id,
@@ -390,17 +436,33 @@ impl CleanupService {
         Ok(out)
     }
 
-    async fn delete_candidate(&self, vod_id: &str, path: &str) -> Result<i64, AppError> {
+    async fn delete_candidate(
+        &self,
+        vod_id: &str,
+        path: &str,
+        library_root: &Path,
+    ) -> Result<i64, AppError> {
         let p = Path::new(path);
+
+        // Containment check (defence-in-depth — security review HIGH).
+        // The path comes from `downloads.final_path`, which is written
+        // by the download pipeline rather than the renderer, but a DB
+        // row a future bug could rewrite must not be able to redirect
+        // the deletion outside the library root.
+        if !is_path_inside(library_root, p) {
+            return Err(AppError::Cleanup {
+                detail: format!("refusing to delete '{}': outside library root", p.display()),
+            });
+        }
+
         let metadata = tokio::fs::metadata(p).await.ok();
         let size = metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-        if metadata.is_some() {
-            tokio::fs::remove_file(p).await?;
-        }
-        // Mark the download row failed_permanent with reason
-        // CLEANED_UP so the Library UI can surface a "Re-download"
-        // CTA, and so the row no longer matches the next plan's
-        // `state = 'completed'` filter.
+
+        // Order: mark the download row failed first.  If the
+        // subsequent unlink fails, the file becomes an orphan but the
+        // DB no longer treats it as a cleanup candidate, so the next
+        // tick won't double-attempt.  An orphan file is recoverable;
+        // a stuck row is not.
         let now = self.clock.unix_seconds();
         sqlx::query(
             "UPDATE downloads
@@ -414,6 +476,22 @@ impl CleanupService {
         .bind(vod_id)
         .execute(self.db.pool())
         .await?;
+
+        if metadata.is_some()
+            && let Err(e) = tokio::fs::remove_file(p).await
+        {
+            warn!(
+                vod_id,
+                path = %p.display(),
+                error = %e,
+                "cleanup unlink failed after DB update — file is orphaned"
+            );
+            // The DB is consistent; surface the error so the per-row
+            // counter advances "errors" rather than "deleted".
+            return Err(AppError::Io {
+                detail: format!("unlink {}: {e}", p.display()),
+            });
+        }
         Ok(size)
     }
 
@@ -447,11 +525,21 @@ impl CleanupService {
         let last_scheduled: Option<i64> =
             sqlx::query_scalar("SELECT MAX(ran_at) FROM cleanup_log WHERE mode = 'scheduled'")
                 .fetch_one(self.db.pool())
-                .await
-                .unwrap_or(None);
+                .await?;
 
         Ok(is_schedule_due(schedule_hour, now, last_scheduled))
     }
+}
+
+/// Containment check used by [`CleanupService::delete_candidate`].
+/// Canonicalises both sides where possible so a symlink swap can't
+/// be used to escape the library root between plan and execute.
+fn is_path_inside(library_root: &Path, path: &Path) -> bool {
+    let canon_root = library_root
+        .canonicalize()
+        .unwrap_or_else(|_| library_root.to_path_buf());
+    let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    canon_path.starts_with(&canon_root)
 }
 
 fn require_library_root(value: &Option<String>) -> Result<String, AppError> {
@@ -577,7 +665,7 @@ mod tests {
     async fn get_disk_usage_reports_no_root() {
         let (svc, _db) = setup().await;
         let usage = svc.get_disk_usage().await.unwrap();
-        assert_eq!(usage.library_path, Some(false));
+        assert!(!usage.library_root_configured);
         assert_eq!(usage.total_bytes, 0);
         assert!(!usage.above_high_watermark);
     }
@@ -599,7 +687,7 @@ mod tests {
             .await
             .unwrap();
         let usage = svc.get_disk_usage().await.unwrap();
-        assert_eq!(usage.library_path, Some(true));
+        assert!(usage.library_root_configured);
         assert_eq!(usage.total_bytes, 10_000);
         assert_eq!(usage.free_bytes, 1_000);
         // 90 % used (1000 free / 10 000 total) hits the default

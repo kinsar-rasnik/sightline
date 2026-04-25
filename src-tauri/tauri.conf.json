@@ -29,8 +29,7 @@
         "enable": true,
         "scope": [
           "$APPDATA/sightline/library/**",
-          "$APPLOCALDATA/sightline/library/**",
-          "$HOME/Sightline/**"
+          "$APPLOCALDATA/sightline/library/**"
         ]
       }
     }

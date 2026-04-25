@@ -135,9 +135,13 @@ export const commands = {
 	skipUpdateVersion: (input: SkipUpdateVersionInput) => typedError<null, AppError>(__TAURI_INVOKE("skip_update_version", { input })),
 	/**
 	 *  Open an http(s) URL in the user's default browser.  Used by the
-	 *  "View release" button on the update banner; any other URL is
-	 *  rejected so a malicious release body can't trick the renderer
-	 *  into spawning a `file:///` or `javascript:` URL.
+	 *  "View release" button on the update banner.  Defence-in-depth:
+	 *  the URL is parsed via [`url::Url::parse`] so a string like
+	 *  `https://\x00evil.com` (which would pass a naive prefix check
+	 *  but truncate at the OS-layer `open` call) is rejected.  We also
+	 *  enforce a `github.com` host allow-list since the only sanctioned
+	 *  caller is the updater service whose data flows from
+	 *  `https://api.github.com/repos/.../releases/latest`.
 	 */
 	openReleaseUrl: (input: OpenReleaseUrlInput) => typedError<null, AppError>(__TAURI_INVOKE("open_release_url", { input })),
 };
@@ -509,7 +513,12 @@ export type CredentialsStatus = {
  *  fields land verbatim on the Settings UI's Storage section.
  */
 export type DiskUsage = {
-	libraryPath: boolean | null,
+	/**
+	 *  True iff the user has chosen a `library_root` in Settings.
+	 *  When false, the `*_bytes` and `used_fraction` fields are zero
+	 *  — the renderer renders a "no library configured" state.
+	 */
+	libraryRootConfigured: boolean,
 	totalBytes: number,
 	freeBytes: number,
 	usedFraction: number,

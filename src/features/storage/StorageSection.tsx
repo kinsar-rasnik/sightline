@@ -28,6 +28,7 @@ export function StorageSection({ settings, onUpdate, pending }: Props) {
 
   const usedPct = usage.data ? Math.round(usage.data.usedFraction * 100) : 0;
   const aboveHigh = usage.data?.aboveHighWatermark ?? false;
+  const libraryConfigured = usage.data?.libraryRootConfigured ?? false;
 
   return (
     <section
@@ -42,11 +43,11 @@ export function StorageSection({ settings, onUpdate, pending }: Props) {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-medium">
-              {usage.data?.libraryPath
+              {libraryConfigured
                 ? `Library disk: ${usedPct}% used`
                 : "No library root configured"}
             </div>
-            {usage.data?.libraryPath && (
+            {libraryConfigured && usage.data && (
               <div className="text-[--color-muted]">
                 {formatBytes(
                   usage.data.totalBytes - usage.data.freeBytes
@@ -67,7 +68,7 @@ export function StorageSection({ settings, onUpdate, pending }: Props) {
           )}
         </div>
 
-        {usage.data?.libraryPath && (
+        {libraryConfigured && (
           <div
             role="progressbar"
             aria-valuenow={usedPct}

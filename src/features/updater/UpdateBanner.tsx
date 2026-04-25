@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 
 import { Button } from "@/components/primitives/Button";
@@ -27,8 +28,13 @@ import {
 export function UpdateBanner() {
   const status = useUpdateStatus();
   const skip = useSkipUpdateVersion();
+  const qc = useQueryClient();
   const [dismissed, setDismissed] = useState(false);
 
+  // Mount-once subscription: we use the query client to invalidate
+  // the status query rather than referencing `status` itself, so
+  // TanStack Query's per-render result identity changes don't churn
+  // the subscribe/unsubscribe cycle.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let unsub: (() => void) | undefined;
@@ -39,12 +45,12 @@ export function UpdateBanner() {
           // A fresh tick found a new release — un-dismiss so the
           // banner re-appears even if the user dismissed an older one.
           setDismissed(false);
-          status.refetch();
+          qc.invalidateQueries({ queryKey: ["update-status"] });
         },
       );
     })();
     return () => unsub?.();
-  }, [status]);
+  }, [qc]);
 
   if (dismissed) return null;
   if (!status.data) return null;

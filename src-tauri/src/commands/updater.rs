@@ -58,19 +58,36 @@ pub struct OpenReleaseUrlInput {
 }
 
 /// Open an http(s) URL in the user's default browser.  Used by the
-/// "View release" button on the update banner; any other URL is
-/// rejected so a malicious release body can't trick the renderer
-/// into spawning a `file:///` or `javascript:` URL.
+/// "View release" button on the update banner.  Defence-in-depth:
+/// the URL is parsed via [`url::Url::parse`] so a string like
+/// `https://\x00evil.com` (which would pass a naive prefix check
+/// but truncate at the OS-layer `open` call) is rejected.  We also
+/// enforce a `github.com` host allow-list since the only sanctioned
+/// caller is the updater service whose data flows from
+/// `https://api.github.com/repos/.../releases/latest`.
 #[tauri::command]
 #[specta::specta]
 pub async fn open_release_url(input: OpenReleaseUrlInput) -> Result<(), AppError> {
-    let lowered = input.url.to_ascii_lowercase();
-    if !lowered.starts_with("https://") {
+    let parsed = url::Url::parse(&input.url).map_err(|e| AppError::InvalidInput {
+        detail: format!("release URL parse: {e}"),
+    })?;
+    if parsed.scheme() != "https" {
         return Err(AppError::InvalidInput {
             detail: "release URL must be https".into(),
         });
     }
-    opener::open(&input.url).map_err(|e| AppError::Io {
+    let host = parsed.host_str().unwrap_or("");
+    if !(host == "github.com" || host.ends_with(".github.com")) {
+        return Err(AppError::InvalidInput {
+            detail: format!("release URL must be on github.com (got {host})"),
+        });
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(AppError::InvalidInput {
+            detail: "release URL must not carry credentials".into(),
+        });
+    }
+    opener::open(parsed.as_str()).map_err(|e| AppError::Io {
         detail: format!("opener: {e}"),
     })
 }
