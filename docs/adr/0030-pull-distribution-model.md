@@ -140,11 +140,22 @@ background if it's still `available`.  Details in ADR-0031.
 
 `0017_distribution_settings.sql` adds the `distribution_mode` (default
 `'pull'`), `sliding_window_size` (default 2), and `prefetch_enabled`
-(default 1) columns.  An app-startup detection step in `lib.rs` sets
-`distribution_mode = 'auto'` for installs where the upgrade path
-detected an existing populated `downloads` table — preserving
-backward compatibility.  New installs (empty downloads) get the
-default of `'pull'`.
+(default 1) columns.  The migration itself performs the
+backwards-compat detection: it issues
+`UPDATE app_settings SET distribution_mode = 'auto' WHERE EXISTS
+ (SELECT 1 FROM downloads WHERE state IN ('completed','queued','downloading'))`
+so an existing populated `downloads` table preserves v1.0
+auto-download behaviour.  New installs (empty downloads) keep the
+column DEFAULT of `'pull'`.  Doing the detection in the migration
+rather than at runtime means there is exactly one moment that
+decides — no startup race, no partial-state where the value differs
+from what the user sees in Settings.
+
+The `'downloading'` state is included in the detection because a
+crash-recovery row left in that state at upgrade time still
+indicates an existing install with content; without that branch a
+user who crashed mid-download in v1.0 would silently land in
+`'pull'` mode after upgrade.
 
 ## Alternatives considered
 
@@ -205,9 +216,10 @@ explanation in `docs/MIGRATION-v1-to-v2.md`.
 **Risks.**
 - An upgrade where the migration mis-detects "existing install" and
   flips a heavy user onto pull mode would feel like a regression.
-  Mitigation: detection check is `SELECT COUNT(*) FROM downloads
-  WHERE state = 'completed' OR state = 'queued'` — anything > 0 keeps
-  the user on `'auto'`.
+  Mitigation: the migration's detection check is the
+  `EXISTS (SELECT 1 FROM downloads WHERE state IN
+  ('completed','queued','downloading'))` predicate — any of those
+  states present in the legacy install pins the user on `'auto'`.
 - The pre-fetch hook (ADR-0031) racing with explicit user picks could
   produce duplicate `pick` calls; service-layer idempotency on
   `vods.status = 'available' → 'queued'` covers this.

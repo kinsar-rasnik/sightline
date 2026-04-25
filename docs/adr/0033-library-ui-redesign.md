@@ -52,18 +52,23 @@ context.
 A horizontal chip row above the grid:
 
 - **All** (default) — every status.
-- **Available** — `available` + `deleted` (un-picked content).
+- **Not downloaded** — `available` + `deleted` (un-picked content
+  the user can choose to pull).  Two-word label avoids overloading
+  the state-machine term `available` (which means specifically
+  `available`, not the union with `deleted`).
 - **Downloaded** — `queued` + `downloading` + `ready`.
 - **Watched** — `archived`.
 
-The filter is persisted in URL state (`?filter=available`) so that
-deep links and browser back/forward work as expected.
+The filter is persisted in URL state (`?filter=not-downloaded`,
+`?filter=downloaded`, `?filter=watched`) so that deep links and
+browser back/forward work as expected.
 
 ### Per-VOD quick actions
 
 A hover-revealed action row on each card:
 
-- **Available / Deleted:** "Download now" (calls `pickVod`).
+- **Available / Deleted (under the "Not downloaded" filter):**
+  "Download now" (calls `pickVod`).
 - **Queued:** "Cancel" (calls `unpickVod`, returns to available).
 - **Downloading:** "Cancel" (existing `cancelDownload`).
 - **Ready:** "Watch" + "Remove" (`removeVod` flips to `deleted`).
@@ -78,7 +83,7 @@ Per-filter empty state copy:
   to the Settings → Streamers section.
 - **All / streamers exist, no VODs:** "Polling for VODs… check back
   in a few minutes."
-- **Available / nothing available:** "All caught up.  When this
+- **Not downloaded / nothing available:** "All caught up.  When this
   streamer publishes a new VOD it'll appear here."
 - **Downloaded / nothing downloaded:** "Pick a VOD from Available to
   download it."

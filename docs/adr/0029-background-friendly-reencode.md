@@ -47,8 +47,9 @@ process (a game pegging one core) the niced process can still steal
 ### Layer 2 — adaptive suspend
 
 A monitor task samples system-wide CPU load every 5 seconds via the
-`sysinfo` crate's `global_cpu_info()`.  Two thresholds (defaults
-configurable per ADR-0028):
+`sysinfo` crate's `global_cpu_info()`.  Two thresholds, both
+persisted in `0015_quality_settings.sql` and exposed in Settings →
+Advanced (defaults shown):
 
 - **Suspend** when sustained load exceeds `cpu_throttle_high_threshold`
   (default 0.7) for ≥ 30 seconds.  Sends `SIGSTOP` (Unix) or

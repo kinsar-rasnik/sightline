@@ -127,8 +127,9 @@ banner asking the user to enable software encoding explicitly
 
 **Audio is never re-encoded.**  The yt-dlp format spec uses
 `bestaudio` and the ffmpeg pass uses `-c:a copy`.  This is a load-
-bearing invariant for GTA-RP — there is a regression test that hashes
-the audio stream pre/post re-encode and asserts equality.
+bearing invariant for GTA-RP — there is a regression test
+(`src-tauri/src/services/reencode.rs::tests::audio_passthrough_is_byte_exact`)
+that hashes the audio stream pre/post re-encode and asserts equality.
 
 ### Concurrency & throttle
 

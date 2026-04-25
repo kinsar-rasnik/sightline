@@ -43,17 +43,19 @@ that combines four inputs into two outputs.
 
    | Profile     | GB / hour |
    |-------------|-----------|
-   | 480p30      | 0.30      |
-   | 480p60      | 0.45      |
+   | 480p30 H.265 | 0.30     |
+   | 480p60 H.265 | 0.45     |
    | 720p30 H.265 (default) | 0.70      |
    | 720p60 H.265 | 1.10      |
    | 1080p30 H.265 | 1.50      |
    | 1080p60 H.265 | 2.20      |
    | source (1080p60 H.264) | 4.00      |
 
-   The H.265 column dominates the table because that's the encoder
-   we actually use for re-encode; only `source` keeps the upstream
-   H.264 bitrate.
+   Every non-source row assumes the H.265 re-encode path defined in
+   ADR-0028; only `source` keeps the upstream H.264 bitrate.  Quality
+   factors do not differentiate between hardware and software
+   encoders — the difference at the same profile is on the order of
+   5-10 % and folds into the forecast's documented fuzziness.
 
    These constants come from re-encoding 6 representative GTA-RP VODs
    at each preset and averaging the resulting file sizes per hour.

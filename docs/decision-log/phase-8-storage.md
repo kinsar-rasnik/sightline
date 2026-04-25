@@ -67,3 +67,29 @@ that hashes the audio stream pre/post and asserts byte-equality.
 Without this test, a bored future engineer adding "let's tune the
 audio bitrate" would silently destroy the GTA-RP listening experience.
 Test lives in `services/reencode.rs::tests::audio_passthrough_is_byte_exact`.
+
+---
+
+## 2026-04-26 — Sub-Phase A R-RC-01: 2 HIGH, 3 MEDIUM, 1 LOW resolved
+
+`code-reviewer` ran on commit `746f140`. Findings:
+
+- **HIGH** — ADR-0030 vs decision-log contradiction on detection
+  location (migration vs `lib.rs`). Fixed by rewriting ADR-0030
+  §Migration path to put detection inside the migration.
+- **HIGH** — ADR-0032 §Quality factor 480p rows missing codec label.
+  Fixed by adding `H.265` to both 480p rows and adding a footnote
+  on hardware/software encoder factor variance.
+- **MEDIUM** — ADR-0029 dangling reference "configurable per
+  ADR-0028". Replaced with explicit citation of
+  `0015_quality_settings.sql` plus Settings → Advanced exposure.
+- **MEDIUM** — ADR-0030 detection SQL omitted `'downloading'` state.
+  Expanded to `IN ('completed','queued','downloading')` to cover
+  v1.0 crash-recovery rows.
+- **MEDIUM** — ADR-0033 "Available" filter chip semantically inverted
+  the state-machine term. Renamed to "Not downloaded" with rationale
+  in the ADR.
+- **LOW** — ADR-0028 didn't name the audio-passthrough test path.
+  Added inline reference.
+
+R-RC-02 (re-review on the fix-diff) follows this commit.
