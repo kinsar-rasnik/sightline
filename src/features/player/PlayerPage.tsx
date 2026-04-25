@@ -28,6 +28,7 @@ import {
   DEFAULT_PLAYER_SHORTCUTS,
   usePlayerShortcuts,
 } from "./use-player-shortcuts";
+import { readVolume, writeVolume } from "./volume-memory";
 import {
   useMarkUnwatched,
   useMarkWatched,
@@ -99,7 +100,12 @@ export function PlayerPage({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(0);
-  const [volume, setVolume] = useState(1);
+  // Initial volume honours the Settings → Volume memory policy; per-VOD
+  // memory falls back to the global key so a fresh VOD doesn't override
+  // a softer setting the user has been on. See volume-memory.ts.
+  const [volume, setVolume] = useState(() =>
+    readVolume(prefs.volumeMemory, vodId)
+  );
   const [muted, setMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(prefs.defaultSpeed);
   const [showRemaining, setShowRemaining] = useState(false);
@@ -255,11 +261,15 @@ export function PlayerPage({
     v.currentTime = Math.min(v.duration, Math.max(0, v.duration * fraction));
   }, []);
 
-  const setVolumeClamped = useCallback((v: number) => {
-    const clamped = Math.min(1, Math.max(0, v));
-    setVolume(clamped);
-    if (videoRef.current) videoRef.current.volume = clamped;
-  }, []);
+  const setVolumeClamped = useCallback(
+    (v: number) => {
+      const clamped = Math.min(1, Math.max(0, v));
+      setVolume(clamped);
+      if (videoRef.current) videoRef.current.volume = clamped;
+      writeVolume(prefs.volumeMemory, vodId, clamped);
+    },
+    [prefs.volumeMemory, vodId]
+  );
 
   const adjustVolume = useCallback(
     (delta: number) => setVolumeClamped(volume + delta),
