@@ -1,0 +1,105 @@
+{
+  "$schema-note": "Shared test vectors for the wall-clock + overlap + drift math. Both the JS sync-math.test.ts and the Rust domain/sync.rs tests consume these to guarantee parity. See ADR-0022.",
+  "deepLink": [
+    {
+      "name": "simple offset",
+      "momentUnixSeconds": 1700000100,
+      "targetStreamStartedAt": 1700000000,
+      "targetDurationSeconds": 3600,
+      "expected": 100
+    },
+    {
+      "name": "negative offset clamps to zero",
+      "momentUnixSeconds": 1700000000,
+      "targetStreamStartedAt": 1700000030,
+      "targetDurationSeconds": 3600,
+      "expected": 0
+    },
+    {
+      "name": "offset past end clamps to duration",
+      "momentUnixSeconds": 1700010000,
+      "targetStreamStartedAt": 1700000000,
+      "targetDurationSeconds": 3600,
+      "expected": 3600
+    },
+    {
+      "name": "zero duration pins to zero",
+      "momentUnixSeconds": 1700000100,
+      "targetStreamStartedAt": 1700000000,
+      "targetDurationSeconds": 0,
+      "expected": 0
+    }
+  ],
+  "overlap": [
+    {
+      "name": "two fully overlapping",
+      "members": [
+        { "streamStartedAt": 100, "durationSeconds": 1000 },
+        { "streamStartedAt": 200, "durationSeconds": 1000 }
+      ],
+      "expectedStartAt": 200,
+      "expectedEndAt": 1100
+    },
+    {
+      "name": "disjoint",
+      "members": [
+        { "streamStartedAt": 0, "durationSeconds": 100 },
+        { "streamStartedAt": 500, "durationSeconds": 100 }
+      ],
+      "expectedStartAt": 500,
+      "expectedEndAt": 500
+    },
+    {
+      "name": "single member",
+      "members": [{ "streamStartedAt": 1000, "durationSeconds": 600 }],
+      "expectedStartAt": 1000,
+      "expectedEndAt": 1600
+    },
+    {
+      "name": "nested",
+      "members": [
+        { "streamStartedAt": 0, "durationSeconds": 1000 },
+        { "streamStartedAt": 200, "durationSeconds": 200 }
+      ],
+      "expectedStartAt": 200,
+      "expectedEndAt": 400
+    }
+  ],
+  "outOfRange": [
+    {
+      "name": "before start",
+      "moment": 1000,
+      "memberStart": 1500,
+      "memberDuration": 100,
+      "expected": true
+    },
+    {
+      "name": "after end",
+      "moment": 1300,
+      "memberStart": 1000,
+      "memberDuration": 100,
+      "expected": true
+    },
+    {
+      "name": "inside",
+      "moment": 1050,
+      "memberStart": 1000,
+      "memberDuration": 100,
+      "expected": false
+    },
+    {
+      "name": "exact start endpoint",
+      "moment": 1000,
+      "memberStart": 1000,
+      "memberDuration": 100,
+      "expected": false
+    },
+    {
+      "name": "exact end endpoint",
+      "moment": 1100,
+      "memberStart": 1000,
+      "memberDuration": 100,
+      "expected": false
+    }
+  ]
+}
