@@ -49,6 +49,9 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0018](docs/adr/0018-watch-progress-model.md) — Watch-progress data model + state machine
 - [ADR-0019](docs/adr/0019-asset-protocol-scope.md) — Asset protocol scope for local playback
 - [ADR-0020](docs/adr/0020-cross-streamer-deep-link.md) — Cross-streamer deep-link math (Phase 6 foundation)
+- [ADR-0021](docs/adr/0021-split-view-layout.md) — Multi-view Split-View v1 layout & UI topology
+- [ADR-0022](docs/adr/0022-sync-math-and-drift.md) — Multi-view sync math + 250 ms drift tolerance + setInterval loop
+- [ADR-0023](docs/adr/0023-group-wide-transport.md) — Multi-view group-wide transport + leader election
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.
