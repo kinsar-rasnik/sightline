@@ -8,9 +8,13 @@ If you'd rather build from source, the [Build from source](#build-from-source) s
 
 ## macOS
 
-1. Download the `.dmg` for your CPU:
-   - **Apple Silicon** (M1, M2, M3, M4): `Sightline_<version>_aarch64.dmg`
-   - **Intel**: `Sightline_<version>_x64.dmg`
+> **Intel Mac note.** GitHub retired the macos-13 hosted runner in
+> late 2025, so v1.0 ships an Apple-Silicon-only `.dmg`.  Intel Mac
+> users have a first-class build-from-source path — see
+> [Build from source](#build-from-source) below; the same `pnpm
+> tauri build` produces a working `.dmg` on an Intel host.
+
+1. Download `Sightline_<version>_aarch64.dmg` (Apple Silicon: M1, M2, M3, M4).
 2. Open the `.dmg` and drag **Sightline.app** to `/Applications`.
 3. **First launch** — choose one of:
    - **Right-click → Open** on the app icon, then click **Open** in the warning dialog. macOS remembers the choice; subsequent launches don't prompt.
