@@ -211,6 +211,25 @@ export type AppSettings = {
 	 *  constraint failure rather than silently skipping the transition.
 	 */
 	completionThreshold: number,
+	/**
+	 *  Drift tolerance in milliseconds for the multi-view sync loop.
+	 *  Persisted in `app_settings.sync_drift_threshold_ms` (migration
+	 *  0011); the column-level CHECK enforces `[50.0, 1000.0]`.  See
+	 *  ADR-0022 for the rationale on the default of 250 ms.
+	 */
+	syncDriftThresholdMs: number,
+	/**
+	 *  Layout the multi-view page mounts when the user opens a fresh
+	 *  session.  v1 only ships `Split5050`.
+	 */
+	syncDefaultLayout: SyncLayout,
+	/**
+	 *  Strategy for picking the leader pane when a session starts.
+	 *  `'first-opened'` selects pane index 0 (the primary VOD the
+	 *  user clicked).  Modeled as a string rather than an enum so v2
+	 *  can add `'longest'` etc. without an IPC contract bump.
+	 */
+	syncDefaultLeader: string,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -622,6 +641,9 @@ export type SettingsPatch = {
 	notifyFavoritesIngest?: boolean | null,
 	notifyStorageLow?: boolean | null,
 	completionThreshold?: number | null,
+	syncDriftThresholdMs?: number | null,
+	syncDefaultLayout?: SyncLayout | null,
+	syncDefaultLeader?: string | null,
 };
 
 /**
@@ -692,6 +714,15 @@ export type StreamerSummary = {
 export type StreamerUnfavoritedEvent = {
 	twitchUserId: string,
 };
+
+/**
+ *  Layout vocabulary mirroring `sync_sessions.layout`.  v1 only ships
+ *  one variant; the enum exists so the frontend's `MultiViewPage` can
+ *  switch on the discriminant when v2 adds PiP / 2x2 grid options.
+ */
+export type SyncLayout = 
+// Two panes, fixed 50/50 horizontal split.  ADR-0021.
+"split-50-50";
 
 /**
  *  Filter predicate for the `list_timeline` read. Each field is
