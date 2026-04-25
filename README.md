@@ -3,7 +3,7 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>Status: Phase 6 — multi-view sync engine. Pre-alpha. No binaries yet.</em>
+  <em>v1.0.0 — local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
 </p>
 
 ---
@@ -19,7 +19,7 @@ Sightline does exactly that:
 - **Filters to GTA V only** (configurable whitelist), so non-RP content doesn't clutter the library.
 - **Syncs playback** across two VODs to a shared wall-clock, so you can watch a heist from two perspectives at once.
 
-All data stays on your machine. No account required. No telemetry.
+All data stays on your machine. No account required. No telemetry. The optional update checker is **off by default** and, when enabled, makes one outbound GET per day to the public GitHub Releases API — no IDs, no hashes, no client identification beyond a `Sightline/<version>` User-Agent. See [ADR-0026](docs/adr/0026-update-checker.md).
 
 ---
 
@@ -50,9 +50,17 @@ All data stays on your machine. No account required. No telemetry.
 
 ### Pre-built binaries
 
-Pre-built installers (macOS `.dmg`, Windows `.msi`, Linux `.AppImage`) will be published to the [GitHub Releases](../../releases) page starting at **v0.2.0**. Phase 1 is source-only.
+Sightline ships unsigned binaries on the [GitHub Releases page](https://github.com/kinsar-rasnik/sightline/releases). Pick the asset for your OS:
+
+- **macOS** — `Sightline_<version>_aarch64.dmg` (Apple Silicon) or `Sightline_<version>_x64.dmg` (Intel)
+- **Windows** — `Sightline_<version>_x64-setup.exe` (NSIS) or `Sightline_<version>_x64_en-US.msi` (MSI)
+- **Linux** — `sightline_<version>_amd64.AppImage` (any modern distro) or `sightline_<version>_amd64.deb` (Debian/Ubuntu)
+
+First-launch warnings are expected (the binaries are unsigned — see [ADR-0025](docs/adr/0025-release-pipeline.md) for why we don't sign for v1). [`docs/INSTALL.md`](docs/INSTALL.md) walks through the per-OS workaround.
 
 ### Build from source
+
+Build-from-source is a first-class path — security-conscious users should prefer it.
 
 ```bash
 # Prerequisites: Rust 1.90+, Node 22+, pnpm 10+, platform Tauri deps
@@ -216,7 +224,9 @@ Deep dives:
 | 4     | Tray daemon, timeline foundation, UI polish, sidecar bundling | ✅             |
 | 5     | Player, watch progress, Continue Watching, cross-streamer deep link | ✅             |
 | 6     | Multi-View Sync engine (split-view v1) — two-pane wall-clock-locked playback with leader-led drift correction | ✅             |
-| 7     | Auto-cleanup, sub-only handling, polish, v1.0          | **Next**      |
+| 7     | Auto-cleanup, release pipeline, update checker, v1.0   | ✅             |
+
+Sightline is **complete at v1.0**. Post-1.0 follow-ups (Playwright + tauri-driver E2E coverage, per-pane volume persistence for sync sessions, PiP / >2-pane Multi-View, Homebrew / winget / AUR distribution, Code-signing) are tracked separately and won't block the v1 release cadence.
 
 ---
 

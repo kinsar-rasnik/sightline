@@ -409,6 +409,78 @@ ALTER TABLE app_settings
 
 ---
 
+## Phase 7 — Auto-cleanup + update checker
+
+Phase 7 lands schema version **14** via three migrations.  See
+[ADR-0024](adr/0024-auto-cleanup-service.md) and
+[ADR-0026](adr/0026-update-checker.md).
+
+```sql
+-- 0012_cleanup_settings.sql — cleanup-service knobs.
+ALTER TABLE app_settings
+    ADD COLUMN cleanup_enabled INTEGER NOT NULL DEFAULT 0
+        CHECK (cleanup_enabled IN (0, 1));
+ALTER TABLE app_settings
+    ADD COLUMN cleanup_high_watermark REAL NOT NULL DEFAULT 0.9
+        CHECK (cleanup_high_watermark >= 0.5
+               AND cleanup_high_watermark <= 0.99);
+ALTER TABLE app_settings
+    ADD COLUMN cleanup_low_watermark REAL NOT NULL DEFAULT 0.75
+        CHECK (cleanup_low_watermark >= 0.4
+               AND cleanup_low_watermark <= 0.95);
+ALTER TABLE app_settings
+    ADD COLUMN cleanup_schedule_hour INTEGER NOT NULL DEFAULT 3
+        CHECK (cleanup_schedule_hour >= 0
+               AND cleanup_schedule_hour <= 23);
+```
+
+The service-layer `update` handler additionally rejects
+`cleanup_low_watermark >= cleanup_high_watermark` so the History view
+never displays an inverted-watermark configuration.
+
+```sql
+-- 0013_cleanup_log.sql — audit trail for every cleanup run.
+CREATE TABLE cleanup_log (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at             INTEGER NOT NULL,
+    mode               TEXT    NOT NULL CHECK (mode IN (
+                           'scheduled', 'manual', 'dry_run'
+                       )),
+    freed_bytes        INTEGER NOT NULL DEFAULT 0,
+    deleted_vod_count  INTEGER NOT NULL DEFAULT 0,
+    status             TEXT    NOT NULL CHECK (status IN (
+                           'ok', 'partial', 'skipped', 'error'
+                       ))
+);
+CREATE INDEX idx_cleanup_log_ran_at ON cleanup_log(ran_at DESC);
+```
+
+```sql
+-- 0014_update_settings.sql — update-checker knobs.
+ALTER TABLE app_settings
+    ADD COLUMN update_check_enabled INTEGER NOT NULL DEFAULT 0
+        CHECK (update_check_enabled IN (0, 1));
+ALTER TABLE app_settings
+    ADD COLUMN update_check_last_run INTEGER;
+ALTER TABLE app_settings
+    ADD COLUMN update_check_skip_version TEXT;
+```
+
+### Notes
+
+- A successful cleanup deletes the file from `<final_path>` and flips
+  the `downloads` row to `failed_permanent` with
+  `last_error = 'CLEANED_UP'`. The `watch_progress` row is **not**
+  touched, so a re-download lands the user at their last position.
+- `cleanup_log` is append-only; the Settings UI's History view
+  consumes the most recent rows via
+  `commands.getCleanupHistory({ limit })`.
+- `update_check_last_run` is bumped on every check (success, no-op,
+  or error) so the once-per-day gate is honoured even across daemon
+  restarts.
+
+---
+
 ## Referential integrity and cascading
 
 - Deleting a streamer (hard delete path, rarely used) cascades to their VODs, download tasks, and watch progress.

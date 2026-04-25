@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## Project
-Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across streamers into one chronological, sync-playable timeline. Phase 1 (foundation) is active.
+Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across streamers into one chronological, sync-playable timeline. **v1.0.0 shipped 2026-04-25** — see `CHANGELOG.md` for the release notes; `docs/STATE.md` for the live operating snapshot.
 
 ## Stack
 - Rust 1.90 stable · Tauri 2 · Tokio · sqlx (SQLite) · reqwest
@@ -52,6 +52,10 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0021](docs/adr/0021-split-view-layout.md) — Multi-view Split-View v1 layout & UI topology
 - [ADR-0022](docs/adr/0022-sync-math-and-drift.md) — Multi-view sync math + 250 ms drift tolerance + setInterval loop
 - [ADR-0023](docs/adr/0023-group-wide-transport.md) — Multi-view group-wide transport + leader election
+- [ADR-0024](docs/adr/0024-auto-cleanup-service.md) — Auto-cleanup service (watermarks, retention, dry-run)
+- [ADR-0025](docs/adr/0025-release-pipeline.md) — Release pipeline (GitHub Releases, unsigned binaries)
+- [ADR-0026](docs/adr/0026-update-checker.md) — Update checker (opt-in, GitHub API, notification-only)
+- [ADR-0027](docs/adr/0027-asset-protocol-scope-narrowing.md) — Asset protocol scope narrowing (closes ADR-0019 follow-up)
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

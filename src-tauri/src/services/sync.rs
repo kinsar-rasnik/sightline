@@ -10,6 +10,7 @@
 //! [`crate::domain::sync`]; this module is the I/O layer.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -58,11 +59,23 @@ pub enum SyncEvent {
 
 pub type SyncEventSink = Arc<dyn Fn(SyncEvent) + Send + Sync>;
 
+/// Drift threshold cache TTL.  The renderer reports drift at up to
+/// 4 Hz, so a 30-second TTL means a settings change is reflected
+/// within at most ~30 ticks — visually imperceptible while still
+/// avoiding a per-tick DB read that Phase 6 surfaced as a hot path.
+const DRIFT_CACHE_TTL_SECONDS: i64 = 30;
+
 #[derive(Debug)]
 pub struct SyncService {
     db: Db,
     clock: Arc<dyn Clock>,
     settings: SettingsService,
+    /// Cached `sync_drift_threshold_ms` snapshot.  `f64::to_bits` so
+    /// we can store it in an `AtomicU64` (lock-free reads on the hot
+    /// path).  `cached_drift_at` is the unix-second wall-clock at
+    /// which the value was loaded; an unloaded cache uses i64::MIN.
+    cached_drift_bits: AtomicU64,
+    cached_drift_at: AtomicI64,
 }
 
 /// Per-pane VOD wall-clock range as the service reads it from `vods`.
@@ -90,7 +103,35 @@ impl SyncService {
             db,
             clock,
             settings,
+            cached_drift_bits: AtomicU64::new(0),
+            cached_drift_at: AtomicI64::new(i64::MIN),
         }
+    }
+
+    /// Read the current drift threshold, refreshing the cache when
+    /// the TTL has elapsed.  Returns the cached value on the hot
+    /// path (no DB round-trip).
+    async fn drift_threshold_ms(&self) -> Result<f64, AppError> {
+        let now = self.clock.unix_seconds();
+        let cached_at = self.cached_drift_at.load(Ordering::Acquire);
+        if cached_at != i64::MIN && now - cached_at < DRIFT_CACHE_TTL_SECONDS {
+            let bits = self.cached_drift_bits.load(Ordering::Acquire);
+            return Ok(f64::from_bits(bits));
+        }
+        let settings = self.settings.get().await?;
+        let value = settings.sync_drift_threshold_ms;
+        self.cached_drift_bits
+            .store(value.to_bits(), Ordering::Release);
+        self.cached_drift_at.store(now, Ordering::Release);
+        Ok(value)
+    }
+
+    /// Invalidate the drift cache so the next caller re-reads from
+    /// `app_settings`.  Called from `cmd_update_settings` whenever
+    /// `sync_drift_threshold_ms` could have changed; safe to call
+    /// when the value didn't change (no-op on next read).
+    pub fn invalidate_drift_cache(&self) {
+        self.cached_drift_at.store(i64::MIN, Ordering::Release);
     }
 
     /// Open a session with the given pane → vod_id mapping and the
@@ -380,8 +421,7 @@ impl SyncService {
                 detail: "drift measurement must contain finite numbers".into(),
             });
         }
-        let settings = self.settings.get().await?;
-        let threshold = settings.sync_drift_threshold_ms;
+        let threshold = self.drift_threshold_ms().await?;
         if measurement.drift_ms.abs() < threshold {
             return Ok(());
         }
@@ -982,5 +1022,28 @@ mod tests {
         let (svc, _db) = fixture().await;
         let err = svc.get_session(9999).await.unwrap_err();
         assert!(matches!(err, AppError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn drift_threshold_is_cached_after_first_read() {
+        let (svc, db) = fixture().await;
+        // First call seeds the cache from app_settings (default 250.0).
+        let v1 = svc.drift_threshold_ms().await.unwrap();
+        assert_eq!(v1, 250.0);
+
+        // Mutate the underlying row directly; without invalidation,
+        // a second call should still return the cached 250.0 because
+        // the wall-clock hasn't moved.
+        sqlx::query("UPDATE app_settings SET sync_drift_threshold_ms = 500.0 WHERE id = 1")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let v2 = svc.drift_threshold_ms().await.unwrap();
+        assert_eq!(v2, 250.0, "cache must hold the earlier value");
+
+        // Explicit invalidation forces a re-read.
+        svc.invalidate_drift_cache();
+        let v3 = svc.drift_threshold_ms().await.unwrap();
+        assert_eq!(v3, 500.0);
     }
 }

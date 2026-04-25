@@ -1,6 +1,7 @@
 //! Domain types. No I/O imports. No tokio, sqlx, or reqwest here.
 
 pub mod chapter;
+pub mod cleanup;
 pub mod deep_link;
 pub mod download_state;
 pub mod duration;

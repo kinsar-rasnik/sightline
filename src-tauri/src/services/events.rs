@@ -51,6 +51,13 @@ pub const EV_SYNC_LEADER_CHANGED: &str = "sync:leader_changed";
 pub const EV_SYNC_MEMBER_OUT_OF_RANGE: &str = "sync:member_out_of_range";
 pub const EV_SYNC_GROUP_CLOSED: &str = "sync:group_closed";
 
+// --- Phase 7: auto-cleanup + updater ---
+pub const EV_CLEANUP_PLAN_READY: &str = "cleanup:plan_ready";
+pub const EV_CLEANUP_EXECUTED: &str = "cleanup:executed";
+pub const EV_CLEANUP_DISK_PRESSURE: &str = "cleanup:disk_pressure";
+pub const EV_UPDATER_UPDATE_AVAILABLE: &str = "updater:update_available";
+pub const EV_UPDATER_CHECK_FAILED: &str = "updater:check_failed";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppReadyEvent {
@@ -282,4 +289,43 @@ pub struct SyncMemberOutOfRangeEvent {
 #[serde(rename_all = "camelCase")]
 pub struct SyncGroupClosedEvent {
     pub session_id: i64,
+}
+
+// --- Phase 7 event payloads ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupPlanReadyEvent {
+    pub candidate_count: i64,
+    pub projected_freed_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupExecutedEvent {
+    pub mode: String,
+    pub status: String,
+    pub freed_bytes: i64,
+    pub deleted_vod_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupDiskPressureEvent {
+    pub used_fraction: f64,
+    pub free_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterUpdateAvailableEvent {
+    pub version: String,
+    pub release_url: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterCheckFailedEvent {
+    pub reason: String,
 }

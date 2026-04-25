@@ -12,6 +12,7 @@ import { SettingsPage } from "@/features/settings/SettingsPage";
 import { StreamersPage } from "@/features/streamers/StreamersPage";
 import { TimelinePage } from "@/features/timeline/TimelinePage";
 import { NotificationsToaster } from "@/features/notifications/NotificationsToaster";
+import { UpdateBanner } from "@/features/updater/UpdateBanner";
 import {
   DEFAULT_SHORTCUTS,
   SHORTCUT_LABELS,
@@ -159,6 +160,8 @@ export function AppShell() {
           </div>
         </div>
       </header>
+
+      <UpdateBanner />
 
       <main
         id="main-content"

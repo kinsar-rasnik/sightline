@@ -23,18 +23,22 @@ use crate::infra::keychain::{Credentials, OsKeychainCredentials};
 use crate::infra::twitch::auth::TwitchAuthenticator;
 use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
+use crate::services::cleanup::{CleanupEvent, CleanupEventSink, CleanupService};
 use crate::services::credentials::CredentialsService;
 use crate::services::downloads::{
     DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
 };
 use crate::services::events::{
-    CredentialsChangedEvent, DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
-    DownloadStateChangedEvent, EV_CREDENTIALS_CHANGED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
-    EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
-    EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
-    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
+    CleanupDiskPressureEvent, CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
+    DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
+    EV_CLEANUP_DISK_PRESSURE, EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
+    EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED, EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED,
+    EV_LIBRARY_MIGRATING, EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED,
+    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED,
+    EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
     LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
-    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, VodIngestedEvent, VodUpdatedEvent,
+    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, UpdaterUpdateAvailableEvent,
+    VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -49,6 +53,7 @@ use crate::services::storage::StorageService;
 use crate::services::streamers::StreamerService;
 use crate::services::sync::{SyncEvent, SyncEventSink, SyncService};
 use crate::services::timeline_indexer::TimelineIndexerService;
+use crate::services::updater::{UpdaterEvent, UpdaterEventSink, UpdaterService};
 use crate::services::vods::VodReadService;
 use crate::services::watch_progress::{WatchEvent, WatchEventSink, WatchProgressService};
 
@@ -80,6 +85,12 @@ pub struct AppState {
     // --- Phase 6: multi-view sync engine ---
     pub sync: Arc<SyncService>,
     pub sync_sink: SyncEventSink,
+    // --- Phase 7: auto-cleanup ---
+    pub cleanup: Arc<CleanupService>,
+    pub cleanup_sink: CleanupEventSink,
+    // --- Phase 7: update checker ---
+    pub updater: Arc<UpdaterService>,
+    pub updater_sink: UpdaterEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -186,7 +197,8 @@ pub fn run() {
                     keychain.clone(),
                 ));
                 let helix = Arc::new(HelixClient::new(http.clone(), auth.clone(), clock.clone()));
-                let gql = Arc::new(GqlClient::new(http));
+                let gql = Arc::new(GqlClient::new(http.clone()));
+                let updater_http = http;
 
                 let settings_svc = Arc::new(SettingsService::new(db.clone(), clock.clone()));
                 let credentials_svc = Arc::new(CredentialsService::new(
@@ -304,6 +316,83 @@ pub fn run() {
                     }
                 });
 
+                // Phase 7: update-checker service + event sink.
+                let updater_svc = Arc::new(UpdaterService::new(
+                    updater_http,
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
+                let updater_handle = handle.clone();
+                let updater_sink: UpdaterEventSink = Arc::new(move |ev| match ev {
+                    UpdaterEvent::UpdateAvailable(info) => {
+                        let _ = updater_handle.emit(
+                            EV_UPDATER_UPDATE_AVAILABLE,
+                            UpdaterUpdateAvailableEvent {
+                                version: info.version,
+                                release_url: info.release_url,
+                                body: info.body,
+                            },
+                        );
+                    }
+                    UpdaterEvent::CheckFailed { reason } => {
+                        let _ = updater_handle.emit(
+                            crate::services::events::EV_UPDATER_CHECK_FAILED,
+                            crate::services::events::UpdaterCheckFailedEvent { reason },
+                        );
+                    }
+                });
+
+                // Phase 7: auto-cleanup service + event sink.
+                let cleanup_svc = Arc::new(CleanupService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                    Arc::new(SystemFreeSpace),
+                ));
+                let cleanup_handle = handle.clone();
+                let cleanup_sink: CleanupEventSink = Arc::new(move |ev| match ev {
+                    CleanupEvent::PlanReady {
+                        candidate_count,
+                        projected_freed_bytes,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_PLAN_READY,
+                            CleanupPlanReadyEvent {
+                                candidate_count,
+                                projected_freed_bytes,
+                            },
+                        );
+                    }
+                    CleanupEvent::Executed {
+                        mode,
+                        status,
+                        freed_bytes,
+                        deleted_vod_count,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_EXECUTED,
+                            CleanupExecutedEvent {
+                                mode: mode.as_db_str().to_owned(),
+                                status,
+                                freed_bytes,
+                                deleted_vod_count,
+                            },
+                        );
+                    }
+                    CleanupEvent::DiskPressure {
+                        used_fraction,
+                        free_bytes,
+                    } => {
+                        let _ = cleanup_handle.emit(
+                            EV_CLEANUP_DISK_PRESSURE,
+                            CleanupDiskPressureEvent {
+                                used_fraction,
+                                free_bytes,
+                            },
+                        );
+                    }
+                });
+
                 // Phase 6: multi-view sync engine + event sink.
                 let sync_svc = Arc::new(SyncService::new(
                     db.clone(),
@@ -397,6 +486,26 @@ pub fn run() {
                         .map(|s| s.window_close_behavior)
                         .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide),
                 )));
+
+                // Phase 7 (ADR-0027): extend the asset-protocol allow-list
+                // to cover the user-chosen library root, narrowing the
+                // webview's reachable surface to exactly what the player
+                // and grid need.  The static scope in tauri.conf.json
+                // covers the bundled-default path; this call extends it
+                // for users who picked a custom location.
+                if let Some(root) = initial_settings
+                    .as_ref()
+                    .and_then(|s| s.library_root.as_deref())
+                    && let Err(e) = handle
+                        .asset_protocol_scope()
+                        .allow_directory(root, true)
+                {
+                    warn!(
+                        error = %e,
+                        root,
+                        "asset protocol allow_directory failed"
+                    );
+                }
 
                 // Opportunistic backfill: if we have VODs but no intervals,
                 // populate the index in the background so the timeline UI
@@ -628,9 +737,60 @@ pub fn run() {
                     watch_progress_sink: watch_sink,
                     sync: sync_svc,
                     sync_sink,
+                    cleanup: cleanup_svc.clone(),
+                    cleanup_sink: cleanup_sink.clone(),
+                    updater: updater_svc.clone(),
+                    updater_sink: updater_sink.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });
+
+                // Phase 7: spawn the cleanup tray-daemon tick.  It
+                // wakes every 5 minutes, checks disk pressure, and
+                // — if `cleanup_enabled` and the schedule hour has
+                // crossed today — runs a plan + execute pass.
+                {
+                    let svc = cleanup_svc.clone();
+                    let sink = cleanup_sink.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            std::time::Duration::from_secs(300),
+                        );
+                        // First tick fires immediately; skip it so a
+                        // cold-start doesn't fight the migrator's
+                        // initialization for DB locks.
+                        interval.tick().await;
+                        loop {
+                            interval.tick().await;
+                            if let Err(e) = svc.schedule_tick(&sink).await {
+                                warn!(error = ?e, "cleanup tick failed");
+                            }
+                        }
+                    });
+                }
+
+                // Phase 7: spawn the update-checker tray-daemon tick.
+                // The 60-minute interval combined with the in-service
+                // 24h gate means GitHub's API sees at most one GET per
+                // day even on a long-running daemon.
+                {
+                    let svc = updater_svc.clone();
+                    let sink = updater_sink.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            std::time::Duration::from_secs(3600),
+                        );
+                        // Skip the immediate first tick so cold start
+                        // doesn't burn the user's once-per-day budget
+                        // before the user has had a chance to enable
+                        // the feature.
+                        interval.tick().await;
+                        loop {
+                            interval.tick().await;
+                            svc.schedule_tick(&sink).await;
+                        }
+                    });
+                }
 
                 // Install the tray icon + menu. Failure is non-fatal
                 // (headless CI, Linux without StatusNotifierItem), but

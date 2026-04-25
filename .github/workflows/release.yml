@@ -3,21 +3,33 @@ name: release
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to release (e.g. v0.1.0)
+        description: "Version tag to build (e.g. v1.0.0). The workflow checks out this ref."
         required: true
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+
 jobs:
+  # ------------------------------------------------------------------
+  # Per-target Tauri bundle.  Each runner produces the platform-native
+  # artifacts and uploads them as a build artifact for the release job
+  # to collect.  See ADR-0025.
+  # ------------------------------------------------------------------
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -30,9 +42,10 @@ jobs:
             runner: windows-latest
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,9 +55,6 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      # pnpm version is resolved from `packageManager` in package.json.
-      # Do not pass a `version:` input here — it would conflict and fail
-      # with ERR_PNPM_BAD_PM_VERSION. See hotfix-ci.md.
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
@@ -66,15 +76,113 @@ jobs:
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
-      - name: tauri build
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Sidecars (yt-dlp + ffmpeg) ship inside the bundle.  Use the
+      # SHA-256-verified scripts Phase 3 already wires into ci.yml so
+      # the release artifacts include the same pinned tools every dev
+      # build does (ADR-0013).
+      - name: cache sidecar downloads
+        uses: actions/cache@v5
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Sightline ${{ github.ref_name }}
-          releaseBody: |
-            Release notes are tracked in CHANGELOG.md. See docs/implementation-plan.md for phase context.
-          releaseDraft: true
+          path: ~/.cache/sightline-sidecars
+          key: sidecars-${{ runner.os }}-${{ hashFiles('scripts/sidecars.lock') }}
+
+      - name: bundle sidecars (unix)
+        if: matrix.runner != 'windows-latest'
+        shell: bash
+        run: ./scripts/bundle-sidecars.sh
+
+      - name: bundle sidecars (windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/bundle-sidecars.ps1
+
+      - name: tauri build
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: collect artifacts (unix)
+        if: matrix.runner != 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          shopt -s nullglob
+          for path in \
+              src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage \
+              src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb \
+              src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg ; do
+            cp "$path" release-artifacts/
+          done
+
+      - name: collect artifacts (windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          $patterns = @(
+            "src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi",
+            "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe"
+          )
+          foreach ($pattern in $patterns) {
+            Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName -Destination release-artifacts/ }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sightline-${{ matrix.target }}
+          path: release-artifacts/
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Aggregate the per-target artifacts and publish a GitHub Release.
+  # Markdown release notes are generated from Conventional Commits
+  # between the previous tag and this one (ADR-0025 §Release notes).
+  # ------------------------------------------------------------------
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: flatten asset directory
+        shell: bash
+        run: |
+          mkdir -p release-flat
+          find release-assets -type f \( \
+            -name '*.AppImage' -o \
+            -name '*.deb' -o \
+            -name '*.dmg' -o \
+            -name '*.msi' -o \
+            -name '*.exe' \
+          \) -print0 |
+            while IFS= read -r -d '' path; do
+              cp "$path" release-flat/
+            done
+          ls -la release-flat/
+
+      - name: generate release notes
+        shell: bash
+        run: |
+          ./scripts/release-notes.sh > release-notes.md
+          cat release-notes.md
+
+      - name: publish github release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release-notes.md
+          draft: false
           prerelease: false
-          args: --target ${{ matrix.target }}
+          make_latest: "true"
+          files: release-flat/*

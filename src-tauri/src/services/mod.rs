@@ -3,6 +3,7 @@
 //! infra sources; commands should never do so directly.
 
 pub mod autostart;
+pub mod cleanup;
 pub mod credentials;
 pub mod downloads;
 pub mod events;
@@ -20,5 +21,6 @@ pub mod sync;
 pub mod time_util;
 pub mod timeline_indexer;
 pub mod tray;
+pub mod updater;
 pub mod vods;
 pub mod watch_progress;

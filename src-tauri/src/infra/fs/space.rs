@@ -19,6 +19,12 @@ pub trait FreeSpaceProbe: Send + Sync + std::fmt::Debug {
     /// Return the free bytes available at `path` (which may or may
     /// not exist — we fall back to the deepest existing ancestor).
     async fn free_bytes(&self, path: &Path) -> Result<u64, AppError>;
+
+    /// Return the partition's total capacity in bytes at `path`.
+    /// Used by the auto-cleanup watermark math (Phase 7, ADR-0024) —
+    /// any probe that can answer `free_bytes` can answer `total_bytes`
+    /// because both come from the same `Disks` list.
+    async fn total_bytes(&self, path: &Path) -> Result<u64, AppError>;
 }
 
 #[derive(Debug, Default)]
@@ -30,32 +36,41 @@ impl FreeSpaceProbe for SystemFreeSpace {
         // sysinfo is synchronous; run it on the blocking pool so we
         // don't stall the runtime.
         let path = path.to_owned();
-        tokio::task::spawn_blocking(move || blocking_free_bytes(&path))
+        tokio::task::spawn_blocking(move || blocking_disk_lookup(&path).map(|(_, free)| free))
             .await
             .map_err(|e| AppError::Io {
                 detail: format!("free_bytes join: {e}"),
             })?
     }
+
+    async fn total_bytes(&self, path: &Path) -> Result<u64, AppError> {
+        let path = path.to_owned();
+        tokio::task::spawn_blocking(move || blocking_disk_lookup(&path).map(|(total, _)| total))
+            .await
+            .map_err(|e| AppError::Io {
+                detail: format!("total_bytes join: {e}"),
+            })?
+    }
 }
 
-fn blocking_free_bytes(path: &Path) -> Result<u64, AppError> {
+fn blocking_disk_lookup(path: &Path) -> Result<(u64, u64), AppError> {
     let target = canonicalise_for_lookup(path);
     let disks = Disks::new_with_refreshed_list();
-    let mut best_match: Option<(PathBuf, u64)> = None;
+    let mut best_match: Option<(PathBuf, u64, u64)> = None;
     for disk in disks.list() {
         let mount = disk.mount_point();
         if target.starts_with(mount) {
             let is_better = match &best_match {
                 None => true,
-                Some((current, _)) => mount.as_os_str().len() > current.as_os_str().len(),
+                Some((current, _, _)) => mount.as_os_str().len() > current.as_os_str().len(),
             };
             if is_better {
-                best_match = Some((mount.to_owned(), disk.available_space()));
+                best_match = Some((mount.to_owned(), disk.total_space(), disk.available_space()));
             }
         }
     }
     best_match
-        .map(|(_, bytes)| bytes)
+        .map(|(_, total, free)| (total, free))
         .ok_or_else(|| AppError::Io {
             detail: format!("no disk mount covers {}", target.display()),
         })
@@ -81,6 +96,9 @@ fn canonicalise_for_lookup(path: &Path) -> PathBuf {
 }
 
 /// In-memory probe for tests. Always returns the configured value.
+/// Total capacity defaults to `free_bytes * 4` so usage math stays
+/// well-defined; pre-Phase-7 callers that only exercised
+/// `free_bytes` continue to work unchanged.
 #[derive(Debug, Clone)]
 pub struct FakeFreeSpace(pub u64);
 
@@ -88,6 +106,28 @@ pub struct FakeFreeSpace(pub u64);
 impl FreeSpaceProbe for FakeFreeSpace {
     async fn free_bytes(&self, _path: &Path) -> Result<u64, AppError> {
         Ok(self.0)
+    }
+
+    async fn total_bytes(&self, _path: &Path) -> Result<u64, AppError> {
+        Ok(self.0.saturating_mul(4))
+    }
+}
+
+/// Probe with explicit total + free (Phase 7 watermark tests).
+#[derive(Debug, Clone)]
+pub struct FakeDiskUsage {
+    pub total: u64,
+    pub free: u64,
+}
+
+#[async_trait]
+impl FreeSpaceProbe for FakeDiskUsage {
+    async fn free_bytes(&self, _path: &Path) -> Result<u64, AppError> {
+        Ok(self.free)
+    }
+
+    async fn total_bytes(&self, _path: &Path) -> Result<u64, AppError> {
+        Ok(self.total)
     }
 }
 

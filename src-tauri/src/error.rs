@@ -87,6 +87,20 @@ pub enum AppError {
     /// logged; this variant reports the overall failure to the user.
     #[error("library migration error: {detail}")]
     LibraryMigration { detail: String },
+
+    // --- Phase 7: auto-cleanup + updater. ---
+    /// Auto-cleanup operation failed before any deletion happened
+    /// (settings inversion, missing library_root, no probe data).
+    /// Per-file deletion errors are aggregated into the
+    /// `partial`/`error` status on the cleanup_log row instead.
+    #[error("cleanup error: {detail}")]
+    Cleanup { detail: String },
+
+    /// Update-checker operation failed (network, parse, semver
+    /// comparison).  Surfaced verbatim to the Settings UI's
+    /// "Couldn't reach GitHub" line.
+    #[error("update check error: {detail}")]
+    UpdateCheck { detail: String },
 }
 
 impl From<sqlx::Error> for AppError {

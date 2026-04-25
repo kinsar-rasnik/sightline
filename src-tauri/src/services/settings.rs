@@ -75,6 +75,33 @@ pub struct AppSettings {
     /// user clicked).  Modeled as a string rather than an enum so v2
     /// can add `'longest'` etc. without an IPC contract bump.
     pub sync_default_leader: String,
+
+    // --- Phase 7: auto-cleanup. ---
+    /// Master toggle for the auto-cleanup service. Default off
+    /// (ADR-0024); the UI confirms the plan before flipping this on.
+    pub cleanup_enabled: bool,
+    /// Used-fraction threshold above which the scheduled tick runs
+    /// (default 0.9, range 0.5..=0.99).
+    pub cleanup_high_watermark: f64,
+    /// Used-fraction stop threshold the cleanup run targets
+    /// (default 0.75, range 0.4..=0.95). Service-layer write enforces
+    /// `cleanup_low_watermark < cleanup_high_watermark`.
+    pub cleanup_low_watermark: f64,
+    /// Local hour of day at which the scheduled tick fires
+    /// (default 3, range 0..=23).
+    pub cleanup_schedule_hour: i64,
+
+    // --- Phase 7: update checker. ---
+    /// Master toggle for the GitHub Releases update checker.
+    /// Default off (ADR-0026, privacy posture).
+    pub update_check_enabled: bool,
+    /// Wall-clock seconds at which the daily check most recently ran
+    /// (any outcome).  None when the user has just enabled the
+    /// feature.
+    pub update_check_last_run: Option<i64>,
+    /// Tag the user explicitly suppressed via "Skip this version".
+    /// Empty / cleared when the user clicks "Don't skip".
+    pub update_check_skip_version: Option<String>,
 }
 
 /// What happens when the user clicks the window close button.
@@ -181,6 +208,22 @@ pub struct SettingsPatch {
     pub sync_default_layout: Option<SyncLayout>,
     #[specta(optional)]
     pub sync_default_leader: Option<String>,
+
+    // --- Phase 7 fields. ---
+    #[specta(optional)]
+    pub cleanup_enabled: Option<bool>,
+    #[specta(optional)]
+    pub cleanup_high_watermark: Option<f64>,
+    #[specta(optional)]
+    pub cleanup_low_watermark: Option<f64>,
+    #[specta(optional)]
+    pub cleanup_schedule_hour: Option<i64>,
+    #[specta(optional)]
+    pub update_check_enabled: Option<bool>,
+    /// Pass an empty string to clear; pass `Some("v1.2.3")` to skip
+    /// that release.  Omit to leave unchanged.
+    #[specta(optional)]
+    pub update_check_skip_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -207,7 +250,10 @@ impl SettingsService {
                     notify_download_failed, notify_favorites_ingest,
                     notify_storage_low,
                     completion_threshold,
-                    sync_drift_threshold_ms, sync_default_layout, sync_default_leader
+                    sync_drift_threshold_ms, sync_default_layout, sync_default_leader,
+                    cleanup_enabled, cleanup_high_watermark, cleanup_low_watermark,
+                    cleanup_schedule_hour,
+                    update_check_enabled, update_check_last_run, update_check_skip_version
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -241,6 +287,13 @@ impl SettingsService {
         let sync_default_layout =
             SyncLayout::from_db_str(&sync_default_layout_str).unwrap_or(SyncLayout::Split5050);
         let sync_default_leader: String = row.try_get(24)?;
+        let cleanup_enabled_raw: i64 = row.try_get(25)?;
+        let cleanup_high_watermark: f64 = row.try_get(26)?;
+        let cleanup_low_watermark: f64 = row.try_get(27)?;
+        let cleanup_schedule_hour: i64 = row.try_get(28)?;
+        let update_check_enabled_raw: i64 = row.try_get(29)?;
+        let update_check_last_run: Option<i64> = row.try_get(30)?;
+        let update_check_skip_version: Option<String> = row.try_get(31)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -269,6 +322,13 @@ impl SettingsService {
             sync_drift_threshold_ms,
             sync_default_layout,
             sync_default_leader,
+            cleanup_enabled: cleanup_enabled_raw != 0,
+            cleanup_high_watermark,
+            cleanup_low_watermark,
+            cleanup_schedule_hour,
+            update_check_enabled: update_check_enabled_raw != 0,
+            update_check_last_run,
+            update_check_skip_version,
         })
     }
 
@@ -393,6 +453,43 @@ impl SettingsService {
             None => current.sync_default_leader,
         };
 
+        // --- Phase 7 cleanup knobs. ---
+        let cleanup_enabled = patch.cleanup_enabled.unwrap_or(current.cleanup_enabled);
+        let cleanup_high_watermark = patch
+            .cleanup_high_watermark
+            .unwrap_or(current.cleanup_high_watermark)
+            .clamp(0.5, 0.99);
+        let cleanup_low_watermark = patch
+            .cleanup_low_watermark
+            .unwrap_or(current.cleanup_low_watermark)
+            .clamp(0.4, 0.95);
+        if cleanup_low_watermark >= cleanup_high_watermark {
+            return Err(AppError::InvalidInput {
+                detail: format!(
+                    "cleanup_low_watermark ({cleanup_low_watermark:.2}) must be < cleanup_high_watermark ({cleanup_high_watermark:.2})"
+                ),
+            });
+        }
+        let cleanup_schedule_hour = patch
+            .cleanup_schedule_hour
+            .unwrap_or(current.cleanup_schedule_hour)
+            .clamp(0, 23);
+
+        // --- Phase 7 updater knobs.  ---
+        let update_check_enabled = patch
+            .update_check_enabled
+            .unwrap_or(current.update_check_enabled);
+        let update_check_skip_version = match patch.update_check_skip_version {
+            Some(value) => {
+                if value.is_empty() {
+                    None
+                } else {
+                    Some(value)
+                }
+            }
+            None => current.update_check_skip_version.clone(),
+        };
+
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
 
@@ -423,6 +520,12 @@ impl SettingsService {
                  sync_drift_threshold_ms = ?,
                  sync_default_layout = ?,
                  sync_default_leader = ?,
+                 cleanup_enabled = ?,
+                 cleanup_high_watermark = ?,
+                 cleanup_low_watermark = ?,
+                 cleanup_schedule_hour = ?,
+                 update_check_enabled = ?,
+                 update_check_skip_version = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -451,11 +554,33 @@ impl SettingsService {
         .bind(sync_drift_threshold_ms)
         .bind(sync_default_layout.as_db_str())
         .bind(&sync_default_leader)
+        .bind(if cleanup_enabled { 1 } else { 0 })
+        .bind(cleanup_high_watermark)
+        .bind(cleanup_low_watermark)
+        .bind(cleanup_schedule_hour)
+        .bind(if update_check_enabled { 1 } else { 0 })
+        .bind(&update_check_skip_version)
         .bind(now)
         .execute(self.db.pool())
         .await?;
 
         self.get().await
+    }
+
+    /// Persist the timestamp of the last update-check tick (any
+    /// outcome). Used by `UpdaterService` to enforce the once-per-day
+    /// gate without going through the full settings-update path.
+    pub async fn record_update_check_run(&self, when: i64) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE app_settings
+                SET update_check_last_run = ?, updated_at = ?
+              WHERE id = 1",
+        )
+        .bind(when)
+        .bind(self.clock.unix_seconds())
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 
     async fn read_credentials_meta(&self) -> Result<CredentialsStatus, AppError> {
@@ -886,5 +1011,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(low.max_concurrent_downloads, 1);
+    }
+
+    #[tokio::test]
+    async fn phase_7_cleanup_defaults() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        assert!(!s.cleanup_enabled);
+        assert!((s.cleanup_high_watermark - 0.9).abs() < f64::EPSILON);
+        assert!((s.cleanup_low_watermark - 0.75).abs() < f64::EPSILON);
+        assert_eq!(s.cleanup_schedule_hour, 3);
+    }
+
+    #[tokio::test]
+    async fn cleanup_low_must_be_less_than_high() {
+        let svc = setup().await;
+        let err = svc
+            .update(SettingsPatch {
+                cleanup_low_watermark: Some(0.95),
+                cleanup_high_watermark: Some(0.9),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn cleanup_high_watermark_clamped_to_50_99_pct() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                cleanup_high_watermark: Some(2.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((high.cleanup_high_watermark - 0.99).abs() < f64::EPSILON);
+        let low = svc
+            .update(SettingsPatch {
+                cleanup_high_watermark: Some(0.1),
+                cleanup_low_watermark: Some(0.4),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((low.cleanup_high_watermark - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn cleanup_schedule_hour_clamped_to_0_23() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                cleanup_schedule_hour: Some(99),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(high.cleanup_schedule_hour, 23);
+        let low = svc
+            .update(SettingsPatch {
+                cleanup_schedule_hour: Some(-5),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(low.cleanup_schedule_hour, 0);
+    }
+
+    #[tokio::test]
+    async fn phase_7_update_check_defaults() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        assert!(!s.update_check_enabled);
+        assert_eq!(s.update_check_last_run, None);
+        assert_eq!(s.update_check_skip_version, None);
+    }
+
+    #[tokio::test]
+    async fn update_check_skip_version_round_trip_and_clear() {
+        let svc = setup().await;
+        let with = svc
+            .update(SettingsPatch {
+                update_check_skip_version: Some("v1.2.3".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(with.update_check_skip_version.as_deref(), Some("v1.2.3"));
+        let cleared = svc
+            .update(SettingsPatch {
+                update_check_skip_version: Some(String::new()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(cleared.update_check_skip_version, None);
+    }
+
+    #[tokio::test]
+    async fn record_update_check_run_persists_timestamp() {
+        let svc = setup().await;
+        svc.record_update_check_run(1_234_567).await.unwrap();
+        let s = svc.get().await.unwrap();
+        assert_eq!(s.update_check_last_run, Some(1_234_567));
     }
 }
