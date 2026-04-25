@@ -17,10 +17,17 @@ import {
   DEFAULT_AUTO_PLAY_ON_OPEN,
   DEFAULT_COMPLETION_THRESHOLD,
   DEFAULT_PRE_ROLL_SECONDS,
+  FRAME_STEP_SECONDS,
   PROGRESS_WRITE_INTERVAL_MS,
   RESTART_THRESHOLD_SECONDS,
+  speedStepDown,
+  speedStepUp,
 } from "./player-constants";
 import { usePlaybackPrefs } from "./use-playback-prefs";
+import {
+  DEFAULT_PLAYER_SHORTCUTS,
+  usePlayerShortcuts,
+} from "./use-player-shortcuts";
 import {
   useMarkUnwatched,
   useMarkWatched,
@@ -330,146 +337,54 @@ export function PlayerPage({
   }, [markUnwatched, vodId]);
 
   // ---- Keyboard shortcuts ----
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const onKey = (e: KeyboardEvent) => {
-      // Ignore keypresses inside inputs (chapter menu filter, future
-      // search). The container's tabindex=-1 ensures focus can land
-      // here without interfering with child inputs.
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+  // Phase 6: dispatched via the shortcuts service so the customisation
+  // UI lands player keys on the same machinery as nav. The hook is
+  // container-scoped (not window-scoped like `useShortcuts`) so player
+  // actions only fire when the player has focus.
+  const frameStep = useCallback(
+    (direction: "back" | "forward") => {
+      if (videoRef.current) videoRef.current.pause();
+      seekBy(direction === "back" ? -FRAME_STEP_SECONDS : FRAME_STEP_SECONDS);
+    },
+    [seekBy]
+  );
+  const stepSpeed = useCallback(
+    (direction: "up" | "down") => {
+      setSpeed(
+        direction === "up"
+          ? speedStepUp(playbackRate)
+          : speedStepDown(playbackRate)
+      );
+    },
+    [playbackRate, setSpeed]
+  );
+  const closeAction = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      closePlayer();
+    }
+  }, [closePlayer]);
 
-      // Frame step (bracketed by shift) takes priority over the
-      // regular seek.
-      if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        e.preventDefault();
-        if (!videoRef.current) return;
-        videoRef.current.pause();
-        seekBy(e.key === "ArrowLeft" ? -1 / 30 : 1 / 30);
-        return;
-      }
-      switch (e.key) {
-        case " ":
-        case "k":
-        case "K":
-          e.preventDefault();
-          togglePlay();
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          seekBy(-5);
-          break;
-        case "ArrowRight":
-          e.preventDefault();
-          seekBy(5);
-          break;
-        case "j":
-        case "J":
-          e.preventDefault();
-          seekBy(-10);
-          break;
-        case "l":
-        case "L":
-          e.preventDefault();
-          seekBy(10);
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          adjustVolume(0.1);
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          adjustVolume(-0.1);
-          break;
-        case "m":
-        case "M":
-          e.preventDefault();
-          toggleMute();
-          break;
-        case "f":
-        case "F":
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case "p":
-        case "P":
-          e.preventDefault();
-          togglePip();
-          break;
-        case "c":
-          e.preventDefault();
-          jumpToChapter(e.shiftKey ? "prev" : "next");
-          break;
-        case "C":
-          e.preventDefault();
-          jumpToChapter("prev");
-          break;
-        case ",":
-          e.preventDefault();
-          if (videoRef.current) videoRef.current.pause();
-          seekBy(-1 / 30);
-          break;
-        case ".":
-          e.preventDefault();
-          if (videoRef.current) videoRef.current.pause();
-          seekBy(1 / 30);
-          break;
-        case "<":
-          e.preventDefault();
-          setSpeed(Math.max(0.5, playbackRate - 0.25));
-          break;
-        case ">":
-          e.preventDefault();
-          setSpeed(Math.min(2, playbackRate + 0.25));
-          break;
-        case "Escape":
-          if (document.fullscreenElement) {
-            void document.exitFullscreen();
-          } else {
-            closePlayer();
-          }
-          break;
-        case "0":
-        case "1":
-        case "2":
-        case "3":
-        case "4":
-        case "5":
-        case "6":
-        case "7":
-        case "8":
-        case "9": {
-          const digit = Number(e.key);
-          e.preventDefault();
-          seekToFraction(digit / 10);
-          break;
-        }
-      }
-    };
-    container.addEventListener("keydown", onKey);
-    container.focus();
-    return () => container.removeEventListener("keydown", onKey);
-  }, [
-    adjustVolume,
-    closePlayer,
-    jumpToChapter,
-    playbackRate,
+  usePlayerShortcuts(containerRef, DEFAULT_PLAYER_SHORTCUTS, {
+    playPause: togglePlay,
     seekBy,
-    seekToFraction,
-    setSpeed,
-    toggleFullscreen,
+    adjustVolume,
     toggleMute,
+    toggleFullscreen,
     togglePip,
-    togglePlay,
-  ]);
+    jumpChapter: jumpToChapter,
+    stepSpeed,
+    close: closeAction,
+    frameStep,
+    seekToFraction,
+  });
+
+  // Focus the container on mount so the keyboard hook sees keystrokes
+  // even before the user has clicked the video element.
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, []);
 
   const videoTitle = vod.data?.vod.title ?? "Player";
   const sortedChapters = useMemo<Chapter[]>(
