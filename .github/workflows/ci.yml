@@ -176,7 +176,6 @@ jobs:
   audit:
     name: audit (cargo · pnpm)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
 
@@ -195,17 +194,14 @@ jobs:
       - name: install cargo-audit
         run: cargo install cargo-audit --locked
 
-      # Informational only until Phase 7 (see ADR-0017). We fail only on
-      # *vulnerabilities* (cargo audit's default exit code ≠ 0), not on
-      # `unmaintained` or `unsound` warnings that are all transitive through
-      # Tauri's GTK3 tree and upstream-blocked.
+      # Phase 7 hardening (ADR-0017 follow-up).  Job is no longer
+      # `continue-on-error: true`: a new vulnerability outside the
+      # documented allow-list now blocks main.
       #
-      # Ignored advisories:
-      #   RUSTSEC-2023-0071 — rsa 0.9.10 Marvin Attack, reachable only via
-      #   sqlx-mysql. We disable `default-features` on sqlx so sqlx-mysql
-      #   is never compiled (verified: `cargo tree -i rsa` returns empty).
-      #   The crate stays in Cargo.lock as a dormant optional dep of sqlx,
-      #   which is why cargo-audit still flags it. No upstream fix exists.
+      # `--ignore <id>` is the enforcement surface; src-tauri/audit.toml
+      # is the registry of every accepted exception with its owner +
+      # expiry date.  Quarterly review: walk that file, drop expired
+      # rows or refresh their reasoning.
       - name: cargo audit
         working-directory: src-tauri
         run: cargo audit --ignore RUSTSEC-2023-0071

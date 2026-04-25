@@ -1,0 +1,34 @@
+# cargo-audit allow-list (Phase 7 hardening, ADR-0017 + ADR-0024..0027).
+#
+# Every entry below carries an owner and an expiry date.  Quarterly
+# re-evaluation policy: when an expiry passes, the entry must either be
+# resolved (drop the line) or refreshed with a new expiry (and the
+# reasoning re-validated against the upstream tracker).
+
+[advisories]
+ignore = [
+  # ----------------------------------------------------------------
+  # RUSTSEC-2023-0071 — Marvin Attack in `rsa 0.9.10`.
+  #
+  # Reachable only via `sqlx-mysql`.  Sightline disables sqlx
+  # default-features (see src-tauri/Cargo.toml) so sqlx-mysql is never
+  # compiled into the binary; `cargo tree -i rsa` returns empty.  The
+  # crate stays in Cargo.lock as a dormant optional dep that cargo
+  # records even with the feature disabled (cargo issue #13450), which
+  # is why cargo-audit still surfaces it.
+  #
+  # No upstream fix published.  Re-evaluate when rsa publishes a
+  # constant-time path or when sqlx 0.9 drops mysql from its default
+  # feature graph.
+  #
+  # Owner: kinsar-rasnik
+  # Expiry: 2026-10-25 (Phase 8 quarterly review)
+  "RUSTSEC-2023-0071",
+]
+
+# `unmaintained` and `unsound` advisories are surfaced in the job log
+# but do NOT fail CI by default — they're tracked through the Tauri
+# upstream's GTK3 → GTK4 migration (paste, proc-macro-error, fxhash,
+# rand 0.7, gtk-rs family).  When Tauri ships a release that drops
+# them, the job log goes quiet and we land the cleanup PR.  See
+# ADR-0017 §Costs accepted.
