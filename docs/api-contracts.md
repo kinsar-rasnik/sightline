@@ -153,6 +153,11 @@ Events use `tauri::Emitter::emit` from the Rust side. Topics and payload types a
 | `watch:progress_updated`      | `WatchProgressUpdatedEvent { vodId, positionSeconds, state }`     | Debounced DB-write tick for watch-progress (Phase 5). |
 | `watch:state_changed`         | `WatchStateChangedEvent { vodId, from, to }`                      | State-machine transition on a watch_progress row. |
 | `watch:completed`             | `WatchCompletedEvent { vodId }`                                   | One-shot on crossing the completion threshold. |
+| `sync:state_changed`          | `SyncStateChangedEvent { sessionId, status }`                     | Multi-view session opened, closed, or transport applied (Phase 6). |
+| `sync:drift_corrected`        | `SyncDriftCorrectedEvent { sessionId, paneIndex, driftMs, correctedToSeconds }` | Frontend reported a drift-correction above the configured threshold. |
+| `sync:leader_changed`         | `SyncLeaderChangedEvent { sessionId, leaderPaneIndex }`           | Multi-view leader pane was changed (open path or explicit promote). |
+| `sync:member_out_of_range`    | `SyncMemberOutOfRangeEvent { sessionId, paneIndex }`              | A follower pane fell outside the leader's wall-clock window. |
+| `sync:group_closed`           | `SyncGroupClosedEvent { sessionId }`                              | Multi-view session was closed (explicit or unmount). |
 
 Frontend cache invalidation subscribes to these in `src/lib/event-subscriptions.ts`. Topic names live in `src/ipc/index.ts::events` and `src-tauri/src/services/events.rs` as paired constants.
 
@@ -199,6 +204,56 @@ Frontend cache invalidation subscribes to these in `src/lib/event-subscriptions.
   OS value is authoritative when the two diverge.
 - `setAutostart({ enabled })` → `AutostartStatus`. Writes the OS
   registration + mirrors the OS readback into the DB.
+
+---
+
+## Phase 6 commands
+
+### Multi-view sync
+
+See [ADR-0021](adr/0021-split-view-layout.md),
+[ADR-0022](adr/0022-sync-math-and-drift.md), and
+[ADR-0023](adr/0023-group-wide-transport.md).
+
+- `openSyncGroup({ vodIds, layout })` → `SyncSession`. Opens a
+  multi-view session with exactly two distinct VOD ids. The default
+  `leaderPaneIndex` follows
+  `app_settings.sync_default_leader` (v1: pane 0). Emits
+  `sync:state_changed` (status: `active`) + `sync:leader_changed`.
+  Errors: `AppError::InvalidInput` (wrong pane count, duplicate VOD,
+  unknown VOD), `AppError::Db`.
+- `closeSyncGroup({ sessionId })` → `void`. Idempotent — emits
+  `sync:group_closed` regardless; `sync:state_changed` (status:
+  `closed`) only on the first close.
+- `getSyncGroup({ sessionId })` → `SyncSession`. Read-only snapshot;
+  errors with `AppError::NotFound` for unknown ids.
+- `setSyncLeader({ sessionId, paneIndex })` → `SyncSession`. Promotes
+  a pane to leader; emits `sync:leader_changed` only when the leader
+  actually changes. Rejects unknown panes / closed sessions with
+  `AppError::InvalidInput`.
+- `syncSeek({ sessionId, wallClockTs })` → `void`. Wall-clock seek;
+  emits `sync:state_changed`. Renderer fans the seek to all panes
+  via the wall-clock anchor math.
+- `syncPlay({ sessionId })` → `void`. Group-wide play; emits
+  `sync:state_changed`.
+- `syncPause({ sessionId })` → `void`. Group-wide pause; emits
+  `sync:state_changed`.
+- `syncSetSpeed({ sessionId, speed })` → `void`. Group-wide
+  playback rate change. Speed clamped to `[0.25, 4.0]` server-side;
+  emits `sync:state_changed`.
+- `getOverlap({ vodIds })` → `OverlapResult { vodIds, window }`.
+  Computes the wall-clock intersection of the given VODs without
+  needing an open session. Used by the renderer to bound the seek
+  slider.
+- `recordSyncDrift({ sessionId, measurement })` → `void`. Frontend
+  reports a drift-correction it just performed. Above-threshold
+  measurements (default 250 ms) emit `sync:drift_corrected`;
+  sub-threshold are dropped as noise.
+- `reportSyncOutOfRange({ sessionId, paneIndex })` → `void`.
+  Frontend reports that a follower pane has fallen out of the
+  leader's wall-clock window. Emits `sync:member_out_of_range`.
+
+Errors: `AppError::Db`, `AppError::InvalidInput`, `AppError::NotFound`.
 
 ---
 
