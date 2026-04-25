@@ -85,8 +85,8 @@ Per-filter empty state copy:
   in a few minutes."
 - **Not downloaded / nothing available:** "All caught up.  When this
   streamer publishes a new VOD it'll appear here."
-- **Downloaded / nothing downloaded:** "Pick a VOD from Available to
-  download it."
+- **Downloaded / nothing downloaded:** "Pick a VOD from the Not
+  downloaded filter to download it."
 - **Watched / nothing watched:** "Watched VODs appear here."
 
 ### Sort order
@@ -97,7 +97,9 @@ Sort options stay the same as v1.0; we don't remove any axes.
 ### Accessibility
 
 - Status badges include a screen-reader-only text label
-  (`<span class="sr-only">Available</span>`).
+  matching the state-machine value, not the filter chip label
+  (e.g. `<span class="sr-only">Available</span>` for a card in the
+  `available` state — independent of how the user filters the grid).
 - Quick-action buttons have explicit `aria-label`s describing the
   target VOD ("Download Episode 47 — 2026-04-25").
 - Keyboard tab order: card → primary CTA → secondary CTA → next
