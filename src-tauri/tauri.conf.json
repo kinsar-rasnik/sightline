@@ -24,7 +24,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src ipc: https:; font-src 'self' data:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost data: https:; media-src 'self' asset: https://asset.localhost data:; connect-src ipc: https:; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/sightline/library/**",
+          "$APPLOCALDATA/sightline/library/**",
+          "$HOME/Sightline/**"
+        ]
+      }
     }
   },
   "bundle": {

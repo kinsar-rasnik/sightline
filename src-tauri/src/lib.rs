@@ -487,6 +487,26 @@ pub fn run() {
                         .unwrap_or(crate::services::settings::WindowCloseBehavior::Hide),
                 )));
 
+                // Phase 7 (ADR-0027): extend the asset-protocol allow-list
+                // to cover the user-chosen library root, narrowing the
+                // webview's reachable surface to exactly what the player
+                // and grid need.  The static scope in tauri.conf.json
+                // covers the bundled-default path; this call extends it
+                // for users who picked a custom location.
+                if let Some(root) = initial_settings
+                    .as_ref()
+                    .and_then(|s| s.library_root.as_deref())
+                    && let Err(e) = handle
+                        .asset_protocol_scope()
+                        .allow_directory(root, true)
+                {
+                    warn!(
+                        error = %e,
+                        root,
+                        "asset protocol allow_directory failed"
+                    );
+                }
+
                 // Opportunistic backfill: if we have VODs but no intervals,
                 // populate the index in the background so the timeline UI
                 // renders quickly after upgrade.
