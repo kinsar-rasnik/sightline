@@ -9,6 +9,7 @@ use sqlx::Row;
 
 use crate::domain::library_layout::LibraryLayoutKind;
 use crate::domain::poll_schedule::PollIntervals;
+use crate::domain::quality::{EncoderCapability, VideoQualityProfile};
 use crate::domain::quality_preset::QualityPreset;
 use crate::domain::sync::SyncLayout;
 use crate::error::AppError;
@@ -102,6 +103,32 @@ pub struct AppSettings {
     /// Tag the user explicitly suppressed via "Skip this version".
     /// Empty / cleared when the user clicks "Don't skip".
     pub update_check_skip_version: Option<String>,
+
+    // --- Phase 8: quality pipeline (ADR-0028, ADR-0029). ---
+    /// Chosen video-quality profile.  Default `'720p30'` for new
+    /// installs.  Persisted in `app_settings.video_quality_profile`
+    /// (migration 0015).  Distinct from the legacy `quality_preset`
+    /// field which is preserved for backwards-compat with v1.0
+    /// installs that already have a value there.
+    pub video_quality_profile: VideoQualityProfile,
+    /// User opt-in for the libx265 / libx264 software fallback path.
+    /// Default false; the encoder-detection pass surfaces a warning
+    /// when no hardware encoder is available and this is off.
+    pub software_encode_opt_in: bool,
+    /// Detection result from `services::encoder_detection`.  `None`
+    /// when detection has never run (cold start or after the user
+    /// clicked "Re-detect" and the call hasn't yet completed).
+    pub encoder_capability: Option<EncoderCapability>,
+    /// Concurrency cap on background re-encodes.  Default 1, hard
+    /// clamped to 1..=2.
+    pub max_concurrent_reencodes: i64,
+    /// CPU-load fraction above which a sustained burst pauses the
+    /// in-flight ffmpeg encoder (ADR-0029).
+    pub cpu_throttle_high_threshold: f64,
+    /// CPU-load fraction below which a sustained idle period resumes
+    /// a paused encoder.  Strictly less than `cpu_throttle_high_threshold`
+    /// (service-layer rejects an inverted pair).
+    pub cpu_throttle_low_threshold: f64,
 }
 
 /// What happens when the user clicks the window close button.
@@ -224,6 +251,18 @@ pub struct SettingsPatch {
     /// that release.  Omit to leave unchanged.
     #[specta(optional)]
     pub update_check_skip_version: Option<String>,
+
+    // --- Phase 8 fields. ---
+    #[specta(optional)]
+    pub video_quality_profile: Option<VideoQualityProfile>,
+    #[specta(optional)]
+    pub software_encode_opt_in: Option<bool>,
+    #[specta(optional)]
+    pub max_concurrent_reencodes: Option<i64>,
+    #[specta(optional)]
+    pub cpu_throttle_high_threshold: Option<f64>,
+    #[specta(optional)]
+    pub cpu_throttle_low_threshold: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -253,7 +292,10 @@ impl SettingsService {
                     sync_drift_threshold_ms, sync_default_layout, sync_default_leader,
                     cleanup_enabled, cleanup_high_watermark, cleanup_low_watermark,
                     cleanup_schedule_hour,
-                    update_check_enabled, update_check_last_run, update_check_skip_version
+                    update_check_enabled, update_check_last_run, update_check_skip_version,
+                    video_quality_profile, software_encode_opt_in, encoder_capability,
+                    max_concurrent_reencodes,
+                    cpu_throttle_high_threshold, cpu_throttle_low_threshold
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -294,6 +336,18 @@ impl SettingsService {
         let update_check_enabled_raw: i64 = row.try_get(29)?;
         let update_check_last_run: Option<i64> = row.try_get(30)?;
         let update_check_skip_version: Option<String> = row.try_get(31)?;
+        let video_quality_profile_str: String = row.try_get(32)?;
+        let video_quality_profile = VideoQualityProfile::from_db_str(&video_quality_profile_str)
+            .unwrap_or(VideoQualityProfile::P720p30);
+        let software_encode_opt_in_raw: i64 = row.try_get(33)?;
+        let encoder_capability_json: Option<String> = row.try_get(34)?;
+        let encoder_capability = match encoder_capability_json {
+            Some(json) => serde_json::from_str(&json).ok(),
+            None => None,
+        };
+        let max_concurrent_reencodes: i64 = row.try_get(35)?;
+        let cpu_throttle_high_threshold: f64 = row.try_get(36)?;
+        let cpu_throttle_low_threshold: f64 = row.try_get(37)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -329,6 +383,12 @@ impl SettingsService {
             update_check_enabled: update_check_enabled_raw != 0,
             update_check_last_run,
             update_check_skip_version,
+            video_quality_profile,
+            software_encode_opt_in: software_encode_opt_in_raw != 0,
+            encoder_capability,
+            max_concurrent_reencodes,
+            cpu_throttle_high_threshold,
+            cpu_throttle_low_threshold,
         })
     }
 
@@ -490,6 +550,36 @@ impl SettingsService {
             None => current.update_check_skip_version.clone(),
         };
 
+        // --- Phase 8 quality pipeline knobs (ADR-0028, ADR-0029). ---
+        let video_quality_profile = patch
+            .video_quality_profile
+            .unwrap_or(current.video_quality_profile);
+        let software_encode_opt_in = patch
+            .software_encode_opt_in
+            .unwrap_or(current.software_encode_opt_in);
+        let max_concurrent_reencodes = patch
+            .max_concurrent_reencodes
+            .unwrap_or(current.max_concurrent_reencodes)
+            .clamp(1, 2);
+        let cpu_throttle_high_threshold = patch
+            .cpu_throttle_high_threshold
+            .unwrap_or(current.cpu_throttle_high_threshold)
+            .clamp(0.5, 0.9);
+        let cpu_throttle_low_threshold = patch
+            .cpu_throttle_low_threshold
+            .unwrap_or(current.cpu_throttle_low_threshold)
+            .clamp(0.3, 0.8);
+        // Anti-thrash: low must be at least 5 percentage points
+        // below high. Mirrors `ThrottleThresholds::is_well_formed`
+        // and the pattern used by `cleanup_low_watermark < cleanup_high_watermark`.
+        if cpu_throttle_high_threshold - cpu_throttle_low_threshold < 0.05 {
+            return Err(AppError::InvalidInput {
+                detail: format!(
+                    "cpu_throttle_low_threshold ({cpu_throttle_low_threshold:.2}) must be at least 0.05 below cpu_throttle_high_threshold ({cpu_throttle_high_threshold:.2})"
+                ),
+            });
+        }
+
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
 
@@ -526,6 +616,11 @@ impl SettingsService {
                  cleanup_schedule_hour = ?,
                  update_check_enabled = ?,
                  update_check_skip_version = ?,
+                 video_quality_profile = ?,
+                 software_encode_opt_in = ?,
+                 max_concurrent_reencodes = ?,
+                 cpu_throttle_high_threshold = ?,
+                 cpu_throttle_low_threshold = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -560,11 +655,39 @@ impl SettingsService {
         .bind(cleanup_schedule_hour)
         .bind(if update_check_enabled { 1 } else { 0 })
         .bind(&update_check_skip_version)
+        .bind(video_quality_profile.as_db_str())
+        .bind(if software_encode_opt_in { 1 } else { 0 })
+        .bind(max_concurrent_reencodes)
+        .bind(cpu_throttle_high_threshold)
+        .bind(cpu_throttle_low_threshold)
         .bind(now)
         .execute(self.db.pool())
         .await?;
 
         self.get().await
+    }
+
+    /// Persist the encoder-capability JSON detected by
+    /// [`crate::services::encoder_detection::EncoderDetectionService`].
+    /// Pure write — does not touch any other column, so it stays
+    /// outside the main `update` flow which would otherwise need a
+    /// new SettingsPatch field for an internal-only blob.
+    pub async fn record_encoder_capability(
+        &self,
+        capability: &EncoderCapability,
+    ) -> Result<(), AppError> {
+        let json = serde_json::to_string(capability).map_err(AppError::from)?;
+        let now = self.clock.unix_seconds();
+        sqlx::query(
+            "UPDATE app_settings
+                SET encoder_capability = ?, updated_at = ?
+              WHERE id = 1",
+        )
+        .bind(&json)
+        .bind(now)
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 
     /// Persist the timestamp of the last update-check tick (any
@@ -1116,5 +1239,100 @@ mod tests {
         svc.record_update_check_run(1_234_567).await.unwrap();
         let s = svc.get().await.unwrap();
         assert_eq!(s.update_check_last_run, Some(1_234_567));
+    }
+
+    // --- Phase 8 quality-pipeline tests (ADR-0028, ADR-0029). ---
+
+    #[tokio::test]
+    async fn phase_8_quality_defaults() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        assert_eq!(s.video_quality_profile, VideoQualityProfile::P720p30);
+        assert!(!s.software_encode_opt_in);
+        assert!(s.encoder_capability.is_none());
+        assert_eq!(s.max_concurrent_reencodes, 1);
+        assert!((s.cpu_throttle_high_threshold - 0.7).abs() < 1e-6);
+        assert!((s.cpu_throttle_low_threshold - 0.5).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn quality_profile_round_trips_via_settings() {
+        let svc = setup().await;
+        let out = svc
+            .update(SettingsPatch {
+                video_quality_profile: Some(VideoQualityProfile::P1080p60),
+                software_encode_opt_in: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.video_quality_profile, VideoQualityProfile::P1080p60);
+        assert!(out.software_encode_opt_in);
+    }
+
+    #[tokio::test]
+    async fn max_concurrent_reencodes_clamped_to_1_2() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                max_concurrent_reencodes: Some(99),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(high.max_concurrent_reencodes, 2);
+        let low = svc
+            .update(SettingsPatch {
+                max_concurrent_reencodes: Some(0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(low.max_concurrent_reencodes, 1);
+    }
+
+    #[tokio::test]
+    async fn cpu_throttle_thresholds_clamp_into_range() {
+        let svc = setup().await;
+        let out = svc
+            .update(SettingsPatch {
+                cpu_throttle_high_threshold: Some(2.0),
+                cpu_throttle_low_threshold: Some(-1.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((out.cpu_throttle_high_threshold - 0.9).abs() < 1e-6);
+        assert!((out.cpu_throttle_low_threshold - 0.3).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn cpu_throttle_low_must_be_below_high_by_5pp() {
+        let svc = setup().await;
+        let err = svc
+            .update(SettingsPatch {
+                cpu_throttle_high_threshold: Some(0.6),
+                cpu_throttle_low_threshold: Some(0.59),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn record_encoder_capability_round_trip() {
+        use crate::domain::quality::{EncoderCapability, EncoderKind};
+        let svc = setup().await;
+        let cap = EncoderCapability {
+            primary: EncoderKind::VideoToolbox,
+            available: vec![EncoderKind::VideoToolbox, EncoderKind::Software],
+            h265: true,
+            h264: true,
+            tested_at: 1_700_000_000,
+        };
+        svc.record_encoder_capability(&cap).await.unwrap();
+        let out = svc.get().await.unwrap();
+        assert_eq!(out.encoder_capability, Some(cap));
     }
 }
