@@ -62,13 +62,17 @@ Errors: `AppError::NotFound`, `AppError::Db`.
 - `getSettings()` → `AppSettings`. Extended in Phase 3 with
   `libraryRoot`, `libraryLayout` (`plex` | `flat`), `stagingPath`,
   `maxConcurrentDownloads`, `bandwidthLimitBps` (`null` = unlimited),
-  `qualityPreset`, `autoUpdateYtDlp`.
+  `qualityPreset`, `autoUpdateYtDlp`. Phase 6 adds
+  `completionThreshold` (number in `[0.7, 1.0]`, default `0.9`) used
+  by `cmd_update_watch_progress` to drive the `in_progress →
+  completed` transition (migration 0009).
 - `updateSettings(patch)` → `AppSettings`. Any subset of the top-level
   fields may be supplied. Intervals are normalized monotonically
   (`floor ≤ recent ≤ ceiling`); `concurrencyCap` clamped to [1, 16];
   `firstBackfillLimit` clamped to [1, 500]; `maxConcurrentDownloads`
   clamped to [1, 5]; `bandwidthLimitBps = -1` is a sentinel for
-  "clear the cap" (stored as `null`).
+  "clear the cap" (stored as `null`); `completionThreshold` clamped
+  to `[0.7, 1.0]`.
 
 Errors: `AppError::Db`, `AppError::Parse`.
 

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/primitives/Button";
+import { useSettings } from "@/features/settings/use-settings";
 import {
   commands,
   type Chapter,
@@ -16,10 +17,19 @@ import {
   DEFAULT_AUTO_PLAY_ON_OPEN,
   DEFAULT_COMPLETION_THRESHOLD,
   DEFAULT_PRE_ROLL_SECONDS,
+  FRAME_STEP_SECONDS,
   PROGRESS_WRITE_INTERVAL_MS,
   RESTART_THRESHOLD_SECONDS,
+  computeInitialSeekSeconds,
+  speedStepDown,
+  speedStepUp,
 } from "./player-constants";
 import { usePlaybackPrefs } from "./use-playback-prefs";
+import {
+  DEFAULT_PLAYER_SHORTCUTS,
+  usePlayerShortcuts,
+} from "./use-player-shortcuts";
+import { readVolume, writeVolume } from "./volume-memory";
 import {
   useMarkUnwatched,
   useMarkWatched,
@@ -57,6 +67,14 @@ export function PlayerPage({
   const lastWriteRef = useRef(0);
   const closePlayer = useNavStore((s) => s.closePlayer);
   const prefs = usePlaybackPrefs();
+  // Source of truth for the completion threshold lives in
+  // `app_settings.completion_threshold` (migration 0009) so the
+  // backend state machine + this overlay agree. Falling back to the
+  // compiled-in default keeps the chrome stable while the settings
+  // query is still loading.
+  const settings = useSettings();
+  const completionThreshold =
+    settings.data?.completionThreshold ?? DEFAULT_COMPLETION_THRESHOLD;
   // If the caller explicitly passed `autoplay`, honour that (deep link
   // scenario); otherwise fall back to the user preference.
   const effectiveAutoplay =
@@ -83,7 +101,12 @@ export function PlayerPage({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(0);
-  const [volume, setVolume] = useState(1);
+  // Initial volume honours the Settings → Volume memory policy; per-VOD
+  // memory falls back to the global key so a fresh VOD doesn't override
+  // a softer setting the user has been on. See volume-memory.ts.
+  const [volume, setVolume] = useState(() =>
+    readVolume(prefs.volumeMemory, vodId)
+  );
   const [muted, setMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(prefs.defaultSpeed);
   const [showRemaining, setShowRemaining] = useState(false);
@@ -102,32 +125,26 @@ export function PlayerPage({
         : (source.data?.state ?? "missing");
   const resolvedUrl = source.data?.path ? assetUrl(source.data.path) : "";
 
-  // On first load: seek to the right position (pre-roll applied
-  // backend-side when we call update; the explicit deep-link value
-  // wins, otherwise we apply the stored position minus pre-roll).
+  // On first load: seek to the right position. Seek math lives in
+  // `computeInitialSeekSeconds` so it's testable without mounting the
+  // player; this effect just runs the calculation and applies the
+  // result imperatively.
   useEffect(() => {
     if (hasSeekedRef.current) return;
     const video = videoRef.current;
     if (!video || sourceState !== "ready") return;
     if (!Number.isFinite(video.duration) || video.duration === 0) return;
 
-    const stored = progress.data?.positionSeconds;
-    const preRoll =
-      typeof prefs.preRollSeconds === "number"
-        ? prefs.preRollSeconds
-        : DEFAULT_PRE_ROLL_SECONDS;
-    let target: number;
-    if (typeof initialPositionSeconds === "number") {
-      target = Math.min(video.duration, Math.max(0, initialPositionSeconds));
-    } else if (typeof stored === "number" && stored > 0) {
-      if (stored >= video.duration - RESTART_THRESHOLD_SECONDS) {
-        target = 0;
-      } else {
-        target = Math.max(0, stored - preRoll);
-      }
-    } else {
-      target = 0;
-    }
+    const target = computeInitialSeekSeconds({
+      durationSeconds: video.duration,
+      storedPositionSeconds: progress.data?.positionSeconds,
+      initialPositionSeconds,
+      preRollSeconds:
+        typeof prefs.preRollSeconds === "number"
+          ? prefs.preRollSeconds
+          : DEFAULT_PRE_ROLL_SECONDS,
+      restartThresholdSeconds: RESTART_THRESHOLD_SECONDS,
+    });
     video.currentTime = target;
     hasSeekedRef.current = true;
   }, [
@@ -239,11 +256,15 @@ export function PlayerPage({
     v.currentTime = Math.min(v.duration, Math.max(0, v.duration * fraction));
   }, []);
 
-  const setVolumeClamped = useCallback((v: number) => {
-    const clamped = Math.min(1, Math.max(0, v));
-    setVolume(clamped);
-    if (videoRef.current) videoRef.current.volume = clamped;
-  }, []);
+  const setVolumeClamped = useCallback(
+    (v: number) => {
+      const clamped = Math.min(1, Math.max(0, v));
+      setVolume(clamped);
+      if (videoRef.current) videoRef.current.volume = clamped;
+      writeVolume(prefs.volumeMemory, vodId, clamped);
+    },
+    [prefs.volumeMemory, vodId]
+  );
 
   const adjustVolume = useCallback(
     (delta: number) => setVolumeClamped(volume + delta),
@@ -321,146 +342,54 @@ export function PlayerPage({
   }, [markUnwatched, vodId]);
 
   // ---- Keyboard shortcuts ----
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const onKey = (e: KeyboardEvent) => {
-      // Ignore keypresses inside inputs (chapter menu filter, future
-      // search). The container's tabindex=-1 ensures focus can land
-      // here without interfering with child inputs.
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+  // Phase 6: dispatched via the shortcuts service so the customisation
+  // UI lands player keys on the same machinery as nav. The hook is
+  // container-scoped (not window-scoped like `useShortcuts`) so player
+  // actions only fire when the player has focus.
+  const frameStep = useCallback(
+    (direction: "back" | "forward") => {
+      if (videoRef.current) videoRef.current.pause();
+      seekBy(direction === "back" ? -FRAME_STEP_SECONDS : FRAME_STEP_SECONDS);
+    },
+    [seekBy]
+  );
+  const stepSpeed = useCallback(
+    (direction: "up" | "down") => {
+      setSpeed(
+        direction === "up"
+          ? speedStepUp(playbackRate)
+          : speedStepDown(playbackRate)
+      );
+    },
+    [playbackRate, setSpeed]
+  );
+  const closeAction = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      closePlayer();
+    }
+  }, [closePlayer]);
 
-      // Frame step (bracketed by shift) takes priority over the
-      // regular seek.
-      if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        e.preventDefault();
-        if (!videoRef.current) return;
-        videoRef.current.pause();
-        seekBy(e.key === "ArrowLeft" ? -1 / 30 : 1 / 30);
-        return;
-      }
-      switch (e.key) {
-        case " ":
-        case "k":
-        case "K":
-          e.preventDefault();
-          togglePlay();
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          seekBy(-5);
-          break;
-        case "ArrowRight":
-          e.preventDefault();
-          seekBy(5);
-          break;
-        case "j":
-        case "J":
-          e.preventDefault();
-          seekBy(-10);
-          break;
-        case "l":
-        case "L":
-          e.preventDefault();
-          seekBy(10);
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          adjustVolume(0.1);
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          adjustVolume(-0.1);
-          break;
-        case "m":
-        case "M":
-          e.preventDefault();
-          toggleMute();
-          break;
-        case "f":
-        case "F":
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case "p":
-        case "P":
-          e.preventDefault();
-          togglePip();
-          break;
-        case "c":
-          e.preventDefault();
-          jumpToChapter(e.shiftKey ? "prev" : "next");
-          break;
-        case "C":
-          e.preventDefault();
-          jumpToChapter("prev");
-          break;
-        case ",":
-          e.preventDefault();
-          if (videoRef.current) videoRef.current.pause();
-          seekBy(-1 / 30);
-          break;
-        case ".":
-          e.preventDefault();
-          if (videoRef.current) videoRef.current.pause();
-          seekBy(1 / 30);
-          break;
-        case "<":
-          e.preventDefault();
-          setSpeed(Math.max(0.5, playbackRate - 0.25));
-          break;
-        case ">":
-          e.preventDefault();
-          setSpeed(Math.min(2, playbackRate + 0.25));
-          break;
-        case "Escape":
-          if (document.fullscreenElement) {
-            void document.exitFullscreen();
-          } else {
-            closePlayer();
-          }
-          break;
-        case "0":
-        case "1":
-        case "2":
-        case "3":
-        case "4":
-        case "5":
-        case "6":
-        case "7":
-        case "8":
-        case "9": {
-          const digit = Number(e.key);
-          e.preventDefault();
-          seekToFraction(digit / 10);
-          break;
-        }
-      }
-    };
-    container.addEventListener("keydown", onKey);
-    container.focus();
-    return () => container.removeEventListener("keydown", onKey);
-  }, [
-    adjustVolume,
-    closePlayer,
-    jumpToChapter,
-    playbackRate,
+  usePlayerShortcuts(containerRef, DEFAULT_PLAYER_SHORTCUTS, {
+    playPause: togglePlay,
     seekBy,
-    seekToFraction,
-    setSpeed,
-    toggleFullscreen,
+    adjustVolume,
     toggleMute,
+    toggleFullscreen,
     togglePip,
-    togglePlay,
-  ]);
+    jumpChapter: jumpToChapter,
+    stepSpeed,
+    close: closeAction,
+    frameStep,
+    seekToFraction,
+  });
+
+  // Focus the container on mount so the keyboard hook sees keystrokes
+  // even before the user has clicked the video element.
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, []);
 
   const videoTitle = vod.data?.vod.title ?? "Player";
   const sortedChapters = useMemo<Chapter[]>(
@@ -584,7 +513,7 @@ export function PlayerPage({
             showRemaining={showRemaining}
             isFullscreen={isFullscreen}
             pipActive={pipActive}
-            completionThreshold={prefs.completionThreshold ?? DEFAULT_COMPLETION_THRESHOLD}
+            completionThreshold={completionThreshold}
             resumeSeconds={progress.data?.positionSeconds ?? null}
             onTogglePlay={togglePlay}
             onSeekTo={(seconds) => {

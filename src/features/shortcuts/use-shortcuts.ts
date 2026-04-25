@@ -5,6 +5,12 @@ import { useNavStore, type NavPage } from "@/stores/nav-store";
 /**
  * Canonical list of keyboard shortcut action IDs. Kept in one place so
  * the customization UI can enumerate them.
+ *
+ * Window-scoped IDs (navigation + global utilities) are dispatched by
+ * `useShortcuts` below. The `player_*` IDs are dispatched by
+ * `usePlayerShortcuts` (sibling hook in `features/player`) — both
+ * groups share the same `app_settings.shortcuts_json` table because
+ * the backend is opaque about which scope an ID belongs to.
  */
 export type ActionId =
   | "library"
@@ -15,7 +21,23 @@ export type ActionId =
   | "focus_search"
   | "pause_all"
   | "add_streamer"
-  | "shortcut_help";
+  | "shortcut_help"
+  // --- Phase 6: player container scope ---
+  | "player_play_pause"
+  | "player_seek_back_5"
+  | "player_seek_forward_5"
+  | "player_seek_back_10"
+  | "player_seek_forward_10"
+  | "player_volume_up"
+  | "player_volume_down"
+  | "player_mute"
+  | "player_fullscreen"
+  | "player_pip"
+  | "player_chapter_next"
+  | "player_chapter_prev"
+  | "player_speed_down"
+  | "player_speed_up"
+  | "player_close";
 
 export const DEFAULT_SHORTCUTS: Record<ActionId, string> = {
   library: "g l",
@@ -27,6 +49,26 @@ export const DEFAULT_SHORTCUTS: Record<ActionId, string> = {
   pause_all: "p",
   add_streamer: "n",
   shortcut_help: "?",
+  // Player shortcuts — defaults mirror docs/user-guide/player.md and
+  // the help-overlay strings in `player-constants.PLAYER_SHORTCUTS`.
+  // Bindings use lowercased `e.key` form; `shift+` prefix only for
+  // arrow / letter keys where the shifted character isn't a separate
+  // glyph (e.g. `shift+c`, but `<` already encodes its shift).
+  player_play_pause: "k",
+  player_seek_back_5: "arrowleft",
+  player_seek_forward_5: "arrowright",
+  player_seek_back_10: "j",
+  player_seek_forward_10: "l",
+  player_volume_up: "arrowup",
+  player_volume_down: "arrowdown",
+  player_mute: "m",
+  player_fullscreen: "f",
+  player_pip: "p",
+  player_chapter_next: "c",
+  player_chapter_prev: "shift+c",
+  player_speed_down: "<",
+  player_speed_up: ">",
+  player_close: "escape",
 };
 
 export const SHORTCUT_LABELS: Record<ActionId, string> = {
@@ -39,7 +81,39 @@ export const SHORTCUT_LABELS: Record<ActionId, string> = {
   pause_all: "Pause all downloads",
   add_streamer: "Add streamer",
   shortcut_help: "Show shortcut help",
+  player_play_pause: "Play / pause",
+  player_seek_back_5: "Seek back 5 s",
+  player_seek_forward_5: "Seek forward 5 s",
+  player_seek_back_10: "Seek back 10 s",
+  player_seek_forward_10: "Seek forward 10 s",
+  player_volume_up: "Volume up",
+  player_volume_down: "Volume down",
+  player_mute: "Mute toggle",
+  player_fullscreen: "Toggle fullscreen",
+  player_pip: "Toggle picture-in-picture",
+  player_chapter_next: "Next chapter",
+  player_chapter_prev: "Previous chapter",
+  player_speed_down: "Slow down playback",
+  player_speed_up: "Speed up playback",
+  player_close: "Close player / exit fullscreen",
 };
+
+/**
+ * Action IDs the window-scoped `useShortcuts` hook dispatches. Player
+ * IDs are filtered out so we don't accidentally fire player actions
+ * while the user is on the library page.
+ */
+export const GLOBAL_ACTION_IDS: ReadonlySet<ActionId> = new Set<ActionId>([
+  "library",
+  "timeline",
+  "downloads",
+  "streamers",
+  "settings",
+  "focus_search",
+  "pause_all",
+  "add_streamer",
+  "shortcut_help",
+]);
 
 export interface ShortcutHandlers {
   focusSearch?: () => void;
@@ -62,7 +136,21 @@ export function useShortcuts(
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
-  const bindings = useMemo(() => buildBindings(shortcuts), [shortcuts]);
+  // Filter to global IDs only — `usePlayerShortcuts` owns the
+  // `player_*` actions and is scoped to its container, so dispatching
+  // them from a window-scoped listener would fire player actions while
+  // the user is anywhere else in the app.
+  const bindings = useMemo(
+    () =>
+      buildBindings(
+        Object.fromEntries(
+          Object.entries(shortcuts).filter(([id]) =>
+            GLOBAL_ACTION_IDS.has(id as ActionId)
+          )
+        ) as Record<ActionId, string>
+      ),
+    [shortcuts]
+  );
 
   useEffect(() => {
     let chordBuffer: string | null = null;

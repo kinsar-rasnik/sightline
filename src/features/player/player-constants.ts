@@ -40,6 +40,46 @@ export const PLAYER_SHORTCUTS: ReadonlyArray<{
   { keys: "Esc", label: "Exit fullscreen / overlay" },
 ];
 
+/**
+ * Compute the initial `currentTime` for `<video>` when the player
+ * mounts. Mirrors the Rust-side `domain::watch_progress::resume_position_for`
+ * (which the backend uses to drive the watch_progress state machine);
+ * factored out as a pure function so the JS pre-roll path is testable
+ * without spinning up the player. Rules:
+ *
+ * 1. Explicit deep-link wins (`initialPositionSeconds`).
+ * 2. Stored position within `RESTART_THRESHOLD_SECONDS` of the end →
+ *    treat as completed; restart from zero.
+ * 3. Otherwise `stored - preRoll`, clamped to `>= 0`.
+ * 4. No stored position → start from zero.
+ */
+export function computeInitialSeekSeconds(input: {
+  durationSeconds: number;
+  storedPositionSeconds?: number;
+  initialPositionSeconds?: number;
+  preRollSeconds: number;
+  restartThresholdSeconds: number;
+}): number {
+  const {
+    durationSeconds,
+    storedPositionSeconds,
+    initialPositionSeconds,
+    preRollSeconds,
+    restartThresholdSeconds,
+  } = input;
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0;
+  if (typeof initialPositionSeconds === "number") {
+    return Math.min(durationSeconds, Math.max(0, initialPositionSeconds));
+  }
+  if (typeof storedPositionSeconds === "number" && storedPositionSeconds > 0) {
+    if (storedPositionSeconds >= durationSeconds - restartThresholdSeconds) {
+      return 0;
+    }
+    return Math.max(0, storedPositionSeconds - preRollSeconds);
+  }
+  return 0;
+}
+
 /** Round a playback speed to the nearest supported step. */
 export function clampSpeed(speed: number): PlaybackSpeed {
   let best: PlaybackSpeed = 1;
