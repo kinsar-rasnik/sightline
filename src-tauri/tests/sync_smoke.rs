@@ -140,15 +140,17 @@ async fn open_promote_seek_drift_close_drives_full_event_sequence() {
         })
         .collect();
 
-    // Order matters: open path emits state:active then leader, then
-    // the explicit promote, transport, drift, close.
+    // Order matters: open emits state:active + leader, the explicit
+    // promote emits leader, transport intentionally emits no state
+    // event (per ADR-0023's "transport is stateless on the backend"
+    // wording, validated by the code review of 2026-04-25), drift
+    // correction emits drift, close emits state:closed + group_closed.
     assert_eq!(
         kinds,
         vec![
             "state:active",
             "leader",
             "leader",
-            "state:active",
             "drift",
             "state:closed",
             "group_closed",

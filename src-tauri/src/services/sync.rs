@@ -298,20 +298,20 @@ impl SyncService {
 
     /// Apply a group-wide transport command.  v1's transport is
     /// stateless on the backend — the renderer fans the play/pause/
-    /// seek/speed call to its `<video>` elements, and the service
-    /// only emits a `StateChanged` event so other windows / tests can
-    /// react.  The event is keyed by `session_id` so observers can
-    /// distinguish across multiple multi-view sessions if v2 ever
-    /// allows that.
+    /// seek/speed call to its `<video>` elements; this method only
+    /// validates that the session is in a state where the command
+    /// makes sense.  Crucially we do *not* emit `StateChanged` from
+    /// here: a play/pause/seek/speed change does not change the
+    /// session's lifecycle status, and emitting `StateChanged{Active}`
+    /// repeatedly would mislead any observer that re-fetches the
+    /// session row on that event.  Lifecycle events fire from open /
+    /// close.
     pub async fn apply_transport(
         &self,
         session_id: SyncSessionId,
         command: SyncTransportCommand,
-        sink: Option<&SyncEventSink>,
+        _sink: Option<&SyncEventSink>,
     ) -> Result<(), AppError> {
-        // Validate the session exists and is active before fanning the
-        // event — a transport command on a closed session is almost
-        // certainly a stale UI state and should error fast.
         let session = self.get_session(session_id).await?;
         if session.status != SyncStatus::Active {
             return Err(AppError::InvalidInput {
@@ -325,13 +325,16 @@ impl SyncService {
                 detail: format!("speed {speed} out of supported range [0.25, 4.0]"),
             });
         }
-        if let Some(sink) = sink {
-            sink(SyncEvent::StateChanged {
-                session_id,
-                status: SyncStatus::Active,
-            });
-        }
-        debug!(session_id, ?command, "sync transport applied");
+        // Discriminant-only debug log — never the user-supplied
+        // payload values, to avoid surfacing renderer-controlled data
+        // in any future log sink.
+        let kind = match command {
+            SyncTransportCommand::Play => "play",
+            SyncTransportCommand::Pause => "pause",
+            SyncTransportCommand::Seek { .. } => "seek",
+            SyncTransportCommand::SetSpeed { .. } => "set_speed",
+        };
+        debug!(session_id, kind, "sync transport applied");
         Ok(())
     }
 
@@ -339,12 +342,44 @@ impl SyncService {
     /// `DriftCorrected` (the renderer does the actual seek; the
     /// service only fans the event for observability).  Sub-threshold
     /// reports are dropped — they're noise for the UI.
+    ///
+    /// Validates: session exists + active, `pane_index` is a member,
+    /// `drift_ms` is finite (NaN / Infinity are rejected before the
+    /// threshold comparison since `f64::abs(NaN) < threshold` is
+    /// `false`, which would otherwise silently emit a phantom event
+    /// with `corrected_to_seconds: NaN`).
     pub async fn record_drift(
         &self,
         session_id: SyncSessionId,
         measurement: DriftMeasurement,
         sink: Option<&SyncEventSink>,
     ) -> Result<(), AppError> {
+        let session = self.get_session(session_id).await?;
+        if session.status != SyncStatus::Active {
+            return Err(AppError::InvalidInput {
+                detail: "cannot record drift on a closed session".into(),
+            });
+        }
+        if !session
+            .panes
+            .iter()
+            .any(|p| p.pane_index == measurement.pane_index)
+        {
+            return Err(AppError::InvalidInput {
+                detail: format!(
+                    "pane {} is not a member of session {session_id}",
+                    measurement.pane_index
+                ),
+            });
+        }
+        if !measurement.drift_ms.is_finite()
+            || !measurement.expected_position_seconds.is_finite()
+            || !measurement.follower_position_seconds.is_finite()
+        {
+            return Err(AppError::InvalidInput {
+                detail: "drift measurement must contain finite numbers".into(),
+            });
+        }
         let settings = self.settings.get().await?;
         let threshold = settings.sync_drift_threshold_ms;
         if measurement.drift_ms.abs() < threshold {
@@ -362,12 +397,26 @@ impl SyncService {
     }
 
     /// Fan a pre-debounced "out of range" report from the renderer.
+    /// Validates: session exists + active and `pane_index` is a
+    /// member, so the event payload can be trusted by any future
+    /// consumer that uses `pane_index` for indexing.
     pub async fn report_out_of_range(
         &self,
         session_id: SyncSessionId,
         pane_index: PaneIndex,
         sink: Option<&SyncEventSink>,
     ) -> Result<(), AppError> {
+        let session = self.get_session(session_id).await?;
+        if session.status != SyncStatus::Active {
+            return Err(AppError::InvalidInput {
+                detail: "cannot report out-of-range on a closed session".into(),
+            });
+        }
+        if !session.panes.iter().any(|p| p.pane_index == pane_index) {
+            return Err(AppError::InvalidInput {
+                detail: format!("pane {pane_index} is not a member of session {session_id}"),
+            });
+        }
         if let Some(sink) = sink {
             sink(SyncEvent::MemberOutOfRange {
                 session_id,
@@ -380,7 +429,24 @@ impl SyncService {
     /// Compute the wall-clock overlap of the given VODs.  Used by the
     /// frontend to bound the seek slider before opening a session
     /// (preview) and after opening (canonical bound).
+    ///
+    /// v1 caps `vod_ids` at 2 entries to mirror `open_session`'s
+    /// constraint and to bound the per-VOD lookup cost.  A v2
+    /// expansion to N panes would relax this with an explicit cap.
     pub async fn overlap_of(&self, vod_ids: Vec<String>) -> Result<OverlapResult, AppError> {
+        if vod_ids.is_empty() {
+            return Err(AppError::InvalidInput {
+                detail: "overlap requires at least one vod_id".into(),
+            });
+        }
+        if vod_ids.len() > 2 {
+            return Err(AppError::InvalidInput {
+                detail: format!(
+                    "overlap_of supports up to 2 VODs in v1, got {}",
+                    vod_ids.len()
+                ),
+            });
+        }
         let mut ranges = Vec::with_capacity(vod_ids.len());
         for id in &vod_ids {
             let r = self.lookup_vod_range(id).await?;
@@ -639,6 +705,136 @@ mod tests {
             .unwrap();
         svc.close_session(session.id, None).await.unwrap();
         let err = svc.set_leader(session.id, 1, None).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn record_drift_rejects_closed_session() {
+        let (svc, _db) = fixture().await;
+        let session = svc
+            .open_session(vec!["v1".into(), "v2".into()], SyncLayout::Split5050, None)
+            .await
+            .unwrap();
+        svc.close_session(session.id, None).await.unwrap();
+        let err = svc
+            .record_drift(
+                session.id,
+                DriftMeasurement {
+                    pane_index: 1,
+                    follower_position_seconds: 10.0,
+                    expected_position_seconds: 10.6,
+                    drift_ms: 600.0,
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn record_drift_rejects_unknown_pane() {
+        let (svc, _db) = fixture().await;
+        let session = svc
+            .open_session(vec!["v1".into(), "v2".into()], SyncLayout::Split5050, None)
+            .await
+            .unwrap();
+        let err = svc
+            .record_drift(
+                session.id,
+                DriftMeasurement {
+                    pane_index: 5,
+                    follower_position_seconds: 10.0,
+                    expected_position_seconds: 10.6,
+                    drift_ms: 600.0,
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn record_drift_rejects_non_finite_values() {
+        let (svc, _db) = fixture().await;
+        let session = svc
+            .open_session(vec!["v1".into(), "v2".into()], SyncLayout::Split5050, None)
+            .await
+            .unwrap();
+        let err = svc
+            .record_drift(
+                session.id,
+                DriftMeasurement {
+                    pane_index: 1,
+                    follower_position_seconds: 10.0,
+                    expected_position_seconds: 10.0,
+                    drift_ms: f64::NAN,
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+        let err = svc
+            .record_drift(
+                session.id,
+                DriftMeasurement {
+                    pane_index: 1,
+                    follower_position_seconds: f64::INFINITY,
+                    expected_position_seconds: 10.0,
+                    drift_ms: 600.0,
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn report_out_of_range_rejects_closed_session() {
+        let (svc, _db) = fixture().await;
+        let session = svc
+            .open_session(vec!["v1".into(), "v2".into()], SyncLayout::Split5050, None)
+            .await
+            .unwrap();
+        svc.close_session(session.id, None).await.unwrap();
+        let err = svc
+            .report_out_of_range(session.id, 1, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn report_out_of_range_rejects_unknown_pane() {
+        let (svc, _db) = fixture().await;
+        let session = svc
+            .open_session(vec!["v1".into(), "v2".into()], SyncLayout::Split5050, None)
+            .await
+            .unwrap();
+        let err = svc
+            .report_out_of_range(session.id, 9, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn overlap_rejects_too_many_vods() {
+        let (svc, _db) = fixture().await;
+        let err = svc
+            .overlap_of(vec!["v1".into(), "v2".into(), "v3".into()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn overlap_rejects_empty_input() {
+        let (svc, _db) = fixture().await;
+        let err = svc.overlap_of(vec![]).await.unwrap_err();
         assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 
