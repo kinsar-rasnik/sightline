@@ -202,6 +202,15 @@ export type AppSettings = {
 	notifyDownloadFailed: boolean,
 	notifyFavoritesIngest: boolean,
 	notifyStorageLow: boolean,
+	/**
+	 *  Fraction in `[0.7, 1.0]` at which the watch-progress state
+	 *  machine transitions `in_progress → completed`. Persisted in
+	 *  `app_settings.completion_threshold` (migration 0009). The
+	 *  column-level CHECK constraint enforces the same bounds, so a
+	 *  frontend that hand-rolls an out-of-range value gets a SQLite
+	 *  constraint failure rather than silently skipping the transition.
+	 */
+	completionThreshold: number,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -612,6 +621,7 @@ export type SettingsPatch = {
 	notifyDownloadFailed?: boolean | null,
 	notifyFavoritesIngest?: boolean | null,
 	notifyStorageLow?: boolean | null,
+	completionThreshold?: number | null,
 };
 
 /**

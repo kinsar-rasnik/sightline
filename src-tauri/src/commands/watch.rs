@@ -56,19 +56,23 @@ pub async fn update_watch_progress(
     input: UpdateWatchProgressInput,
 ) -> Result<WatchProgressRow, AppError> {
     let sink = state.watch_progress_sink.clone();
-    // We derive ProgressSettings from the stored AppSettings in the
-    // caller's session; for now use the default because the settings
-    // row doesn't yet carry the per-user completion threshold (that
-    // lands with the Settings UI work). Mission spec makes this a
-    // 70–100 % configurable range, which the default of 0.9 satisfies
-    // out-of-the-box.
+    // ProgressSettings derives from the live `app_settings` row
+    // (column added in migration 0009). `clamp()` is defence in depth
+    // — the column-level CHECK already enforces 0.7..=1.0, so any
+    // out-of-range value would have failed at write time.
+    let settings = state.settings.get().await?;
+    let progress_settings = ProgressSettings {
+        completion_threshold: settings.completion_threshold,
+        ..ProgressSettings::default()
+    }
+    .clamp();
     state
         .watch_progress
         .update(
             &input.vod_id,
             input.position_seconds,
             input.duration_seconds,
-            ProgressSettings::default(),
+            progress_settings,
             Some(&sink),
         )
         .await

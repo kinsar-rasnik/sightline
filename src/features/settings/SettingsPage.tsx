@@ -66,7 +66,10 @@ export function SettingsPage() {
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}
       />
-      <PlaybackSection />
+      <PlaybackSection
+        completionThreshold={data.completionThreshold}
+        onUpdate={(patch) => update.mutate(patch)}
+      />
       <AppearanceSection />
       <NotificationsSection
         settings={data}
@@ -80,7 +83,13 @@ export function SettingsPage() {
   );
 }
 
-function PlaybackSection() {
+function PlaybackSection({
+  completionThreshold,
+  onUpdate,
+}: {
+  completionThreshold: number;
+  onUpdate: (patch: SettingsPatch) => void;
+}) {
   const prefs = usePlaybackPrefs();
   return (
     <section
@@ -114,9 +123,9 @@ function PlaybackSection() {
         min={0.7}
         max={1}
         step={0.01}
-        value={prefs.completionThreshold}
+        value={completionThreshold}
         format={(v) => `${Math.round(v * 100)}%`}
-        onChange={(v) => setPlaybackPrefs({ completionThreshold: v })}
+        onChange={(v) => onUpdate({ completionThreshold: v })}
         description="VOD is marked completed once watched beyond this fraction."
       />
 

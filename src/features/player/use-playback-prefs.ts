@@ -2,7 +2,6 @@ import { useSyncExternalStore } from "react";
 
 import {
   DEFAULT_AUTO_PLAY_ON_OPEN,
-  DEFAULT_COMPLETION_THRESHOLD,
   DEFAULT_PRE_ROLL_SECONDS,
   type PlaybackSpeed,
   clampSpeed,
@@ -10,10 +9,15 @@ import {
 
 export type VolumeMemory = "session" | "vod" | "global";
 
+// Phase 6 housekeeping: `completionThreshold` moved to backend
+// `app_settings.completion_threshold` (migration 0009) so the watch
+// state machine in `cmd_update_watch_progress` reads the same value
+// the user sets in Settings. It is no longer kept in localStorage —
+// the Settings UI talks to `update_settings` directly.
+
 export interface PlaybackPrefs {
   autoplay: boolean;
   preRollSeconds: number;
-  completionThreshold: number;
   defaultSpeed: PlaybackSpeed;
   volumeMemory: VolumeMemory;
   pipOnBlur: boolean;
@@ -22,7 +26,6 @@ export interface PlaybackPrefs {
 const DEFAULTS: PlaybackPrefs = {
   autoplay: DEFAULT_AUTO_PLAY_ON_OPEN,
   preRollSeconds: DEFAULT_PRE_ROLL_SECONDS,
-  completionThreshold: DEFAULT_COMPLETION_THRESHOLD,
   defaultSpeed: 1,
   volumeMemory: "global",
   pipOnBlur: false,
@@ -48,15 +51,6 @@ function readPrefs(): PlaybackPrefs {
           typeof parsed.preRollSeconds === "number"
             ? parsed.preRollSeconds
             : DEFAULTS.preRollSeconds
-        )
-      ),
-      completionThreshold: Math.min(
-        1,
-        Math.max(
-          0.7,
-          typeof parsed.completionThreshold === "number"
-            ? parsed.completionThreshold
-            : DEFAULTS.completionThreshold
         )
       ),
       defaultSpeed: clampSpeed(

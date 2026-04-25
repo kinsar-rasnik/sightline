@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/primitives/Button";
+import { useSettings } from "@/features/settings/use-settings";
 import {
   commands,
   type Chapter,
@@ -57,6 +58,14 @@ export function PlayerPage({
   const lastWriteRef = useRef(0);
   const closePlayer = useNavStore((s) => s.closePlayer);
   const prefs = usePlaybackPrefs();
+  // Source of truth for the completion threshold lives in
+  // `app_settings.completion_threshold` (migration 0009) so the
+  // backend state machine + this overlay agree. Falling back to the
+  // compiled-in default keeps the chrome stable while the settings
+  // query is still loading.
+  const settings = useSettings();
+  const completionThreshold =
+    settings.data?.completionThreshold ?? DEFAULT_COMPLETION_THRESHOLD;
   // If the caller explicitly passed `autoplay`, honour that (deep link
   // scenario); otherwise fall back to the user preference.
   const effectiveAutoplay =
@@ -584,7 +593,7 @@ export function PlayerPage({
             showRemaining={showRemaining}
             isFullscreen={isFullscreen}
             pipActive={pipActive}
-            completionThreshold={prefs.completionThreshold ?? DEFAULT_COMPLETION_THRESHOLD}
+            completionThreshold={completionThreshold}
             resumeSeconds={progress.data?.positionSeconds ?? null}
             onTogglePlay={togglePlay}
             onSeekTo={(seconds) => {

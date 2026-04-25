@@ -315,6 +315,33 @@ treats the two terminals differently: see ADR-0018.
 
 ---
 
+## Phase 6 — Completion threshold
+
+Phase 6 lands schema version **9** via migration
+`0009_completion_threshold.sql`. Closes the Phase-5 deferral that
+left `cmd_update_watch_progress` hardcoding
+`ProgressSettings::default()` instead of reading the user-configured
+threshold.
+
+```sql
+ALTER TABLE app_settings
+    ADD COLUMN completion_threshold REAL NOT NULL DEFAULT 0.9
+        CHECK (completion_threshold >= 0.7 AND completion_threshold <= 1.0);
+```
+
+The column-level CHECK mirrors the documented 70–100 %
+configurable range from ADR-0018. `cmd_update_watch_progress` calls
+`SettingsService::get()` per tick and threads `completion_threshold`
+into `ProgressSettings`; the domain-layer `clamp()` is
+defence-in-depth.
+
+The frontend Settings UI now writes the threshold via
+`update_settings({ completionThreshold })` instead of localStorage,
+and `PlayerPage` reads it from `useSettings()`. Single source of
+truth: `app_settings.completion_threshold`.
+
+---
+
 ## Referential integrity and cascading
 
 - Deleting a streamer (hard delete path, rarely used) cascades to their VODs, download tasks, and watch progress.

@@ -14,7 +14,10 @@ use crate::error::AppError;
 use crate::infra::clock::Clock;
 use crate::infra::db::Db;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+// `Eq` is intentionally omitted — `completion_threshold: f64` (Phase 6
+// housekeeping) doesn't implement total equality. `PartialEq` is what
+// the test helpers actually use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub enabled_game_ids: Vec<String>,
@@ -47,6 +50,15 @@ pub struct AppSettings {
     pub notify_download_failed: bool,
     pub notify_favorites_ingest: bool,
     pub notify_storage_low: bool,
+
+    // --- Phase 6: watch-progress completion threshold. ---
+    /// Fraction in `[0.7, 1.0]` at which the watch-progress state
+    /// machine transitions `in_progress → completed`. Persisted in
+    /// `app_settings.completion_threshold` (migration 0009). The
+    /// column-level CHECK constraint enforces the same bounds, so a
+    /// frontend that hand-rolls an out-of-range value gets a SQLite
+    /// constraint failure rather than silently skipping the transition.
+    pub completion_threshold: f64,
 }
 
 /// What happens when the user clicks the window close button.
@@ -143,6 +155,10 @@ pub struct SettingsPatch {
     pub notify_favorites_ingest: Option<bool>,
     #[specta(optional)]
     pub notify_storage_low: Option<bool>,
+
+    // --- Phase 6 fields. ---
+    #[specta(optional)]
+    pub completion_threshold: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -167,7 +183,8 @@ impl SettingsService {
                     window_close_behavior, start_at_login, show_dock_icon,
                     notifications_enabled, notify_download_complete,
                     notify_download_failed, notify_favorites_ingest,
-                    notify_storage_low
+                    notify_storage_low,
+                    completion_threshold
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -195,6 +212,7 @@ impl SettingsService {
         let notify_download_failed: i64 = row.try_get(18)?;
         let notify_favorites_ingest: i64 = row.try_get(19)?;
         let notify_storage_low: i64 = row.try_get(20)?;
+        let completion_threshold: f64 = row.try_get(21)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -219,6 +237,7 @@ impl SettingsService {
             notify_download_failed: notify_download_failed != 0,
             notify_favorites_ingest: notify_favorites_ingest != 0,
             notify_storage_low: notify_storage_low != 0,
+            completion_threshold,
         })
     }
 
@@ -308,6 +327,14 @@ impl SettingsService {
         let notify_storage_low = patch
             .notify_storage_low
             .unwrap_or(current.notify_storage_low);
+        // Mirrors the column-level CHECK on `app_settings.completion_threshold`
+        // — clamp client-side so a Settings UI slider that briefly slips out
+        // of bounds still produces a writeable row instead of a SQLite
+        // constraint failure surfaced to the user.
+        let completion_threshold = patch
+            .completion_threshold
+            .unwrap_or(current.completion_threshold)
+            .clamp(0.7, 1.0);
 
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
@@ -335,6 +362,7 @@ impl SettingsService {
                  notify_download_failed = ?,
                  notify_favorites_ingest = ?,
                  notify_storage_low = ?,
+                 completion_threshold = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -359,6 +387,7 @@ impl SettingsService {
         .bind(if notify_download_failed { 1 } else { 0 })
         .bind(if notify_favorites_ingest { 1 } else { 0 })
         .bind(if notify_storage_low { 1 } else { 0 })
+        .bind(completion_threshold)
         .bind(now)
         .execute(self.db.pool())
         .await?;
@@ -676,6 +705,47 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn completion_threshold_defaults_to_zero_point_nine() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        assert!((s.completion_threshold - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn completion_threshold_clamped_to_seven_to_ten_tenths() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                completion_threshold: Some(2.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((high.completion_threshold - 1.0).abs() < f64::EPSILON);
+        let low = svc
+            .update(SettingsPatch {
+                completion_threshold: Some(0.1),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((low.completion_threshold - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn completion_threshold_round_trips_in_range() {
+        let svc = setup().await;
+        let out = svc
+            .update(SettingsPatch {
+                completion_threshold: Some(0.85),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!((out.completion_threshold - 0.85).abs() < f64::EPSILON);
     }
 
     #[tokio::test]

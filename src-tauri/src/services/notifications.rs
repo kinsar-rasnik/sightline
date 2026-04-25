@@ -214,6 +214,7 @@ mod tests {
             notify_download_failed: true,
             notify_favorites_ingest: true,
             notify_storage_low: true,
+            completion_threshold: 0.9,
         };
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
         s.notifications_enabled = false;
@@ -249,6 +250,7 @@ mod tests {
             notify_download_failed: true,
             notify_favorites_ingest: true,
             notify_storage_low: true,
+            completion_threshold: 0.9,
         };
         assert!(!NotificationCategory::DownloadComplete.is_enabled(&s));
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
