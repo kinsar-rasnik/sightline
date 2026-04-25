@@ -44,6 +44,13 @@ pub const EV_WATCH_PROGRESS_UPDATED: &str = "watch:progress_updated";
 pub const EV_WATCH_STATE_CHANGED: &str = "watch:state_changed";
 pub const EV_WATCH_COMPLETED: &str = "watch:completed";
 
+// --- Phase 6: multi-view sync engine ---
+pub const EV_SYNC_STATE_CHANGED: &str = "sync:state_changed";
+pub const EV_SYNC_DRIFT_CORRECTED: &str = "sync:drift_corrected";
+pub const EV_SYNC_LEADER_CHANGED: &str = "sync:leader_changed";
+pub const EV_SYNC_MEMBER_OUT_OF_RANGE: &str = "sync:member_out_of_range";
+pub const EV_SYNC_GROUP_CLOSED: &str = "sync:group_closed";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppReadyEvent {
@@ -236,4 +243,43 @@ pub struct WatchStateChangedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct WatchCompletedEvent {
     pub vod_id: String,
+}
+
+// --- Phase 6 event payloads ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStateChangedEvent {
+    pub session_id: i64,
+    /// Mirrors `SyncStatus` db strings (`active` | `closed`).
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncDriftCorrectedEvent {
+    pub session_id: i64,
+    pub pane_index: i64,
+    pub drift_ms: f64,
+    pub corrected_to_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncLeaderChangedEvent {
+    pub session_id: i64,
+    pub leader_pane_index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncMemberOutOfRangeEvent {
+    pub session_id: i64,
+    pub pane_index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncGroupClosedEvent {
+    pub session_id: i64,
 }
