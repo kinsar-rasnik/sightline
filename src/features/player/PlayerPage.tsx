@@ -20,6 +20,7 @@ import {
   FRAME_STEP_SECONDS,
   PROGRESS_WRITE_INTERVAL_MS,
   RESTART_THRESHOLD_SECONDS,
+  computeInitialSeekSeconds,
   speedStepDown,
   speedStepUp,
 } from "./player-constants";
@@ -124,32 +125,26 @@ export function PlayerPage({
         : (source.data?.state ?? "missing");
   const resolvedUrl = source.data?.path ? assetUrl(source.data.path) : "";
 
-  // On first load: seek to the right position (pre-roll applied
-  // backend-side when we call update; the explicit deep-link value
-  // wins, otherwise we apply the stored position minus pre-roll).
+  // On first load: seek to the right position. Seek math lives in
+  // `computeInitialSeekSeconds` so it's testable without mounting the
+  // player; this effect just runs the calculation and applies the
+  // result imperatively.
   useEffect(() => {
     if (hasSeekedRef.current) return;
     const video = videoRef.current;
     if (!video || sourceState !== "ready") return;
     if (!Number.isFinite(video.duration) || video.duration === 0) return;
 
-    const stored = progress.data?.positionSeconds;
-    const preRoll =
-      typeof prefs.preRollSeconds === "number"
-        ? prefs.preRollSeconds
-        : DEFAULT_PRE_ROLL_SECONDS;
-    let target: number;
-    if (typeof initialPositionSeconds === "number") {
-      target = Math.min(video.duration, Math.max(0, initialPositionSeconds));
-    } else if (typeof stored === "number" && stored > 0) {
-      if (stored >= video.duration - RESTART_THRESHOLD_SECONDS) {
-        target = 0;
-      } else {
-        target = Math.max(0, stored - preRoll);
-      }
-    } else {
-      target = 0;
-    }
+    const target = computeInitialSeekSeconds({
+      durationSeconds: video.duration,
+      storedPositionSeconds: progress.data?.positionSeconds,
+      initialPositionSeconds,
+      preRollSeconds:
+        typeof prefs.preRollSeconds === "number"
+          ? prefs.preRollSeconds
+          : DEFAULT_PRE_ROLL_SECONDS,
+      restartThresholdSeconds: RESTART_THRESHOLD_SECONDS,
+    });
     video.currentTime = target;
     hasSeekedRef.current = true;
   }, [
