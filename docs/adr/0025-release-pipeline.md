@@ -85,25 +85,27 @@ warning isn't surprising.
 
 ### Build matrix and artifact naming
 
-Tauri 2 produces the following per-OS by default given
-`bundle.targets = "all"`:
+Four targets, one runner each (the dual-arch macOS path covers Apple
+Silicon natively):
 
-| OS              | Artifacts                                          |
-| --------------- | -------------------------------------------------- |
-| ubuntu-latest   | `.AppImage`, `.deb`                                |
-| macos-latest    | `.dmg` (universal2 single-binary, see below)       |
-| windows-latest  | `.msi`, `.exe` (NSIS installer)                    |
+| Target                       | Runner          | Artifacts          |
+| ---------------------------- | --------------- | ------------------ |
+| `x86_64-apple-darwin`        | macos-13        | `.dmg`             |
+| `aarch64-apple-darwin`       | macos-latest    | `.dmg`             |
+| `x86_64-pc-windows-msvc`     | windows-latest  | `.msi`, `.exe`     |
+| `x86_64-unknown-linux-gnu`   | ubuntu-latest   | `.AppImage`, `.deb` |
 
-The AppImage and deb on a single ubuntu-latest job is intentional —
-ubuntu-22.04 produces a glibc-2.35 AppImage that runs on every
-mainstream desktop distro. Older glibc support would need a
-self-hosted older-Ubuntu runner; out of scope for v1.
+The two macOS targets ship as separate `.dmg` files
+(`Sightline_<version>_x64.dmg` and `Sightline_<version>_aarch64.dmg`)
+rather than a fat universal2 binary; users pick the one matching
+their CPU. Universal2 doubles the binary size for no functional gain
+and adds an `lipo` link step to the bundle pipeline; the separate-
+artifact path is simpler and more transparent.
 
-macOS publishes a single x86_64 build for v1.0; ARM64-native is a
-post-1.0 follow-up tracked separately. Universal2 build needs
-`rustup target add` for both targets in the workflow plus
-`tauri build --target universal-apple-darwin`; deferring to keep the
-v1 pipeline lean.
+Linux ships AppImage + deb on a single ubuntu-latest job. The
+glibc-2.35 baseline (ubuntu-22.04 image) covers every mainstream
+desktop distro. Older-glibc builds would need a self-hosted runner;
+out of scope for v1.
 
 ### Release notes generation
 
@@ -226,7 +228,6 @@ exercised a few times and the asset-naming scheme has stabilised.
 
 ## Follow-ups
 
-- macOS universal2 build (post-1.0).
 - Apple Developer ID signing + notarisation (re-evaluate when
   there's funding).
 - Windows EV signing (same).
