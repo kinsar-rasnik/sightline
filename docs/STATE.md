@@ -1,69 +1,81 @@
 # STATE — Sightline
 
 **Letzte Aktualisierung:** 2026-04-25
-**System-Ampel:** 🟡 Gelb
+**System-Ampel:** 🟢 Grün
 
 ---
 
 ## Kompass
 
-**Projekt:** Lokale Cross-Plattform-Desktop-App (Tauri 2 + Rust + React) zur Aggregation von Twitch-GTA-RP-VODs mehrerer Streamer auf einer chronologischen Multi-Perspektiven-Timeline.
+**Projekt:** Lokale Cross-Plattform-Desktop-App (Tauri 2 + Rust + React) zur Aggregation von Twitch-GTA-RP-VODs mehrerer Streamer auf einer chronologischen Multi-Perspektiven-Timeline. Open-Source, MIT, GitHub-distributiert (unsigned binaries, Build-from-source als first-class Pfad).
 
-**Repo:** github.com/kinsar-rasnik/sightline (MIT, OSS)
+**Repo:** github.com/kinsar-rasnik/sightline
 
 **Roadmap:** 7 Phasen.
 - Phase 1: Foundation, Synthetic Workforce, Skeleton ✅
 - Phase 2: Twitch Ingest, Polling, Chapters ✅
 - Phase 3: Download Engine, Queue, Library Layout ✅
 - Phase 4: Tray Daemon, Timeline, UI Polish, Sidecar Bundling ✅
-- Phase 5: Player, Watch Progress, Continue Watching ✅ (Code gemerged, Tag pending)
-- Phase 6: Multi-View Sync Engine ⏳ (in Housekeeping)
-- Phase 7: Auto-Cleanup, Release Pipeline, Code Signing ⏳
+- Phase 5: Player, Watch Progress, Continue Watching ✅
+- Phase 6: Multi-View Sync Engine (Housekeeping + proper) ✅
+- Phase 7: Auto-Cleanup, Release Pipeline, v1.0.0 ⏳ (next, single-run-mission)
 
 ---
 
 ## Ampel-Begründung
 
-🟡 wegen drei aktiven Blockern unten. Code-Qualität selbst ist 🟢.
+🟢 — Repo ist sauber, alle Phasen-Tags gesetzt, CI grün, keine offenen Blocker. Phase 7 ist startklar.
 
 ---
 
 ## IST-Zustand
 
 **Repository:**
-- Lokales Working-Directory: `~/Documents/sightline` (frisch via rsync aus Proton-Drive-Ordner gezogen, 2026-04-25)
-- Branch: `phase-6/housekeeping` (lokal aus `phase-5/player-and-watch-progress` gebrancht, das inhaltlich PR #14 entspricht)
-- Lokales `main` ist auf 6d9d2b7 (Phase 4) — stale gegenüber Remote
-- Remote `main` ist auf a9d781af (Phase 5 Squash-Merge) — von lokal aus aktuell unerreichbar wegen GitHub-Connectivity
+- Working-Directory: `~/Documents/sightline`
+- Branch: `main`
+- Lokales und Remote-`main`: `d08b16b` (Phase 6 Squash-Merge, PR #16)
+- Working Tree: clean
 
-**Tags:**
-- phase-1-complete bis phase-4-complete: ✅ lokal + remote
-- phase-5-complete: ❌ noch nicht gesetzt (wartet auf erreichbares Remote + Sync von lokalem main)
+**Phasen-Tags vollständig:**
+- `phase-1-complete` bis `phase-6-complete` ✅ alle lokal + remote
+- Phase-6-Tag (`phase-6-complete`) zeigt auf `d08b16b`
 
-**Letzter Merge auf Remote-main:** PR #14 "Phase 5: player, watch progress, continue watching + housekeeping" — gemerged via `gh pr merge --squash --delete-branch` am 2026-04-24, CI auf allen drei OS grün vor Merge.
+**Letzter Merge auf main:** PR #16 "Phase 6: multi-view sync engine (split-view v1)" — squash-merged 2026-04-25. CI auf allen drei OS grün vor Merge. 18 Commits zu einem Squash-Commit zusammengefasst.
 
 ---
 
-## SOLL-Zustand (Phase 6)
+## SOLL-Zustand (Phase 7)
 
-**Multi-View Sync Engine.** Split-View v1 mit 2 Panes, 50/50-Layout. Wall-Clock-basierte Synchronisation, 250ms Drift-Toleranz, Group-wide Transport (kein Per-Pane). Leader-Election, configurable via UI.
+**Auto-Cleanup, Release Pipeline, v1.0.0.** Letzte Phase, sightline ist danach komplett.
 
-ADRs geplant: 0021 (Split-View v1 / PiP v2), 0022 (Sync-Math + Drift), 0023 (Group-wide Transport).
-Migrationen geplant: 0009 (AppSettings completion_threshold + watch-progress thresholds — Housekeeping), 0010 (sync_sessions — Phase 6 proper).
-Neue Tauri-Commands: 8 (cmd_open_sync_group, cmd_close_sync_group, cmd_get_sync_group, cmd_set_sync_leader, cmd_sync_seek, cmd_sync_play, cmd_sync_pause, cmd_sync_set_speed, cmd_get_overlap).
-Neue Events: 5 (sync:state_changed, sync:drift_corrected, sync:leader_changed, sync:member_out_of_range, sync:group_closed).
-Neue Route: `/multiview`.
+Locked Decisions:
+- OSS-Distribution via GitHub Releases, unsigned binaries (kein Code Signing, kein Notarization — bewusste Entscheidung, sightline ist Open Source und Build-from-source ist first-class)
+- Tauri-Bundling für alle 3 OS via GitHub Actions Build-Matrix
+- Tag-Push triggert Release-Workflow automatisch
+- Update-Checker gegen GitHub Releases API (opt-in via Settings)
+- Release-Notes aus Conventional Commits generiert
+- Senior Engineer (Claude Code) führt finalen Merge + Tag `v1.0.0` selbst durch (full automation, CEO-Freigabe nur über PR-Approval)
+
+Geplant:
+- Auto-Cleanup-Service (Disk-Watermarks, Retention-Policies)
+- GitHub Release Workflow (.github/workflows/release.yml)
+- Update-Checker (Backend-Service + UI-Notification + AppSettings-Toggle)
+- Release-Notes-Generator
+- Install-Doku inkl. "wie öffne ich unsigned binary auf macOS/Windows"
+- README v1.0-Polish
+- Pickup ausgewählter Phase-6-Follow-ups (Asset-Protocol-Narrowing per ADR-0019, SyncService-Settings-Caching)
+- ADRs, Tests, Subagent-Reviews
+- Final-Tag: `v1.0.0` + GitHub-Release auto-published
 
 ---
 
 ## Aktive Autorun-Queue
 
-**Aktuell laufend:** Claude Code arbeitet Phase 6 Housekeeping ab. Repo wurde via `git restore --worktree --source=:0 .` aus Index rekonstruiert (Working Tree war von rsync aus Proton-Drive auf Pre-Phase-5-Stand zurückgefallen, Index hatte aber die Wahrheit).
+**Aktuell laufend:** Keine. Phase 6 abgeschlossen, Phase 7 wartet auf Mission-Start.
 
 **Pipeline:**
-1. Phase 6 Housekeeping (laufend)
-2. Phase 6 proper (Multi-View Sync Engine)
-3. Phase 7 (Auto-Cleanup, Release, Signing, Notarization)
+1. Phase 7 (Auto-Cleanup, Release Pipeline, v1.0.0) — single-run-mission
+2. Post-1.0: Auto-Issue-Triage-Workflow (Claude Desktop + GitHub) — eigenes späteres Projekt, nicht Teil von Phase 7
 
 ---
 
@@ -75,29 +87,26 @@ Keine aktiven Cron-Jobs. Workforce arbeitet ausschließlich im Push-Modus auf CT
 
 ## Blocker
 
-**1. GitHub-Connectivity intermittierend down auf CEO-Mac.**
-SSH und HTTPS hängen seit Phase-5-Merge mehrfach beim Fetch/Pull. Ursache nicht eindeutig identifiziert (Proton-Drive war Verursacher für Git-Hänger, GitHub-Side war zwischenzeitlich auch betroffen, evtl. lokales SSH-Stack-Problem). Workflow heute: lokale Commits, Push wenn Connectivity zurück.
-
-**2. Proton-Drive blockiert Git-Operationen im synchronisierten Ordner.**
-Resolved durch Repo-Umzug nach `~/Documents/sightline`. Original-Ordner unter `~/Library/CloudStorage/ProtonDrive-...folder/sightline` ist Read-Reference, nicht Working Copy.
-
-**3. phase-5-complete Tag nicht gesetzt.**
-Wartet auf Resolution von Blocker 1. Lokales main muss zuerst auf Remote-Stand gefastforwardet werden.
+Keine offenen Blocker. GitHub-Connectivity stabil. Repo unter `~/Documents/sightline` (nicht im Proton-Drive-Pfad).
 
 ---
 
 ## Offene Entscheidungen
 
-Keine. Alle Phase-6-Entscheidungen aus dem Phase-6-Prompt sind getroffen (Split-View v1 mit 2 Panes, eine Migration für Housekeeping, getrennte Migration für sync_sessions in Phase 6 proper, AppSettings als Settings-Träger).
+Keine. Alle Phase-7-Voraussetzungen geklärt:
+- Kein Code Signing nötig (OSS-Distribution)
+- Senior Engineer mergt + taggt selbst (Konventionsänderung von 2026-04-25)
+- v1.0.0 ist der Capstone-Tag
 
 ---
 
 ## Letzter Handoff
 
-Noch keiner geschrieben — Handoff-Disziplin beginnt mit Abschluss Phase 6 Housekeeping (erstes HANDOFF-2026-XX-XX.md).
+`docs/HANDOFF-2026-04-25.md` — dokumentiert Phase 6 Housekeeping + Phase 6 proper.
 
 ---
 
 ## Änderungshistorie
 
 - 2026-04-25 — STATE.md initialisiert, IST/SOLL aufgenommen, drei Blocker dokumentiert.
+- 2026-04-25 — Phase 6 Housekeeping (PR #15) gemerged, Phase 6 proper (PR #16) gemerged + getaggt. Alle Blocker resolved. Ampel auf 🟢. Phase 7 als nächstes vorbereitet. Konventionsänderung: Senior Engineer macht Merge + Tag (siehe .claude/CHANGELOG.md).

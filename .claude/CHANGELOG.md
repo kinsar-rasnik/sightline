@@ -6,6 +6,25 @@ Format: `## YYYY-MM-DD — Titel`
 
 ---
 
+## 2026-04-25 — Konvention: Senior Engineer macht Merge + Tag
+
+**Was:**
+- Merge- und Tag-Operationen sind ab sofort Senior-Engineer-Aufgabe (Claude Code via gh CLI), nicht mehr CEO-Aufgabe.
+- CEO-Freigabe erfolgt über PR-Review und explizite Anweisung "merge das jetzt" — nicht mehr durch eigenen `gh pr merge`-Aufruf oder Web-UI-Klick.
+
+**Warum:**
+- Jan ist nicht-technischer CEO. Terminal-Operationen sind nicht im Rollenbild.
+- Web-UI-Merge-Flow ist umständlich für eine atomare Sequenz aus Merge → Branch-Delete → Tag → Push.
+- Senior Engineer hat ohnehin gh-CLI-Zugriff und kann den ganzen Block in einem Schritt sauber durchführen, inkl. Verifikation.
+- Reduziert CEO-Block-Zeit zwischen "PR ist ready" und "main ist auf neuem Stand".
+
+**Referenz:**
+- CEO-Klarstellung im CTO-Chat, 2026-04-25, im Kontext von PR #15 Merge-Vorbereitung.
+- Erste Anwendung: PR #15 (Phase 6 Housekeeping) und PR #16 (Phase 6 proper) — beide vom Senior Engineer gemerged + getaggt.
+- Project Instructions (CEO macht Merge + Tag) sind damit überschrieben für Sightline-Workforce.
+
+---
+
 ## 2026-04-25 — STATE-getriebenes CTO-Onboarding etabliert
 
 **Was:**
