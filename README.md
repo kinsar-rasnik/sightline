@@ -52,7 +52,7 @@ All data stays on your machine. No account required. No telemetry. The optional 
 
 Sightline ships unsigned binaries on the [GitHub Releases page](https://github.com/kinsar-rasnik/sightline/releases). Pick the asset for your OS:
 
-- **macOS** — `Sightline_<version>_aarch64.dmg` (Apple Silicon) or `Sightline_<version>_x64.dmg` (Intel)
+- **macOS** — `Sightline_<version>_aarch64.dmg` (Apple Silicon). Intel Macs build from source — see [`docs/INSTALL.md`](docs/INSTALL.md).
 - **Windows** — `Sightline_<version>_x64-setup.exe` (NSIS) or `Sightline_<version>_x64_en-US.msi` (MSI)
 - **Linux** — `sightline_<version>_amd64.AppImage` (any modern distro) or `sightline_<version>_amd64.deb` (Debian/Ubuntu)
 

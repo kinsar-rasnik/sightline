@@ -6,7 +6,7 @@ All notable changes to Sightline. Format follows [Keep a Changelog](https://keep
 
 The first public release. Sightline is a local-first desktop app that aggregates Twitch GTA-RP VODs across streamers into a single chronological library, downloads them via a bundled `yt-dlp` + `ffmpeg`, and plays them back with optional two-pane wall-clock-synchronized multi-perspective playback.
 
-Distributed via [GitHub Releases](https://github.com/kinsar-rasnik/sightline/releases) for macOS (x64 + ARM64), Windows (x64 MSI + NSIS), and Linux (AppImage + deb). Unsigned binaries; see [`docs/INSTALL.md`](docs/INSTALL.md).
+Distributed via [GitHub Releases](https://github.com/kinsar-rasnik/sightline/releases) for macOS (Apple Silicon), Windows (x64 MSI + NSIS), and Linux (AppImage + deb). Unsigned binaries; see [`docs/INSTALL.md`](docs/INSTALL.md). Intel Mac users build from source — GitHub retired the macos-13 runner in late 2025.
 
 ### Highlights
 
@@ -42,6 +42,7 @@ Schema version `14`. Migrations 0001..0014 are forward-only and append to `<libr
 These are tracked but do not block v1.0:
 
 - macOS / Windows binaries are **unsigned**. Re-evaluate when there's funding.
+- macOS published binary is **Apple Silicon only**. GitHub-Actions retired the macos-13 hosted runner in late 2025; Intel Mac users build from source. A future paid-tier or self-hosted runner can re-introduce the published x64 target.
 - No self-update mechanism. The opt-in checker surfaces availability and links to the release page; downloading + installing is manual.
 - Multi-View v1 is two panes only. PiP, >2 panes, crossfader, and shareable-sync URLs are tracked for v2.
 - Per-pane volume / mute is per-session, not persisted across sessions.

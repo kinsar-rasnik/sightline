@@ -85,22 +85,22 @@ warning isn't surprising.
 
 ### Build matrix and artifact naming
 
-Four targets, one runner each (the dual-arch macOS path covers Apple
-Silicon natively):
+Three targets, one runner each. macOS is Apple-Silicon only on the
+free GitHub-Actions tier (see Intel-Mac note below):
 
 | Target                       | Runner          | Artifacts          |
 | ---------------------------- | --------------- | ------------------ |
-| `x86_64-apple-darwin`        | macos-13        | `.dmg`             |
 | `aarch64-apple-darwin`       | macos-latest    | `.dmg`             |
 | `x86_64-pc-windows-msvc`     | windows-latest  | `.msi`, `.exe`     |
 | `x86_64-unknown-linux-gnu`   | ubuntu-latest   | `.AppImage`, `.deb` |
 
-The two macOS targets ship as separate `.dmg` files
-(`Sightline_<version>_x64.dmg` and `Sightline_<version>_aarch64.dmg`)
-rather than a fat universal2 binary; users pick the one matching
-their CPU. Universal2 doubles the binary size for no functional gain
-and adds an `lipo` link step to the bundle pipeline; the separate-
-artifact path is simpler and more transparent.
+**Intel Mac note.** GitHub retired the `macos-13` hosted runner in
+late 2025 — `macos-13` jobs queue forever on the free tier. Intel
+Mac is therefore not a published binary target for v1.0; affected
+users build from source via `pnpm tauri build` per
+[`docs/INSTALL.md`](../INSTALL.md). A future paid-tier or
+self-hosted runner can re-introduce the target without an ADR
+change.
 
 Linux ships AppImage + deb on a single ubuntu-latest job. The
 glibc-2.35 baseline (ubuntu-22.04 image) covers every mainstream
@@ -228,6 +228,10 @@ exercised a few times and the asset-naming scheme has stabilised.
 
 ## Follow-ups
 
+- **Re-introduce Intel Mac target** — paid `macos-13-large` /
+  `macos-14-x64` runner, or a self-hosted Intel runner if a
+  contributor offers one.  Until then, `docs/INSTALL.md` documents
+  the build-from-source path for Intel Mac.
 - Apple Developer ID signing + notarisation (re-evaluate when
   there's funding).
 - Windows EV signing (same).

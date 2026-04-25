@@ -34,8 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            runner: macos-13
+          # Apple Silicon (ARM64) only on macOS — GitHub retired the
+          # macos-13 hosted runner in late 2025, so the x86_64 Mac
+          # target has no free-tier home.  Intel-Mac users build
+          # from source per docs/INSTALL.md.  See ADR-0025.
           - target: aarch64-apple-darwin
             runner: macos-latest
           - target: x86_64-pc-windows-msvc
