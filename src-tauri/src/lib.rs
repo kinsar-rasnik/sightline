@@ -289,94 +289,13 @@ pub fn run() {
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
 
-                // Phase 5: watch-progress service + event sink.
-                let watch_progress_svc = Arc::new(WatchProgressService::new(
-                    db.clone(),
-                    clock.clone(),
-                ));
-                let watch_handle = handle.clone();
-                let watch_sink: WatchEventSink = Arc::new(move |ev| match ev {
-                    WatchEvent::Updated {
-                        vod_id,
-                        position_seconds,
-                        state,
-                    } => {
-                        let _ = watch_handle.emit(
-                            crate::services::events::EV_WATCH_PROGRESS_UPDATED,
-                            crate::services::events::WatchProgressUpdatedEvent {
-                                vod_id,
-                                position_seconds,
-                                state: state.as_db_str().to_owned(),
-                            },
-                        );
-                    }
-                    WatchEvent::StateChanged { vod_id, from, to } => {
-                        let _ = watch_handle.emit(
-                            crate::services::events::EV_WATCH_STATE_CHANGED,
-                            crate::services::events::WatchStateChangedEvent {
-                                vod_id,
-                                from: from.as_db_str().to_owned(),
-                                to: to.as_db_str().to_owned(),
-                            },
-                        );
-                    }
-                    WatchEvent::Completed { vod_id } => {
-                        let _ = watch_handle.emit(
-                            crate::services::events::EV_WATCH_COMPLETED,
-                            crate::services::events::WatchCompletedEvent { vod_id },
-                        );
-                        // TODO(v2.0.x): call
-                        // `state.distribution.on_watched_completed`
-                        // here so a `Ready -> Archived` transition
-                        // fires + the sliding-window enforcer
-                        // runs.  Until then the v2.0 service is
-                        // implemented + tested but the runtime
-                        // trigger is dormant — see
-                        // `services::distribution` module doc and
-                        // `docs/MIGRATION-v1-to-v2.md`.
-                    }
-                });
-
-                // Phase 7: update-checker service + event sink.
-                let updater_svc = Arc::new(UpdaterService::new(
-                    updater_http,
-                    SettingsService::new(db.clone(), clock.clone()),
-                    clock.clone(),
-                ));
-                let updater_handle = handle.clone();
-                let updater_sink: UpdaterEventSink = Arc::new(move |ev| match ev {
-                    UpdaterEvent::UpdateAvailable(info) => {
-                        let _ = updater_handle.emit(
-                            EV_UPDATER_UPDATE_AVAILABLE,
-                            UpdaterUpdateAvailableEvent {
-                                version: info.version,
-                                release_url: info.release_url,
-                                body: info.body,
-                            },
-                        );
-                    }
-                    UpdaterEvent::CheckFailed { reason } => {
-                        let _ = updater_handle.emit(
-                            crate::services::events::EV_UPDATER_CHECK_FAILED,
-                            crate::services::events::UpdaterCheckFailedEvent { reason },
-                        );
-                    }
-                });
-
-                // Phase 8: encoder detection service.  Cheap to
-                // construct; the actual probe runs async in the
-                // background task spawned a few lines below so cold
-                // start isn't blocked on a 2-second ffmpeg probe.
-                let encoder_detection_svc = Arc::new(EncoderDetectionService::new(
-                    ffmpeg.clone(),
-                    SettingsService::new(db.clone(), clock.clone()),
-                    clock.clone(),
-                ));
-
                 // Phase 8: pull-on-demand distribution service +
-                // event sink.  The IPC commands wrap the service;
-                // events fan out via the same handle pattern as
-                // the cleanup / sync services.
+                // event sink.  Constructed before the watch sink so
+                // the `WatchEvent::Completed` branch (v2.0.1) can
+                // capture both the service and its sink and trigger
+                // `on_watched_completed` directly.  IPC commands and
+                // events fan out via the same handle pattern as the
+                // cleanup / sync services.
                 let distribution_svc = Arc::new(DistributionService::new(
                     db.clone(),
                     clock.clone(),
@@ -425,6 +344,108 @@ pub fn run() {
                             );
                         }
                     });
+
+                // Phase 5: watch-progress service + event sink.
+                let watch_progress_svc = Arc::new(WatchProgressService::new(
+                    db.clone(),
+                    clock.clone(),
+                ));
+                let watch_handle = handle.clone();
+                // Captured for the WatchEvent::Completed branch (v2.0.1
+                // wiring): when watch-progress crosses completion, the
+                // distribution state machine flips ready → archived and
+                // the sliding-window enforcer runs.  The async call has
+                // to be off-loaded to a tokio task because the sink
+                // closure itself is sync.
+                let watch_distribution = distribution_svc.clone();
+                let watch_distribution_sink = distribution_sink.clone();
+                let watch_sink: WatchEventSink = Arc::new(move |ev| match ev {
+                    WatchEvent::Updated {
+                        vod_id,
+                        position_seconds,
+                        state,
+                    } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_PROGRESS_UPDATED,
+                            crate::services::events::WatchProgressUpdatedEvent {
+                                vod_id,
+                                position_seconds,
+                                state: state.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::StateChanged { vod_id, from, to } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_STATE_CHANGED,
+                            crate::services::events::WatchStateChangedEvent {
+                                vod_id,
+                                from: from.as_db_str().to_owned(),
+                                to: to.as_db_str().to_owned(),
+                            },
+                        );
+                    }
+                    WatchEvent::Completed { vod_id } => {
+                        let _ = watch_handle.emit(
+                            crate::services::events::EV_WATCH_COMPLETED,
+                            crate::services::events::WatchCompletedEvent {
+                                vod_id: vod_id.clone(),
+                            },
+                        );
+                        // v2.0.1: trigger ready → archived + sliding-
+                        // window enforce.  Best-effort — the watch
+                        // event already fired and the user's session
+                        // shouldn't stall on a distribution failure.
+                        let dist = watch_distribution.clone();
+                        let sink = watch_distribution_sink.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) =
+                                dist.on_watched_completed(&vod_id, &sink).await
+                            {
+                                warn!(
+                                    error = ?err,
+                                    vod_id,
+                                    "on_watched_completed wiring failed"
+                                );
+                            }
+                        });
+                    }
+                });
+
+                // Phase 7: update-checker service + event sink.
+                let updater_svc = Arc::new(UpdaterService::new(
+                    updater_http,
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
+                let updater_handle = handle.clone();
+                let updater_sink: UpdaterEventSink = Arc::new(move |ev| match ev {
+                    UpdaterEvent::UpdateAvailable(info) => {
+                        let _ = updater_handle.emit(
+                            EV_UPDATER_UPDATE_AVAILABLE,
+                            UpdaterUpdateAvailableEvent {
+                                version: info.version,
+                                release_url: info.release_url,
+                                body: info.body,
+                            },
+                        );
+                    }
+                    UpdaterEvent::CheckFailed { reason } => {
+                        let _ = updater_handle.emit(
+                            crate::services::events::EV_UPDATER_CHECK_FAILED,
+                            crate::services::events::UpdaterCheckFailedEvent { reason },
+                        );
+                    }
+                });
+
+                // Phase 8: encoder detection service.  Cheap to
+                // construct; the actual probe runs async in the
+                // background task spawned a few lines below so cold
+                // start isn't blocked on a 2-second ffmpeg probe.
+                let encoder_detection_svc = Arc::new(EncoderDetectionService::new(
+                    ffmpeg.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
 
                 // Phase 7: auto-cleanup service + event sink.
                 let cleanup_svc = Arc::new(CleanupService::new(

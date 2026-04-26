@@ -113,6 +113,8 @@ import {
   type PickNextNInput,
   type PickResult,
   type PickVodInput,
+  type PrefetchCheckInput,
+  type PrefetchCheckResult,
   type SetDistributionModeInput,
   type SetSlidingWindowSizeInput,
   type SetSyncLeaderInput,
@@ -254,6 +256,8 @@ export type {
   PickNextNInput,
   PickResult,
   PickVodInput,
+  PrefetchCheckInput,
+  PrefetchCheckResult,
   SetDistributionModeInput,
   SetSlidingWindowSizeInput,
   SetSyncLeaderInput,
@@ -577,6 +581,10 @@ export const commands = {
     input: SetSlidingWindowSizeInput,
   ): Promise<number> =>
     unwrap(await generatedCommands.setSlidingWindowSize(input)),
+  prefetchCheck: async (
+    input: PrefetchCheckInput,
+  ): Promise<PrefetchCheckResult> =>
+    unwrap(await generatedCommands.prefetchCheck(input)),
 };
 
 /**

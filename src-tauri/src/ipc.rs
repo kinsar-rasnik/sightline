@@ -128,6 +128,9 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::distribution::unpick_vod,
             commands::distribution::set_distribution_mode,
             commands::distribution::set_sliding_window_size,
+            // v2.0.1: pre-fetch hook (ADR-0031), invoked by the
+            // player on watch-progress threshold crossings.
+            commands::distribution::prefetch_check,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS

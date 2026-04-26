@@ -186,6 +186,14 @@ export const commands = {
 	unpickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("unpick_vod", { input })),
 	setDistributionMode: (input: SetDistributionModeInput) => typedError<DistributionMode, AppError>(__TAURI_INVOKE("set_distribution_mode", { input })),
 	setSlidingWindowSize: (input: SetSlidingWindowSizeInput) => typedError<number, AppError>(__TAURI_INVOKE("set_sliding_window_size", { input })),
+	/**
+	 *  ADR-0031 hook: invoked from the player when the active VOD's
+	 *  watch progress crosses the threshold or the remaining time falls
+	 *  below the look-ahead window (frontend-side throttle ensures one
+	 *  call per VOD per session).  Returns whether a pre-fetch actually
+	 *  fired so the renderer can show a non-blocking confirmation.
+	 */
+	prefetchCheck: (input: PrefetchCheckInput) => typedError<PrefetchCheckResult, AppError>(__TAURI_INVOKE("prefetch_check", { input })),
 };
 
 /* Types */
@@ -1014,6 +1022,27 @@ export type PollStartedEvent = {
 export type PollStatusRow = {
 	streamer: StreamerSummary,
 	lastPoll: LastPollSummary | null,
+};
+
+/**
+ *  Input for [`prefetch_check`].  The currently-watching VOD ID is
+ *  the only signal — `prefetch_check` derives the streamer + the
+ *  chronologically-next `available` candidate from the database.
+ */
+export type PrefetchCheckInput = {
+	vodId: string,
+};
+
+/**
+ *  Outcome of a `prefetch_check`.  `triggered = true` means a
+ *  candidate was transitioned `available -> queued`; `prefetched_vod_id`
+ *  carries the VOD ID for the renderer's optimistic update.  Both
+ *  fields are `false` / `None` when the check no-ops (settings,
+ *  auto mode, full window, no candidate, etc.).
+ */
+export type PrefetchCheckResult = {
+	triggered: boolean,
+	prefetchedVodId: string | null,
 };
 
 // The four presets exposed on the UI. Wire strings are stable.
