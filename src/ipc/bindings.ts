@@ -186,6 +186,36 @@ export const commands = {
 	unpickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("unpick_vod", { input })),
 	setDistributionMode: (input: SetDistributionModeInput) => typedError<DistributionMode, AppError>(__TAURI_INVOKE("set_distribution_mode", { input })),
 	setSlidingWindowSize: (input: SetSlidingWindowSizeInput) => typedError<number, AppError>(__TAURI_INVOKE("set_sliding_window_size", { input })),
+	/**
+	 *  ADR-0031 hook: invoked from the player when the active VOD's
+	 *  watch progress crosses the threshold or the remaining time falls
+	 *  below the look-ahead window.  The frontend hook
+	 *  (`src/features/player/use-prefetch-hook.ts`) maintains a
+	 *  module-scoped `Set<vodId>` so this command fires at most once
+	 *  per VOD per app session — re-mounting the player on the same
+	 *  VOD does not re-trigger.  Returns whether a pre-fetch actually
+	 *  fired so the renderer can show a non-blocking confirmation.
+	 */
+	prefetchCheck: (input: PrefetchCheckInput) => typedError<PrefetchCheckResult, AppError>(__TAURI_INVOKE("prefetch_check", { input })),
+	/**
+	 *  ADR-0033 §Per-VOD quick actions.  User-initiated remove on a
+	 *  downloaded VOD: transitions `ready -> deleted` (or
+	 *  `archived -> deleted`), unlinks the file from disk, and flags
+	 *  the downloads row so the queue treats it as cancelled.
+	 */
+	removeVod: (input: PickVodInput) => typedError<null, AppError>(__TAURI_INVOKE("remove_vod", { input })),
+	/**
+	 *  Forecast a single streamer's storage footprint.  Used by the
+	 *  Streamers → Add dialog to set expectations before the user
+	 *  commits, and by the per-streamer breakdown in Settings →
+	 *  Storage Outlook.
+	 */
+	estimateStreamerFootprint: (input: EstimateStreamerFootprintInput) => typedError<ForecastResult, AppError>(__TAURI_INVOKE("estimate_streamer_footprint", { input })),
+	/**
+	 *  Combined forecast across every active streamer + per-streamer
+	 *  breakdown.  Drives the Settings → Storage Outlook section.
+	 */
+	estimateGlobalFootprint: () => typedError<GlobalForecast, AppError>(__TAURI_INVOKE("estimate_global_footprint")),
 };
 
 /* Types */
@@ -787,8 +817,49 @@ export type EnqueueDownloadInput = {
 	priority?: number | null,
 };
 
+export type EstimateStreamerFootprintInput = {
+	twitchUserId: string,
+};
+
 export type ExecuteCleanupInput = {
 	dryRun: boolean,
+};
+
+/**
+ *  Per-streamer (or global) forecast.  Numbers are best-effort
+ *  estimates; ADR-0032 §Known inaccuracies documents the fuzz.
+ */
+export type ForecastResult = {
+	/**
+	 *  GB the streamer is expected to download in a typical week
+	 *  at the user's current quality + window settings.
+	 */
+	weeklyDownloadGb: number,
+	/**
+	 *  Peak GB the streamer's content can occupy on disk
+	 *  simultaneously (i.e., `sliding_window_size × avg_vod_gb`).
+	 */
+	peakDiskGb: number,
+	/**
+	 *  Coloured indicator combining `peak_disk_gb` with the user's
+	 *  free disk on the library partition.
+	 */
+	watermarkRisk: WatermarkRisk,
+	// Rounded average VOD length in hours used for the math.
+	avgVodHours: number,
+	// Streams per day used for the math.
+	streamsPerDay: number,
+	/**
+	 *  Free disk on the library partition at probe time, in GB.
+	 *  Useful for the UI's "X GB free" line so the renderer
+	 *  doesn't have to round-trip.
+	 */
+	freeDiskGb: number,
+	/**
+	 *  Whether the avg / frequency numbers came from real history
+	 *  (`true`) or the global defaults (`false`).
+	 */
+	dataDriven: boolean,
 };
 
 export type GetCoStreamsInput = {
@@ -805,6 +876,23 @@ export type GetVodInput = {
 
 export type GetWatchStatsInput = {
 	streamerId?: string | null,
+};
+
+/**
+ *  Global forecast: combined totals + per-streamer breakdown.  The
+ *  `combined` field is the SUM of every active streamer's forecast,
+ *  not a re-derivation from aggregated history.  This matches what
+ *  the user actually sees on disk at peak.
+ * 
+ *  `combined.data_driven` follows an "at-least-one" semantic — true
+ *  iff any single streamer in the breakdown contributed real
+ *  30-day history.  The renderer can use this to badge the global
+ *  forecast as estimated-from-real-data even when most streamers
+ *  are fresh.
+ */
+export type GlobalForecast = {
+	combined: ForecastResult,
+	perStreamer: StreamerForecast[],
 };
 
 export type HealthReport = {
@@ -1016,6 +1104,27 @@ export type PollStatusRow = {
 	lastPoll: LastPollSummary | null,
 };
 
+/**
+ *  Input for [`prefetch_check`].  The currently-watching VOD ID is
+ *  the only signal — `prefetch_check` derives the streamer + the
+ *  chronologically-next `available` candidate from the database.
+ */
+export type PrefetchCheckInput = {
+	vodId: string,
+};
+
+/**
+ *  Outcome of a `prefetch_check`.  `triggered = true` means a
+ *  candidate was transitioned `available -> queued`; `prefetched_vod_id`
+ *  carries the VOD ID for the renderer's optimistic update.  Both
+ *  fields are `false` / `None` when the check no-ops (settings,
+ *  auto mode, full window, no candidate, etc.).
+ */
+export type PrefetchCheckResult = {
+	triggered: boolean,
+	prefetchedVodId: string | null,
+};
+
 // The four presets exposed on the UI. Wire strings are stable.
 export type QualityPreset = 
 // Best video + best audio, whatever the source offers.
@@ -1207,6 +1316,18 @@ export type StreamerAddedEvent = {
 
 export type StreamerFavoritedEvent = {
 	twitchUserId: string,
+};
+
+/**
+ *  Per-streamer entry inside the global forecast.  Surfaces the
+ *  streamer's identity alongside the forecast row so the UI can
+ *  render a breakdown table without an extra round-trip.
+ */
+export type StreamerForecast = {
+	twitchUserId: string,
+	displayName: string,
+	login: string,
+	forecast: ForecastResult,
 };
 
 export type StreamerRemovedEvent = {
@@ -1453,6 +1574,12 @@ export type Vod = {
 	statusReason: string,
 	firstSeenAt: number,
 	lastSeenAt: number,
+	/**
+	 *  Phase 8 distribution lifecycle (ADR-0030).  Surfaced in the
+	 *  VOD list so the Library UI can render status badges +
+	 *  quick-action affordances without a second round-trip.
+	 */
+	status: VodStatus,
 };
 
 /**
@@ -1609,6 +1736,22 @@ export type WatchStats = {
 export type WatchVodIdInput = {
 	vodId: string,
 };
+
+/**
+ *  Watermark risk indicator (ADR-0032 §Outputs).  Maps the peak
+ *  disk forecast against the user's free disk to one of three
+ *  buckets that the UI can render as green/amber/red.
+ */
+export type WatermarkRisk = 
+// Peak forecast occupies < 50 % of free disk.
+"green" | 
+// Peak forecast occupies 50–80 % of free disk.
+"amber" | 
+/**
+ *  Peak forecast occupies > 80 % of free disk — would
+ *  trip the auto-cleanup high watermark.
+ */
+"red";
 
 /**
  *  What happens when the user clicks the window close button.

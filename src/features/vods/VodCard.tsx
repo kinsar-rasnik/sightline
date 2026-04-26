@@ -2,9 +2,55 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { assetUrl } from "@/lib/asset-url";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
-import type { DownloadRow, DownloadState, VodWithChapters } from "@/ipc";
+import type {
+  DownloadRow,
+  DownloadState,
+  VodStatus,
+  VodWithChapters,
+} from "@/ipc";
 
 import { useVodAssets } from "./use-vods";
+
+/**
+ * Tailwind class for the card's outer opacity, derived from the
+ * lifecycle status (ADR-0033 §Visual states).  Pure mapping —
+ * exposed so the LibraryPage tests can assert the differentiation
+ * without rendering.
+ */
+export function statusOpacityClass(status: VodStatus): string {
+  switch (status) {
+    case "available":
+      return "opacity-60";
+    case "queued":
+      return "opacity-70";
+    case "downloading":
+      return "opacity-80";
+    case "ready":
+      return "opacity-100";
+    case "archived":
+      return "opacity-100";
+    case "deleted":
+      return "opacity-50";
+  }
+}
+
+/** Human label for the lifecycle status badge. */
+export function statusLabel(status: VodStatus): string {
+  switch (status) {
+    case "available":
+      return "Available";
+    case "queued":
+      return "Queued";
+    case "downloading":
+      return "Downloading";
+    case "ready":
+      return "Ready";
+    case "archived":
+      return "Watched";
+    case "deleted":
+      return "Removed";
+  }
+}
 
 export interface VodCardProps {
   row: VodWithChapters;
@@ -13,6 +59,14 @@ export interface VodCardProps {
   onSelect: () => void;
   /** Optional "Play" action — Phase 5 player. Disabled until completed. */
   onPlay?: () => void;
+  /** Hover-revealed quick action: pull this VOD into the queue. */
+  onDownload?: () => void;
+  /** Hover-revealed quick action: cancel a queued / downloading row. */
+  onCancel?: () => void;
+  /** Hover-revealed quick action: re-pick a deleted row. */
+  onRepick?: () => void;
+  /** Hover-revealed quick action: remove a ready row from disk. */
+  onRemove?: () => void;
   /** Watch-progress fraction in [0, 1]. Phase 5 feature; absent on fresh state. */
   watchedFraction?: number;
   /** True once crossing the completion threshold or manually marked. */
@@ -35,10 +89,15 @@ export function VodCard({
   selected,
   onSelect,
   onPlay,
+  onDownload,
+  onCancel,
+  onRepick,
+  onRemove,
   watchedFraction,
   watched,
 }: VodCardProps) {
   const v = row.vod;
+  const status = v.status;
   const assets = useVodAssets(v.twitchVideoId);
   const [hover, setHover] = useState(false);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -85,7 +144,10 @@ export function VodCard({
     <article
       aria-label={v.title}
       aria-current={selected ? "true" : undefined}
-      className={`group relative rounded-[var(--radius-md)] overflow-hidden bg-[--color-surface] border border-[--color-border] transition-[border-color,transform] ${
+      data-vod-status={status}
+      className={`group relative rounded-[var(--radius-md)] overflow-hidden bg-[--color-surface] border border-[--color-border] transition-[border-color,transform] ${statusOpacityClass(
+        status
+      )} ${
         selected
           ? "border-[--color-accent]"
           : "hover:border-[--color-muted]"
@@ -147,11 +209,12 @@ export function VodCard({
           <span className="absolute bottom-1 right-2 rounded bg-black/70 text-white text-[10px] font-mono px-1.5 py-0.5">
             {formatDurationSeconds(v.durationSeconds)}
           </span>
-          {download && (
-            <span className="absolute top-1 left-2">
+          <span className="absolute top-1 left-2 flex flex-col gap-1">
+            <StatusBadge status={status} />
+            {download && status !== "ready" && status !== "archived" && (
               <DownloadBadge state={download.state} />
-            </span>
-          )}
+            )}
+          </span>
         </div>
 
         <div className="p-3 space-y-1">
@@ -164,28 +227,105 @@ export function VodCard({
         </div>
       </button>
 
-      {/* Hover-reveal quick actions. Keyboard users reach them via the
-          card's Tab-focused buttons below — the hover overlay is a
-          convenience, not the only path. */}
+      {/* Hover-reveal quick actions (ADR-0033 §Per-VOD quick actions).
+          The overlay is keyboard-reachable: each button is focusable
+          and labelled, so a Tab user can act on a card without
+          relying on hover.  The opacity-0/group-hover:opacity-100
+          transition is purely cosmetic. */}
       <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 flex items-end justify-end p-3 gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--motion-fast)]"
+        className="pointer-events-none absolute inset-0 flex items-end justify-end p-3 gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-[var(--motion-fast)]"
       >
-        {download?.state === "completed" && onPlay && (
+        {status === "available" && onDownload && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload();
+            }}
+            aria-label={`Download ${v.title}`}
+            className="pointer-events-auto bg-[--color-accent] text-[--color-accent-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
+          >
+            ↓ Download
+          </button>
+        )}
+        {status === "queued" && onCancel && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel();
+            }}
+            aria-label={`Cancel queued ${v.title}`}
+            className="pointer-events-auto bg-[--color-surface] border border-[--color-border] text-[--color-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
+          >
+            ✕ Cancel
+          </button>
+        )}
+        {(status === "ready" || status === "archived") && onPlay && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               onPlay();
             }}
-            aria-label={`Play ${v.title}`}
+            aria-label={
+              status === "archived"
+                ? `Re-watch ${v.title}`
+                : `Play ${v.title}`
+            }
             className="pointer-events-auto bg-[--color-accent] text-[--color-accent-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
           >
-            ▶ Play
+            {status === "archived" ? "▶ Re-watch" : "▶ Play"}
+          </button>
+        )}
+        {status === "ready" && onRemove && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            aria-label={`Remove ${v.title} from disk`}
+            className="pointer-events-auto bg-[--color-surface] border border-[--color-border] text-[--color-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
+          >
+            × Remove
+          </button>
+        )}
+        {status === "deleted" && onRepick && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRepick();
+            }}
+            aria-label={`Pick again ${v.title}`}
+            className="pointer-events-auto bg-[--color-accent] text-[--color-accent-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
+          >
+            ↻ Pick again
           </button>
         )}
       </div>
     </article>
+  );
+}
+
+/** Status-tier badge for the lifecycle column (ADR-0033). */
+function StatusBadge({ status }: { status: VodStatus }) {
+  const palette: Record<VodStatus, string> = {
+    available:
+      "bg-[--color-surface] text-[--color-muted] border border-[--color-border]",
+    queued: "bg-blue-500/30 text-blue-200 border border-blue-500/50",
+    downloading: "bg-blue-500/80 text-white",
+    ready: "bg-emerald-500/80 text-white",
+    archived: "bg-emerald-500/30 text-emerald-200 border border-emerald-500/50",
+    deleted: "bg-zinc-500/30 text-zinc-300 border border-zinc-500/50",
+  };
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${palette[status]}`}
+    >
+      {statusLabel(status)}
+    </span>
   );
 }
 

@@ -115,7 +115,7 @@ impl VodReadService {
                     v.stream_started_at, v.published_at, v.url, v.thumbnail_url, v.duration_seconds,
                     v.view_count, v.language, v.muted_segments_json, v.is_sub_only,
                     v.helix_game_id, v.helix_game_name, v.ingest_status, v.status_reason,
-                    v.first_seen_at, v.last_seen_at,
+                    v.first_seen_at, v.last_seen_at, v.status,
                     s.display_name, s.login
              FROM vods v JOIN streamers s ON s.twitch_user_id = v.twitch_user_id
              WHERE {}
@@ -154,8 +154,8 @@ impl VodReadService {
         for r in rows {
             let vod = row_to_vod(&r)?;
             let chapters = self.chapters_for(&vod.twitch_video_id).await?;
-            let streamer_display_name: String = r.try_get(20)?;
-            let streamer_login: String = r.try_get(21)?;
+            let streamer_display_name: String = r.try_get(21)?;
+            let streamer_login: String = r.try_get(22)?;
             results.push(VodWithChapters {
                 vod,
                 chapters,
@@ -172,7 +172,7 @@ impl VodReadService {
                     v.stream_started_at, v.published_at, v.url, v.thumbnail_url, v.duration_seconds,
                     v.view_count, v.language, v.muted_segments_json, v.is_sub_only,
                     v.helix_game_id, v.helix_game_name, v.ingest_status, v.status_reason,
-                    v.first_seen_at, v.last_seen_at,
+                    v.first_seen_at, v.last_seen_at, v.status,
                     s.display_name, s.login
              FROM vods v JOIN streamers s ON s.twitch_user_id = v.twitch_user_id
              WHERE v.twitch_video_id = ?",
@@ -187,8 +187,8 @@ impl VodReadService {
         Ok(VodWithChapters {
             vod,
             chapters,
-            streamer_display_name: row.try_get(20)?,
-            streamer_login: row.try_get(21)?,
+            streamer_display_name: row.try_get(21)?,
+            streamer_login: row.try_get(22)?,
         })
     }
 
@@ -231,6 +231,22 @@ fn row_to_vod(row: &sqlx::sqlite::SqliteRow) -> Result<Vod, AppError> {
 
     let is_sub_only: i64 = row.try_get(13)?;
     let ingest_status_str: String = row.try_get(16)?;
+    let vod_status_str: String = row.try_get(20)?;
+    // R-RC-02 fix: log unknown vods.status values at warn level so a
+    // future migration / corruption surfaces in the log rather than
+    // silently rendering as Available. Fallback stays on the safe
+    // side (the user can always re-pick) so a single bad row doesn't
+    // block the entire library query.
+    let vod_status = match crate::domain::distribution::VodStatus::from_db_str(&vod_status_str) {
+        Some(s) => s,
+        None => {
+            tracing::warn!(
+                vod_status_str = %vod_status_str,
+                "row_to_vod: unknown vods.status, falling back to Available"
+            );
+            crate::domain::distribution::VodStatus::Available
+        }
+    };
 
     Ok(Vod {
         twitch_video_id: row.try_get(0)?,
@@ -253,6 +269,7 @@ fn row_to_vod(row: &sqlx::sqlite::SqliteRow) -> Result<Vod, AppError> {
         status_reason: row.try_get(17)?,
         first_seen_at: row.try_get(18)?,
         last_seen_at: row.try_get(19)?,
+        status: vod_status,
     })
 }
 

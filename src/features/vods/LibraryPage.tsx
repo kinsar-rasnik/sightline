@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/primitives/Button";
@@ -15,47 +15,64 @@ import { useVods } from "@/features/vods/use-vods";
 import { VodCard } from "@/features/vods/VodCard";
 import {
   commands,
+  IpcError,
   type CoStream,
   type DownloadRow,
+  type VodStatus,
   type VodWithChapters,
 } from "@/ipc";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
 import { useNavStore } from "@/stores/nav-store";
 
-type StatusFilter =
-  | "all"
-  | "eligible"
-  | "skipped_game"
-  | "skipped_sub_only"
-  | "skipped_live"
-  | "error";
+/**
+ * Library lifecycle filter (ADR-0033 §Filter chips).  Decoupled
+ * from the legacy ingest-status filter so the new view-by-status
+ * chips can coexist if the user wants to drill in via both axes.
+ */
+type LifecycleFilter = "all" | "not_downloaded" | "downloaded" | "watched";
 
-const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
+const LIFECYCLE_OPTIONS: Array<{ key: LifecycleFilter; label: string }> = [
   { key: "all", label: "All" },
-  { key: "eligible", label: "Eligible" },
-  { key: "skipped_game", label: "Skipped — game" },
-  { key: "skipped_sub_only", label: "Sub-only" },
-  { key: "skipped_live", label: "Live" },
-  { key: "error", label: "Error" },
+  { key: "not_downloaded", label: "Not downloaded" },
+  { key: "downloaded", label: "Downloaded" },
+  { key: "watched", label: "Watched" },
 ];
 
+/** True iff a VOD's lifecycle state matches the chosen filter. */
+function matchesLifecycle(status: VodStatus, filter: LifecycleFilter): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "not_downloaded":
+      return status === "available" || status === "deleted";
+    case "downloaded":
+      return (
+        status === "queued" || status === "downloading" || status === "ready"
+      );
+    case "watched":
+      return status === "archived";
+  }
+}
+
 export function LibraryPage() {
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
   const [streamerId, setStreamerId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const streamers = useStreamers();
+  const qc = useQueryClient();
+  const enqueue = useEnqueueDownload();
 
   const input = useMemo(
     () => ({
       filters: {
         ...(streamerId && { streamerIds: [streamerId] }),
-        ...(statusFilter !== "all" && { statuses: [statusFilter] }),
       },
       sort: "stream_started_at_desc" as const,
       limit: 200,
       offset: 0,
     }),
-    [statusFilter, streamerId]
+    [streamerId]
   );
 
   const vods = useVods(input);
@@ -68,6 +85,105 @@ export function LibraryPage() {
   const continueWatching = useContinueWatching(12);
   const openPlayer = useNavStore((s) => s.openPlayer);
 
+  const filteredVods = useMemo(() => {
+    if (!vods.data) return [];
+    if (lifecycle === "all") return vods.data;
+    return vods.data.filter((v) => matchesLifecycle(v.vod.status, lifecycle));
+  }, [vods.data, lifecycle]);
+
+  // ADR-0033 §Event-driven UI updates: cache invalidation for
+  // distribution + download events is centralised in
+  // `src/lib/event-subscriptions.ts` (subscribed once at app
+  // startup), so the Library page no longer needs its own
+  // listener.  Cross-route consistency: a download completing
+  // while the user is on Settings will still bust the vods cache,
+  // so the badge update is visible the moment they navigate back.
+
+  const handleDownload = async (vodId: string) => {
+    setActionError(null);
+    try {
+      await commands.pickVod({ vodId });
+    } catch (err) {
+      // R-RC-02 fix: narrow the fallback to InvalidInput only.
+      // For any other error variant (DB pool down, unknown VOD,
+      // etc.) we surface it instead of silently re-firing through
+      // the legacy enqueue path — that path would succeed
+      // idempotently for an already-queued row but emit a noisy
+      // duplicate event.  InvalidInput is the only variant where
+      // the auto-mode fallback is the right move (a user in
+      // auto-mode whose vods.status hasn't been backfilled).
+      const isInvalidInput =
+        err instanceof IpcError && err.appError.kind === "invalid_input";
+      if (!isInvalidInput) {
+        const detail = err instanceof Error ? err.message : "unknown error";
+        setActionError(`Could not start download: ${detail}`);
+        return;
+      }
+      try {
+        await enqueue.mutateAsync(vodId);
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : "unknown error";
+        setActionError(`Could not start download: ${detail}`);
+        return;
+      }
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const handleCancel = async (vodId: string) => {
+    setActionError(null);
+    try {
+      await commands.unpickVod({ vodId });
+    } catch {
+      // unpick is only valid from queued; if the row is already
+      // downloading the state machine rejects the transition.
+      // Surface a hint so the user knows where to go next instead
+      // of seeing a Cancel button that appears to do nothing.
+      setActionError(
+        "This download has already started. Cancel it from the Downloads page."
+      );
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const handleRemove = async (vodId: string) => {
+    setActionError(null);
+    try {
+      await commands.removeVod({ vodId });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : "unknown error";
+      setActionError(`Could not remove file: ${detail}`);
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const emptyStateCopy = ((): string => {
+    if (vods.isLoading) return "";
+    if (!vods.data) return "";
+    // The "all" branch is handled by this top-level check —
+    // filteredVods === vods.data when lifecycle === "all", so the
+    // per-filter switch below never runs for the "all" case.
+    if (vods.data.length === 0) {
+      return "No VODs match these filters yet. Add streamers and let the poller run, or trigger a poll from the Streamers page.";
+    }
+    if (filteredVods.length === 0) {
+      switch (lifecycle) {
+        case "not_downloaded":
+          return "All caught up — every VOD is already downloaded or watched.";
+        case "downloaded":
+          return "Nothing downloaded yet. Pick a VOD from the Not downloaded filter.";
+        case "watched":
+          return "No watched VODs yet. Watching one to completion will move it here.";
+        case "all":
+          // Unreachable: vods.data.length === 0 already returned above.
+          return "";
+      }
+    }
+    return "";
+  })();
+
   return (
     <div className="flex gap-6 h-full">
       <section
@@ -77,16 +193,16 @@ export function LibraryPage() {
         <div
           className="flex flex-wrap gap-2"
           role="toolbar"
-          aria-label="VOD filters"
+          aria-label="VOD lifecycle filter"
         >
-          {STATUS_OPTIONS.map((opt) => (
+          {LIFECYCLE_OPTIONS.map((opt) => (
             <button
               key={opt.key}
               type="button"
-              aria-pressed={statusFilter === opt.key}
-              onClick={() => setStatusFilter(opt.key)}
+              aria-pressed={lifecycle === opt.key}
+              onClick={() => setLifecycle(opt.key)}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                statusFilter === opt.key
+                lifecycle === opt.key
                   ? "bg-[--color-accent] text-white border-transparent"
                   : "bg-transparent text-[--color-fg] border-[--color-border] hover:bg-[--color-surface]"
               }`}
@@ -118,11 +234,24 @@ export function LibraryPage() {
           </p>
         )}
         <ErrorBanner error={vods.error} />
-        {vods.data?.length === 0 && (
-          <p className="text-sm text-[--color-muted]">
-            No VODs match these filters yet. Add streamers and let the poller
-            run, or trigger a poll from the Streamers page.
-          </p>
+        {actionError && (
+          <div
+            role="alert"
+            className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 flex items-center justify-between gap-3"
+          >
+            <span>{actionError}</span>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setActionError(null)}
+              className="text-amber-300 hover:text-amber-100"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {emptyStateCopy && (
+          <p className="text-sm text-[--color-muted]">{emptyStateCopy}</p>
         )}
 
         <ContinueWatchingRow
@@ -132,28 +261,33 @@ export function LibraryPage() {
           }
         />
 
-        {vods.data && vods.data.length > 0 && (
+        {filteredVods.length > 0 && (
           <ul
             className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 max-h-[calc(100vh-200px)] overflow-y-auto pr-1"
-            aria-label={`Library — ${vods.data.length} VODs`}
+            aria-label={`Library — ${filteredVods.length} VODs`}
           >
-            {vods.data.map((v) => {
+            {filteredVods.map((v) => {
               const cw = continueWatching.data?.find(
                 (e) => e.vodId === v.vod.twitchVideoId
               );
+              const vodId = v.vod.twitchVideoId;
               return (
-                <li key={v.vod.twitchVideoId}>
+                <li key={vodId}>
                   <VodCard
                     row={v}
-                    download={downloadsById.get(v.vod.twitchVideoId) ?? null}
-                    selected={selected === v.vod.twitchVideoId}
-                    onSelect={() => setSelected(v.vod.twitchVideoId)}
+                    download={downloadsById.get(vodId) ?? null}
+                    selected={selected === vodId}
+                    onSelect={() => setSelected(vodId)}
                     onPlay={() =>
                       openPlayer({
-                        vodId: v.vod.twitchVideoId,
+                        vodId,
                         autoplay: true,
                       })
                     }
+                    onDownload={() => void handleDownload(vodId)}
+                    onCancel={() => void handleCancel(vodId)}
+                    onRepick={() => void handleDownload(vodId)}
+                    onRemove={() => void handleRemove(vodId)}
                     {...(cw ? { watchedFraction: cw.watchedFraction } : {})}
                   />
                 </li>

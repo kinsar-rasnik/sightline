@@ -103,6 +103,8 @@ pub struct AppState {
     // --- Phase 8: pull-on-demand distribution ---
     pub distribution: Arc<DistributionService>,
     pub distribution_sink: DistributionEventSink,
+    // --- v2.0.1: storage forecast (ADR-0032) ---
+    pub forecast: Arc<crate::services::forecast::ForecastService>,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -289,12 +291,111 @@ pub fn run() {
                 let notifications_svc =
                     Arc::new(NotificationService::new(handle.clone(), clock.clone()));
 
+                // Phase 8: pull-on-demand distribution service +
+                // event sink.  Constructed before the watch sink so
+                // the `WatchEvent::Completed` branch (v2.0.1) can
+                // capture both the service and its sink and trigger
+                // `on_watched_completed` directly.  IPC commands and
+                // events fan out via the same handle pattern as the
+                // cleanup / sync services.
+                let distribution_svc = Arc::new(DistributionService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+
+                // v2.0.1: storage forecast (ADR-0032). Pure-function
+                // math + DB-backed inputs; no event surface needed.
+                // Clock is injected so the service's unit tests
+                // stay deterministic (rust-backend.md rule).
+                let forecast_svc = Arc::new(
+                    crate::services::forecast::ForecastService::new(
+                        db.clone(),
+                        clock.clone(),
+                        SettingsService::new(db.clone(), clock.clone()),
+                        Arc::new(SystemFreeSpace),
+                    ),
+                );
+                let distribution_handle = handle.clone();
+                let distribution_downloads = downloads_svc.clone();
+                let distribution_sink: DistributionEventSink =
+                    Arc::new(move |ev| match ev {
+                        DistributionEvent::VodPicked { vod_id, from } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_PICKED,
+                                DistributionVodPickedEvent {
+                                    vod_id: vod_id.clone(),
+                                    from_status: from.as_db_str().to_owned(),
+                                },
+                            );
+                            // S5 convergence: bridge pull-mode picks
+                            // into the legacy downloads queue. The
+                            // worker observes the new row on its
+                            // next tick (≤ 5s); explicit wake-up
+                            // would require capturing the queue
+                            // handle, which only exists after spawn,
+                            // so we accept the tick latency and rely
+                            // on the existing scheduling cadence.
+                            let dl = distribution_downloads.clone();
+                            let pick_vod_id = vod_id;
+                            tokio::spawn(async move {
+                                if let Err(err) =
+                                    dl.enqueue(&pick_vod_id, None).await
+                                {
+                                    warn!(
+                                        ?err,
+                                        vod_id = pick_vod_id,
+                                        "downloads enqueue from VodPicked failed"
+                                    );
+                                }
+                            });
+                        }
+                        DistributionEvent::VodArchived { vod_id } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_ARCHIVED,
+                                DistributionVodArchivedEvent { vod_id },
+                            );
+                        }
+                        DistributionEvent::PrefetchTriggered {
+                            currently_watching,
+                            prefetched,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_PREFETCH_TRIGGERED,
+                                DistributionPrefetchTriggeredEvent {
+                                    currently_watching,
+                                    prefetched,
+                                },
+                            );
+                        }
+                        DistributionEvent::WindowEnforced {
+                            streamer_id,
+                            evicted_vod_id,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_WINDOW_ENFORCED,
+                                DistributionWindowEnforcedEvent {
+                                    streamer_id,
+                                    evicted_vod_id,
+                                },
+                            );
+                        }
+                    });
+
                 // Phase 5: watch-progress service + event sink.
                 let watch_progress_svc = Arc::new(WatchProgressService::new(
                     db.clone(),
                     clock.clone(),
                 ));
                 let watch_handle = handle.clone();
+                // Captured for the WatchEvent::Completed branch (v2.0.1
+                // wiring): when watch-progress crosses completion, the
+                // distribution state machine flips ready → archived and
+                // the sliding-window enforcer runs.  The async call has
+                // to be off-loaded to a tokio task because the sink
+                // closure itself is sync.
+                let watch_distribution = distribution_svc.clone();
+                let watch_distribution_sink = distribution_sink.clone();
                 let watch_sink: WatchEventSink = Arc::new(move |ev| match ev {
                     WatchEvent::Updated {
                         vod_id,
@@ -323,17 +424,30 @@ pub fn run() {
                     WatchEvent::Completed { vod_id } => {
                         let _ = watch_handle.emit(
                             crate::services::events::EV_WATCH_COMPLETED,
-                            crate::services::events::WatchCompletedEvent { vod_id },
+                            crate::services::events::WatchCompletedEvent {
+                                vod_id: vod_id.clone(),
+                            },
                         );
-                        // TODO(v2.0.x): call
-                        // `state.distribution.on_watched_completed`
-                        // here so a `Ready -> Archived` transition
-                        // fires + the sliding-window enforcer
-                        // runs.  Until then the v2.0 service is
-                        // implemented + tested but the runtime
-                        // trigger is dormant — see
-                        // `services::distribution` module doc and
-                        // `docs/MIGRATION-v1-to-v2.md`.
+                        // v2.0.1: trigger ready → archived + sliding-
+                        // window enforce.  Best-effort — the watch
+                        // event already fired and the user's session
+                        // shouldn't stall on a distribution failure.
+                        // A pool-closed error during clean shutdown
+                        // is expected-and-benign; a future reviewer
+                        // should NOT add a retry loop here.
+                        let dist = watch_distribution.clone();
+                        let sink = watch_distribution_sink.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) =
+                                dist.on_watched_completed(&vod_id, &sink).await
+                            {
+                                warn!(
+                                    error = ?err,
+                                    vod_id,
+                                    "on_watched_completed wiring failed"
+                                );
+                            }
+                        });
                     }
                 });
 
@@ -372,59 +486,6 @@ pub fn run() {
                     SettingsService::new(db.clone(), clock.clone()),
                     clock.clone(),
                 ));
-
-                // Phase 8: pull-on-demand distribution service +
-                // event sink.  The IPC commands wrap the service;
-                // events fan out via the same handle pattern as
-                // the cleanup / sync services.
-                let distribution_svc = Arc::new(DistributionService::new(
-                    db.clone(),
-                    clock.clone(),
-                    SettingsService::new(db.clone(), clock.clone()),
-                ));
-                let distribution_handle = handle.clone();
-                let distribution_sink: DistributionEventSink =
-                    Arc::new(move |ev| match ev {
-                        DistributionEvent::VodPicked { vod_id, from } => {
-                            let _ = distribution_handle.emit(
-                                EV_DISTRIBUTION_VOD_PICKED,
-                                DistributionVodPickedEvent {
-                                    vod_id,
-                                    from_status: from.as_db_str().to_owned(),
-                                },
-                            );
-                        }
-                        DistributionEvent::VodArchived { vod_id } => {
-                            let _ = distribution_handle.emit(
-                                EV_DISTRIBUTION_VOD_ARCHIVED,
-                                DistributionVodArchivedEvent { vod_id },
-                            );
-                        }
-                        DistributionEvent::PrefetchTriggered {
-                            currently_watching,
-                            prefetched,
-                        } => {
-                            let _ = distribution_handle.emit(
-                                EV_DISTRIBUTION_PREFETCH_TRIGGERED,
-                                DistributionPrefetchTriggeredEvent {
-                                    currently_watching,
-                                    prefetched,
-                                },
-                            );
-                        }
-                        DistributionEvent::WindowEnforced {
-                            streamer_id,
-                            evicted_vod_id,
-                        } => {
-                            let _ = distribution_handle.emit(
-                                EV_DISTRIBUTION_WINDOW_ENFORCED,
-                                DistributionWindowEnforcedEvent {
-                                    streamer_id,
-                                    evicted_vod_id,
-                                },
-                            );
-                        }
-                    });
 
                 // Phase 7: auto-cleanup service + event sink.
                 let cleanup_svc = Arc::new(CleanupService::new(
@@ -828,6 +889,7 @@ pub fn run() {
                     encoder_detection: encoder_detection_svc.clone(),
                     distribution: distribution_svc,
                     distribution_sink: distribution_sink.clone(),
+                    forecast: forecast_svc.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });

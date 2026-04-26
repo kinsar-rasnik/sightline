@@ -280,6 +280,7 @@ mod tests {
             status_reason: String::new(),
             first_seen_at: 0,
             last_seen_at: 0,
+            status: crate::domain::distribution::VodStatus::Available,
         }
     }
 

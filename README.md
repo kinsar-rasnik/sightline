@@ -3,10 +3,16 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>v2.0.0 — storage-aware, local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
+  <em>v2.0.1 — storage-aware, local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
 </p>
 
-> **v2.0 highlights** — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
+> **v2.0.1 highlights** (Phase 8 scope-closure) — see [`CHANGELOG.md`](CHANGELOG.md) for full release notes.
+> - **Storage forecast UI** — Streamers → Add now shows a per-streamer disk / bandwidth estimate before you commit. Settings → Storage Outlook shows the global view with per-streamer breakdown and a Green / Amber / Red watermark indicator.
+> - **Unified Library** — every non-deleted VOD is rendered with status-aware visual differentiation (opacity + badge) and per-card quick actions (Download / Cancel / Watch / Re-watch / Remove). Filter chips: All / Not downloaded / Downloaded / Watched.
+> - **Pre-fetch wired** — when you cross 70% of a VOD (or have <2 min remaining), Sightline pulls the next chronological available VOD on the same streamer in the background.
+> - **Windows CPU suspend** — re-encodes now adaptively pause on Windows under system load (NtSuspendProcess via PowerShell), matching the existing macOS / Linux SIGSTOP path.
+
+> **v2.0 highlights** (storage-aware capstone) — see [`CHANGELOG.md`](CHANGELOG.md).
 > - **Pull-on-demand** is the new default for fresh installs: polling discovers VODs as `available`, and you pick what to actually download.  Existing v1.0 installs keep their auto-download behaviour automatically; toggle in Settings → Distribution.
 > - **720p30 H.265 default** with hardware-encode-first detection (VideoToolbox / NVENC / AMF / QuickSync / VAAPI).  Audio is **never** re-encoded.
 > - **Background-friendly re-encode** drops priority and adaptively suspends ffmpeg when CPU load is high — no more frame drops in your game.
@@ -43,7 +49,7 @@ All data stays on your machine. No account required. No telemetry. The optional 
 - **Multi-View Sync.** Open two VODs side-by-side, lock them to shared wall-clock time, seek one and the other follows.
 - **Auto-cleanup** of watched VODs (24h / 7d / 30d / off).
 - **Pull-on-demand distribution (v2.0)** — pick VODs explicitly, no surprise downloads.  Sliding window keeps disk use bounded.
-- **Storage forecast (v2.0.x)** — see disk + bandwidth cost of adding a streamer before you commit.
+- **Storage forecast (v2.0.1)** — see disk + bandwidth cost of adding a streamer before you commit, plus a global Storage Outlook in Settings with per-streamer breakdown and a Green / Amber / Red watermark indicator.
 - **Quality pipeline (v2.0)** — 720p30 H.265 default, hardware-encode-first, audio passthrough invariant, CPU-throttle for background re-encodes.
 - **Sub-only detection** — clearly flagged, never silently failed downloads.
 - **Proton Drive–friendly.** The library root can live under any sync provider; the app handles temporary file locks gracefully.

@@ -8,6 +8,7 @@ pub mod cleanup;
 pub mod credentials;
 pub mod distribution;
 pub mod downloads;
+pub mod forecast;
 pub mod health;
 pub mod media;
 pub mod poll;

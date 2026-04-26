@@ -190,6 +190,94 @@ impl DistributionService {
         })
     }
 
+    /// Remove a downloaded VOD from disk on user request.  Valid
+    /// from `Ready` (delete the live file) and `Archived` (delete
+    /// the watched-but-not-yet-cleaned-up file).  Transitions
+    /// `vods.status` to `Deleted` and best-effort `tokio::fs::remove_file`s
+    /// the underlying `.mp4` so the user sees the disk freed
+    /// immediately rather than waiting for the next auto-cleanup
+    /// tick.  Idempotent on `Deleted` rows.
+    pub async fn remove_vod(
+        &self,
+        vod_id: &str,
+        sink: &DistributionEventSink,
+    ) -> Result<(), AppError> {
+        let current = self.read_status(vod_id).await?;
+        match current {
+            VodStatus::Ready | VodStatus::Archived => {}
+            VodStatus::Deleted => return Ok(()),
+            other => {
+                return Err(AppError::InvalidInput {
+                    detail: format!(
+                        "remove_vod only valid from ready/archived, got {:?} for {vod_id}",
+                        other
+                    ),
+                });
+            }
+        }
+        // Best-effort: read the final_path off the downloads row
+        // and unlink the file.  Failure is logged but doesn't block
+        // the state transition — auto-cleanup will catch any
+        // stragglers.
+        //
+        // Defense-in-depth: even though the download pipeline
+        // enforces `final_path.starts_with(library_root)` at write
+        // time, we verify the prefix here too before unlinking.
+        // A future bug that lets an out-of-root path land in the
+        // column should never translate into deleting a file
+        // outside the user's library.
+        let final_path: Option<String> =
+            sqlx::query_scalar("SELECT final_path FROM downloads WHERE vod_id = ?")
+                .bind(vod_id)
+                .fetch_optional(self.db.pool())
+                .await?
+                .flatten();
+        if let Some(path) = final_path {
+            let library_root = self.settings.get().await?.library_root;
+            let in_library = match library_root.as_deref() {
+                Some(root) => std::path::Path::new(&path).starts_with(root),
+                // Library root not configured — ffmpeg sidecar
+                // can't have produced a file at all, so any path
+                // we see here is suspicious.  Skip the unlink.
+                None => false,
+            };
+            if !in_library {
+                warn!(
+                    vod_id,
+                    path, "remove_vod: refusing to unlink path outside library root"
+                );
+            } else if let Err(e) = tokio::fs::remove_file(&path).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(vod_id, error = %e, path, "remove_vod: file unlink failed");
+            }
+        }
+        validate_transition(current, VodStatus::Deleted).map_err(|e| map_distribution_err(&e))?;
+        self.write_status(vod_id, VodStatus::Deleted).await?;
+        // Flag the downloads row as cancelled so the queue does
+        // not try to "complete" it on a future tick.  We do NOT
+        // call the `downloads::sync_vods_after_download_state`
+        // helper here — vods.status is already 'deleted' from
+        // `write_status` above, and that helper's FailedPermanent
+        // branch only allows 'queued'/'downloading' as valid_from,
+        // so the call would silently no-op.  Using a raw UPDATE
+        // makes the intent explicit: distribution → downloads
+        // convergence, not the reverse direction.
+        sqlx::query(
+            "UPDATE downloads SET state = 'failed_permanent',
+                 last_error = 'user_removed', last_error_at = ?
+              WHERE vod_id = ? AND state = 'completed'",
+        )
+        .bind(self.clock.unix_seconds())
+        .bind(vod_id)
+        .execute(self.db.pool())
+        .await?;
+        (sink)(DistributionEvent::VodArchived {
+            vod_id: vod_id.to_owned(),
+        });
+        Ok(())
+    }
+
     /// Watch-progress crossed completion.  Transitions `ready ->
     /// archived` and runs the sliding-window enforcer for the
     /// streamer.  Idempotent — re-watching an already-archived VOD
@@ -601,6 +689,151 @@ mod tests {
         let (sink, _) = capture_sink();
         let picked = svc.prefetch_check("v1", &sink).await.unwrap();
         assert_eq!(picked, None);
+    }
+
+    #[tokio::test]
+    async fn remove_vod_transitions_ready_to_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        let (sink, captured) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        // VOD now Deleted.
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM vods WHERE twitch_video_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(status, "deleted");
+        let evs = captured.lock().unwrap();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, DistributionEvent::VodArchived { .. })),
+            "expected a VodArchived (delete-tier) event"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_vod_transitions_archived_to_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "archived", 100).await;
+        let (sink, _) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM vods WHERE twitch_video_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(status, "deleted");
+    }
+
+    #[tokio::test]
+    async fn remove_vod_idempotent_on_already_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "deleted", 100).await;
+        let (sink, _) = capture_sink();
+        // Should be a benign no-op rather than an error.
+        svc.remove_vod("v1", &sink).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_vod_rejects_invalid_states() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "queued", 100).await;
+        let (sink, _) = capture_sink();
+        let err = svc.remove_vod("v1", &sink).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn remove_vod_unlinks_the_underlying_file() {
+        // R-RC-02 follow-up: prove that the best-effort
+        // tokio::fs::remove_file actually fires for a real downloads
+        // row with a populated final_path that lies under the
+        // configured library_root.
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        // Seed a real file on disk + configure library_root to its
+        // parent so the defense-in-depth prefix guard accepts it.
+        let tmp = tempfile::tempdir().unwrap();
+        let final_path = tmp.path().join("v1.mp4");
+        tokio::fs::write(&final_path, b"deadbeef").await.unwrap();
+        sqlx::query("UPDATE app_settings SET library_root = ? WHERE id = 1")
+            .bind(tmp.path().display().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        // Seed a downloads row that points at the file.  The
+        // downloads.state machine requires CHECK-allowed values
+        // and the foreign-key target (vods row) is already there.
+        sqlx::query(
+            "INSERT INTO downloads (vod_id, state, priority, quality_preset,
+                 final_path, queued_at, finished_at)
+             VALUES ('v1', 'completed', 100, 'source', ?, 0, 1)",
+        )
+        .bind(final_path.display().to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        assert!(final_path.exists());
+        let (sink, _) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        assert!(
+            !final_path.exists(),
+            "remove_vod must unlink the underlying file"
+        );
+        // downloads row also flipped to failed_permanent.
+        let dl_state: String =
+            sqlx::query_scalar("SELECT state FROM downloads WHERE vod_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(dl_state, "failed_permanent");
+    }
+
+    #[tokio::test]
+    async fn remove_vod_refuses_to_unlink_outside_library_root() {
+        // Defense-in-depth: a final_path that lies outside the
+        // configured library_root must NOT be unlinked, even if
+        // every other gate succeeded.  This guards against a future
+        // bug that lets an out-of-root path land in
+        // downloads.final_path.
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        // Two distinct tempdirs: one configured as library_root,
+        // the other holding the file we want preserved.
+        let library = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_path = outside.path().join("v1.mp4");
+        tokio::fs::write(&outside_path, b"sensitive").await.unwrap();
+        sqlx::query("UPDATE app_settings SET library_root = ? WHERE id = 1")
+            .bind(library.path().display().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO downloads (vod_id, state, priority, quality_preset,
+                 final_path, queued_at, finished_at)
+             VALUES ('v1', 'completed', 100, 'source', ?, 0, 1)",
+        )
+        .bind(outside_path.display().to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let (sink, _) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        assert!(
+            outside_path.exists(),
+            "out-of-root file must NOT be unlinked by remove_vod"
+        );
+        // The state transition still happens — the row is no longer
+        // referenced from the user's library — but the suspicious
+        // file on disk is preserved for forensic inspection.
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM vods WHERE twitch_video_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(status, "deleted");
     }
 
     #[tokio::test]

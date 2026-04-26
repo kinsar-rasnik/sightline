@@ -8,6 +8,13 @@ import type { VodWithChapters } from "@/ipc";
 
 import type * as IpcModule from "@/ipc";
 
+vi.mock("@tauri-apps/api/event", () => ({
+  // The Library page subscribes to distribution / download events
+  // for cache invalidation. In the test environment there is no
+  // Tauri runtime — short-circuit listen() to a no-op unsubscribe.
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 vi.mock("@/ipc", async () => {
   const actual = await vi.importActual<typeof IpcModule>("@/ipc");
   return {
@@ -19,6 +26,10 @@ vi.mock("@/ipc", async () => {
       listDownloads: vi.fn().mockResolvedValue([]),
       enqueueDownload: vi.fn(),
       retryDownload: vi.fn(),
+      pickVod: vi.fn().mockResolvedValue({ vodId: "v1", status: "queued" }),
+      unpickVod: vi
+        .fn()
+        .mockResolvedValue({ vodId: "v1", status: "available" }),
       getVodAssets: vi.fn().mockResolvedValue({
         vodId: "v1",
         videoPath: null,
@@ -64,6 +75,7 @@ function stubVod(overrides: Partial<VodWithChapters["vod"]> = {}): VodWithChapte
       statusReason: "",
       firstSeenAt: 1_700_000_000,
       lastSeenAt: 1_700_000_000,
+      status: "available",
       ...overrides,
     },
     chapters: [
@@ -128,19 +140,123 @@ describe("LibraryPage", () => {
     ).toBeInTheDocument();
   });
 
-  test("status filter chip narrows the query", async () => {
-    vi.mocked(commands.listVods).mockResolvedValue([]);
-    renderWith(<LibraryPage />);
-    await userEvent.click(screen.getByRole("button", { name: /sub-only/i }));
-    await waitFor(() => {
-      const last = vi.mocked(commands.listVods).mock.calls.at(-1)?.[0];
-      expect(last?.filters.statuses).toEqual(["skipped_sub_only"]);
+  test("lifecycle filter chips drive client-side filtering by vods.status", async () => {
+    // ADR-0033: lifecycle filters operate on the already-fetched
+    // VodWithChapters list; the listVods query is NOT re-narrowed
+    // (the entire library is fetched once, filtered client-side).
+    const available = stubVod({
+      twitchVideoId: "v_avail",
+      title: "Available VOD",
+      status: "available",
     });
+    const ready = stubVod({
+      twitchVideoId: "v_ready",
+      title: "Ready VOD",
+      status: "ready",
+    });
+    const archived = stubVod({
+      twitchVideoId: "v_arch",
+      title: "Archived VOD",
+      status: "archived",
+    });
+    vi.mocked(commands.listVods).mockResolvedValue([available, ready, archived]);
+    renderWith(<LibraryPage />);
+
+    // All three visible under the default "All" chip.
+    await waitFor(() =>
+      expect(screen.getByText("Available VOD")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Ready VOD")).toBeInTheDocument();
+    expect(screen.getByText("Archived VOD")).toBeInTheDocument();
+
+    // Click "Watched" — only the archived VOD should remain.
+    await userEvent.click(screen.getByRole("button", { name: /^watched$/i }));
+    await waitFor(() =>
+      expect(screen.queryByText("Available VOD")).not.toBeInTheDocument()
+    );
+    expect(screen.queryByText("Ready VOD")).not.toBeInTheDocument();
+    expect(screen.getByText("Archived VOD")).toBeInTheDocument();
+  });
+
+  test("clicking Download on an available VOD calls pickVod", async () => {
+    const pickVodMock = vi.fn().mockResolvedValue({
+      vodId: "v_avail",
+      status: "queued",
+    });
+    vi.mocked(commands).pickVod = pickVodMock;
+    vi.mocked(commands.listVods).mockResolvedValue([
+      stubVod({
+        twitchVideoId: "v_avail",
+        title: "Available VOD",
+        status: "available",
+      }),
+    ]);
+    renderWith(<LibraryPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Available VOD")).toBeInTheDocument()
+    );
+    // The hover-revealed "Download" button is in the DOM regardless
+    // of pointer state — the visibility is opacity-driven CSS, not
+    // conditional rendering — so userEvent.click finds and triggers
+    // it.
+    await userEvent.click(
+      screen.getByRole("button", { name: /Download Available VOD/i })
+    );
+    await waitFor(() => expect(pickVodMock).toHaveBeenCalledTimes(1));
+    expect(pickVodMock).toHaveBeenCalledWith({ vodId: "v_avail" });
   });
 
   test("ipc error surfaces in an alert", async () => {
     vi.mocked(commands.listVods).mockRejectedValue(new Error("boom"));
     renderWith(<LibraryPage />);
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+  });
+
+  test("Cancel on a queued VOD that already advanced surfaces a hint", async () => {
+    // unpickVod fails (state machine rejects after the row left
+    // 'queued') — the Library should surface a dismissible alert
+    // pointing the user at the Downloads page.
+    const unpickMock = vi.fn().mockRejectedValue(new Error("invalid state"));
+    vi.mocked(commands).unpickVod = unpickMock;
+    vi.mocked(commands.listVods).mockResolvedValue([
+      stubVod({
+        twitchVideoId: "v_q",
+        title: "Queued VOD",
+        status: "queued",
+      }),
+    ]);
+    renderWith(<LibraryPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Queued VOD")).toBeInTheDocument()
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Cancel queued Queued VOD/i })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /Downloads page/i
+      )
+    );
+  });
+
+  test("Remove on a ready VOD calls removeVod", async () => {
+    const removeMock = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(commands).removeVod = removeMock;
+    vi.mocked(commands.listVods).mockResolvedValue([
+      stubVod({
+        twitchVideoId: "v_ready",
+        title: "Ready VOD",
+        status: "ready",
+      }),
+    ]);
+    renderWith(<LibraryPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Ready VOD")).toBeInTheDocument()
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Remove Ready VOD from disk/i })
+    );
+    await waitFor(() => expect(removeMock).toHaveBeenCalledTimes(1));
+    expect(removeMock).toHaveBeenCalledWith({ vodId: "v_ready" });
   });
 });

@@ -24,6 +24,10 @@ export function useAddStreamer() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["streamers"] });
       qc.invalidateQueries({ queryKey: ["poll-status"] });
+      // R-RC-02 fix: bust the global storage forecast cache so
+      // Settings → Storage Outlook reflects the new streamer
+      // immediately rather than waiting for the 60s staleTime.
+      qc.invalidateQueries({ queryKey: ["forecast"] });
     },
   });
 }
@@ -36,6 +40,7 @@ export function useRemoveStreamer() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["streamers"] });
       qc.invalidateQueries({ queryKey: ["poll-status"] });
+      qc.invalidateQueries({ queryKey: ["forecast"] });
     },
   });
 }

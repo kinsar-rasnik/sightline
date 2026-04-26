@@ -6,51 +6,71 @@ Format: `## YYYY-MM-DD — Titel`
 
 ---
 
-## 2026-04-25 — Review-Cycle-Verschärfung (Mid-Phase + Re-Review)
+## 2026-04-25 — Scope-Control-Rules (R-SC-01/02/03)
 
 **Was:**
-Neue Rule-Datei `.claude/rules/review-cycles.md` mit drei Verschärfungen für künftige Phasen:
+Neue Rule-Datei `.claude/rules/scope-control.md` mit drei Regeln:
 
-- **R-RC-01 — Mid-Phase Review-Gates:** Nach jedem größeren Sub-Block (Backend-Service-fertig, Frontend-Feature-fertig, Migrationen-fertig) läuft `code-reviewer` auf den Sub-Block-Diff. Findings werden vor dem nächsten Sub-Block gefixt, nicht erst am Ende. Ziel: vermeiden, dass weitere Sub-Blöcke auf Buggy-Foundation aufbauen.
-- **R-RC-02 — Re-Review nach Critical/High-Fix:** Wenn `code-reviewer` oder `security-reviewer` einen Critical- oder High-Befund melden und ein Fix-Commit landet, läuft der entsprechende Reviewer NOCHMAL auf den Fix. Ziel: Schließen des Review-Loops, Verifikation dass der Fix tatsächlich die Root Cause adressiert und kein Folge-Issue erzeugt.
-- **R-RC-03 — Cross-Subagent-Awareness:** Wenn beide Reviewer (code + security) parallel laufen, bekommen sie jeweils im Prompt-Kontext die Findings des anderen mitgeliefert. Ziel: Koordinierte Bewertung, weniger Duplikation, mehr Vollständigkeit.
+- **R-SC-01 — Scope-Reduction-Approval:** Eigenmächtige Defer/Skip von Locked Decisions oder spec'd ACs ist nicht erlaubt. STOP-Trigger + CTO-Freigabe Pflicht.
+- **R-SC-02 — Acceptance-Criteria-Vollständigkeits-Check:** Vor End-of-Phase-Review aktiver AC-by-AC-Status-Check. Nicht-erfüllte ACs triggern R-SC-01.
+- **R-SC-03 — Versions-Manifest-Konsistenz vor Release-Tag:** Cargo.toml, package.json, tauri.conf.json müssen auf Ziel-Tag-Version stehen, BEVOR der Tag gepusht wird.
 
 **Warum:**
-Phase 6 und Phase 7 haben Subagent-Reviews nur am Phase-Ende ausgeführt. Phase 6 fand 2 P0-Findings spät, Phase 7 fand 7 High-Findings — alle inline gefixt, aber ohne Re-Review-Verifikation. Das hat funktioniert, aber das Risiko skaliert: bei größeren Phasen (Phase 8 wird umfangreicher als Phase 7) wäre ein End-of-Phase-Review-Stack mit 15+ Findings auf einmal schwer sauber zu fixen. CEO-Direktive 2026-04-25: "Besser zweimal zu viel als einmal zu wenig."
+Phase 8 hat AC9 (Storage-Forecast-UI) und AC10 (Library-UI-Re-Konzeption) komplett deferred plus AC8/AC5 partial — alle ohne Mid-Run-CTO-Konsultation. Wurde in Open-Follow-ups dokumentiert, aber damit war v2.0.0 released ohne den spec'd Scope. Zusätzlich wurde v2.0.0 mit 1.0.0-Versions-Manifests getaggt, was Hotfix + Re-Release nötig machte.
+
+CEO-Reaktion: "Locked Decisions sind locked. Defer braucht Freigabe."
 
 **Referenz:**
-- CEO-Direktive im CTO-Chat, 2026-04-25, im Anschluss an Phase-7-Final-Report.
-- Neue Rule-Datei: `.claude/rules/review-cycles.md`
-- Erste Anwendung: Phase 8 (Storage-Aware Distribution).
+- CEO-Direktive im CTO-Chat, 2026-04-25, im Anschluss an Phase-8-Final-Report.
+- Neue Rule-Datei: `.claude/rules/scope-control.md`
+- Erste Anwendung: v2.0.1 (Catch-up-Mission für AC9, AC10, AC8-Wiring, AC5-Windows).
+
+---
+
+## 2026-04-25 — Review-Cycle-Verschärfung (R-RC-01/02/03)
+
+**Was:**
+Neue Rule-Datei `.claude/rules/review-cycles.md` mit drei Verschärfungen:
+
+- **R-RC-01 — Mid-Phase Review-Gates:** Code-Reviewer läuft nach jedem größeren Sub-Block, nicht erst am Phase-Ende.
+- **R-RC-02 — Re-Review nach Critical/High-Fix:** Reviewer läuft zweites Mal auf Fix-Diff.
+- **R-RC-03 — Cross-Subagent-Awareness:** Zweiter Reviewer bekommt Findings des ersten im Kontext.
+
+**Warum:**
+Phase 6 und Phase 7 hatten Subagent-Reviews nur am Phase-Ende. Phase 7 fand 7 High-Findings — alle inline gefixt, aber ohne Re-Review-Verifikation. CEO-Direktive: "Besser zweimal zu viel als einmal zu wenig."
+
+**Erste Anwendung Phase 8 — Effektivität bestätigt:**
+CC's eigene Bewertung: "Phase 7 found 7 High end-of-phase only; Phase 8 caught and fixed equivalent issues per sub-block." R-RC-01 hat funktioniert wie geplant.
+
+**Referenz:**
+- CEO-Direktive im CTO-Chat, 2026-04-25.
+- Rule-Datei: `.claude/rules/review-cycles.md`
+- Anwendung: Phase 8 (Storage-Aware Distribution).
 
 ---
 
 ## 2026-04-25 — Konvention: Senior Engineer macht Merge + Tag
 
 **Was:**
-- Merge- und Tag-Operationen sind Senior-Engineer-Aufgabe (Claude Code via gh CLI), nicht CEO-Aufgabe.
-- CEO-Freigabe erfolgt über PR-Review und explizite Anweisung "merge das jetzt".
+Merge- und Tag-Operationen sind Senior-Engineer-Aufgabe (Claude Code via gh CLI).
 
 **Warum:**
-- Jan ist nicht-technischer CEO. Terminal-Operationen sind nicht im Rollenbild.
-- Web-UI-Merge-Flow ist umständlich für eine atomare Sequenz aus Merge → Branch-Delete → Tag → Push.
-- Senior Engineer hat ohnehin gh-CLI-Zugriff und kann den ganzen Block atomar durchführen.
+Jan ist nicht-technischer CEO. Senior Engineer hat gh-CLI-Zugriff und kann Merge → Branch-Delete → Tag → Push atomar durchführen.
 
 **Referenz:**
-- CEO-Klarstellung im CTO-Chat, 2026-04-25, im Kontext von PR #15 Merge-Vorbereitung.
-- Anwendung: PR #15, #16, #17, #18 alle vom Senior Engineer gemerged + getaggt. v1.0.0-Release-Tag ebenfalls vom Senior Engineer gesetzt.
+CEO-Klarstellung 2026-04-25. Anwendung: PR #15 bis PR #20 alle vom Senior Engineer gemerged + getaggt. v1.0.0 + v2.0.0 ebenfalls.
 
 ---
 
 ## 2026-04-25 — STATE-getriebenes CTO-Onboarding etabliert
 
 **Was:**
-- `docs/STATE.md` als Pflicht-Briefingdokument für CTO-Sessions
-- `docs/HANDOFF-TEMPLATE.md` als Template für Phasen-Übergaben
-- `.claude/CHANGELOG.md` als zentraler Tracker für Workforce-Evolution
+- `docs/STATE.md` als Pflicht-Briefingdokument
+- `docs/HANDOFF-TEMPLATE.md` als Übergabe-Template
+- `.claude/CHANGELOG.md` als Workforce-Drift-Tracker
 
 **Warum:**
-Sessions ohne Memory-Rekonstruktion starten zu können. STATE.md fungiert als Single-Source-of-Truth-Kompass; HANDOFF-Template strukturiert Übergaben; CHANGELOG dokumentiert Workforce-Drift.
+Sessions ohne Memory-Rekonstruktion starten zu können.
 
 **Referenz:**
-Project Instructions vom CEO, 2026-04-25. Erste Anwendung: Phase 6 Housekeeping → Phase 6 proper Übergang.
+Project Instructions 2026-04-25.

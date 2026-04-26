@@ -9,6 +9,7 @@ pub mod distribution;
 pub mod downloads;
 pub mod encoder_detection;
 pub mod events;
+pub mod forecast;
 pub mod health;
 pub mod ingest;
 pub mod library_migrator;

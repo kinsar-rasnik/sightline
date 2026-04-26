@@ -540,6 +540,10 @@ fn minimal_vod_from_row(
         status_reason: String::new(),
         first_seen_at: 0,
         last_seen_at: 0,
+        // Minimal stub: this row is only used for filesystem-layout
+        // resolution, never for status-aware UI rendering, so the
+        // default 'available' is benign.
+        status: crate::domain::distribution::VodStatus::Available,
     })
 }
 

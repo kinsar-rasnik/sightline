@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { VodCard } from "@/features/vods/VodCard";
+import {
+  statusLabel,
+  statusOpacityClass,
+  VodCard,
+} from "@/features/vods/VodCard";
 import type { DownloadRow, VodWithChapters } from "@/ipc";
 import type * as IpcModule from "@/ipc";
 
@@ -49,6 +53,7 @@ function baseRow(): VodWithChapters {
       statusReason: "",
       firstSeenAt: 0,
       lastSeenAt: 0,
+      status: "available",
     },
     chapters: [],
     streamerDisplayName: "Sampler",
@@ -166,6 +171,41 @@ describe("VodCard", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByText(/downloaded/i)).toBeInTheDocument();
+    // The download badge is suppressed for ready/archived rows
+    // (the lifecycle status badge takes precedence) so we test
+    // a non-ready row instead.
+    const queuedRow = baseRow();
+    queuedRow.vod.status = "queued";
+    renderWith(
+      <VodCard
+        row={queuedRow}
+        download={{ ...completed(), state: "downloading" }}
+        selected={false}
+        onSelect={() => {}}
+      />
+    );
+    expect(screen.getByText(/downloading/i)).toBeInTheDocument();
+  });
+});
+
+describe("statusOpacityClass", () => {
+  test("returns the documented tier per ADR-0033 for each status", () => {
+    expect(statusOpacityClass("available")).toBe("opacity-60");
+    expect(statusOpacityClass("queued")).toBe("opacity-70");
+    expect(statusOpacityClass("downloading")).toBe("opacity-80");
+    expect(statusOpacityClass("ready")).toBe("opacity-100");
+    expect(statusOpacityClass("archived")).toBe("opacity-100");
+    expect(statusOpacityClass("deleted")).toBe("opacity-50");
+  });
+});
+
+describe("statusLabel", () => {
+  test("maps each status to a human label", () => {
+    expect(statusLabel("available")).toBe("Available");
+    expect(statusLabel("queued")).toBe("Queued");
+    expect(statusLabel("downloading")).toBe("Downloading");
+    expect(statusLabel("ready")).toBe("Ready");
+    expect(statusLabel("archived")).toBe("Watched");
+    expect(statusLabel("deleted")).toBe("Removed");
   });
 });

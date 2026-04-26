@@ -128,6 +128,14 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::distribution::unpick_vod,
             commands::distribution::set_distribution_mode,
             commands::distribution::set_sliding_window_size,
+            // v2.0.1: pre-fetch hook (ADR-0031), invoked by the
+            // player on watch-progress threshold crossings.
+            commands::distribution::prefetch_check,
+            // v2.0.1: per-card Remove action (ADR-0033).
+            commands::distribution::remove_vod,
+            // v2.0.1: storage forecast (ADR-0032).
+            commands::forecast::estimate_streamer_footprint,
+            commands::forecast::estimate_global_footprint,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS

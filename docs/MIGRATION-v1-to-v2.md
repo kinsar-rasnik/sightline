@@ -93,34 +93,48 @@ disk-pressure relief.  The watermark stays as an emergency belt-
 and-braces — if your disk fills up despite the window, the Phase
 7 watermark cleanup still fires.
 
-### What v2.0 ships vs. v2.0.x
+### What v2.0 ships vs. v2.0.1
 
-The v2.0 release ships:
+The v2.0 release shipped:
 
 - The full pull-mode foundation (state machine, sliding window,
   pre-fetch hook, IPC surface, settings, migrations).
 - The full quality pipeline (encoder detection, reencode service,
   CPU throttle decision logic, settings UI).
 
-The v2.0.x point releases will add:
+The **v2.0.1 scope-closure release** finishes the surface that was
+deferred in v2.0:
 
-- **v2.0.x download-worker integration** — the existing download
-  service will start observing `vods.status = 'queued'` to drive
-  `queued -> downloading -> ready` transitions.  In v2.0, picking a
-  VOD transitions it to `queued` but the download itself is still
-  driven by the Phase 3 `downloads.state` machine; the two run in
-  parallel without conflict.  Both end-states are correct;
-  the integration just makes the column the single source of truth.
-- **v2.0.x storage forecast UI** — the math is in
-  `domain/quality.rs::quality_factor_gb_per_hour`; the UI hook-up
-  ships in v2.0.1.
-- **v2.0.x library UI re-conception** — ADR-0033 describes the
-  full unified view (available + downloaded + filter chips); the
-  v2.0 ship has the existing library UI plus the new Distribution
-  Settings tab.  v2.0.1 adds the unified card design.
-- **v2.1 Windows ffmpeg suspend** — the throttle decision logic
-  ships in v2.0; the actual `SuspendThread` integration on Windows
-  is deferred (the Unix `kill -STOP/-CONT` path works in v2.0).
+- ✅ **Download-worker convergence** — `enqueue` and the worker's
+  state transitions now also flip `vods.status` so the legacy
+  `downloads.state` machine and the new `vods.status` lifecycle
+  agree on every row.  Pull-mode picks bridge into the existing
+  queue via the `distribution_sink` so the worker observes new
+  rows on its 5 s tick.
+- ✅ **Storage-forecast UI** — Streamers → Add shows a per-streamer
+  forecast box; Settings → Storage Outlook shows the combined
+  global forecast plus a per-streamer breakdown and a Green /
+  Amber / Red watermark indicator.  Math: see ADR-0032.
+- ✅ **Library UI re-conception** — every non-deleted VOD now
+  renders with status-aware opacity (60–100%) + lifecycle badges +
+  hover-revealed quick actions (Download / Cancel / Play / Re-watch
+  / Remove / Re-pick).  Filter chips replace the legacy ingest-
+  status chips: All / Not downloaded / Downloaded / Watched.
+- ✅ **Pre-fetch wired** — the player invokes `prefetch_check`
+  once per VOD per app session when watch progress crosses 70 %
+  or remaining time falls below 120 s.  ADR-0031 §Trigger.
+- ✅ **Windows CPU suspend** — `NtSuspendProcess` /
+  `NtResumeProcess` via PowerShell + `Add-Type` P/Invoke (matches
+  the `wmic`-style shell-out pattern used for the priority lower).
+  The Unix `kill -STOP/-CONT` path still serves macOS + Linux.
+- ✅ **Stale-PID guard** — every suspend / resume now probes
+  `is_process_alive` before issuing the OS primitive; an ffmpeg
+  child that vanished between the throttle decision and the
+  controller invocation is a benign no-op.
+
+There are no longer any v2.0.x deferrals open from the Phase 8
+scope.  See `docs/session-reports/v2.0.1-scope-closure.md` for the
+final report.
 
 ### Schema migrations
 

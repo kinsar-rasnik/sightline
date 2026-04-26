@@ -2,6 +2,52 @@
 
 All notable changes to Sightline. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] — 2026-04-26
+
+> **Scope-closure point release.**  Closes the AC9, AC10, AC8 and AC5 surfaces deferred from v2.0.  No breaking changes; no new schema migrations; no setting renames.  Existing v2.0 installs upgrade silently.
+
+The "storage-aware" v2.0 release shipped the backend substance for pull-on-demand, the quality pipeline, and adaptive CPU throttling — but four user-facing surfaces were deferred under tight scope pressure (AC9 storage forecast UI, AC10 unified library UI, AC8 pre-fetch player wiring, AC5 Windows CPU suspend).  v2.0.1 closes those gaps so v2.0 finally meets its spec end-to-end.
+
+### Highlights
+
+- **Storage forecast UI** (AC9, ADR-0032).  Streamers → Add now renders a per-streamer forecast box (weekly downloads / peak disk / Green / Amber / Red watermark indicator) immediately after a successful add.  Settings → Storage Outlook shows the combined forecast across every active streamer plus a per-streamer breakdown for spotting the disk-pressure driver.  Math is the same `quality_factor_gb_per_hour` table that v2.0 shipped — v2.0.1 hooks it up to the renderer.
+- **Unified Library UI** (AC10, ADR-0033).  The library page now renders every non-deleted VOD with status-aware visual differentiation (opacity tiers 60/70/80/100/100/50 % and a lifecycle badge) plus hover-revealed quick actions: Download / Cancel / Play / Re-watch / Remove / Pick again.  Filter chips replace the legacy ingest-status chips: All / Not downloaded / Downloaded / Watched.  Distribution events bust the vods cache so badges update without a manual refetch.
+- **Pre-fetch player wiring** (AC8, ADR-0031).  The player now invokes `prefetchCheck` once per VOD per app session when watch progress crosses 70 % or remaining time falls below 120 s.  Throttled module-side via a `Set<vodId>` so the 5-second progress cadence cannot fan out into a thousand round-trips, and short-clip edge cases (≤ 90 s clip opened at currentSeconds = 0) are guarded behind a 5 s minimum-watched threshold.
+- **Windows CPU suspend** (AC5, ADR-0029).  `NtSuspendProcess` / `NtResumeProcess` via PowerShell + `Add-Type` P/Invoke — same shell-out idiom as the existing `wmic`-based priority lower, no `unsafe_code` lint relaxation needed.  `default_suspend_controller()` now returns `WindowsSuspend` on `cfg(windows)` instead of the no-op fallback.
+- **Stale-PID guard for SuspendController** (Phase 8 medium finding).  Every suspend / resume now probes `is_process_alive` before issuing the OS primitive; an ffmpeg child that completed between the throttle decision and the controller invocation is a benign no-op rather than a crash.  Locale-independent ESRCH detection on the Unix side (re-probes via `kill -0` instead of stderr-string matching).
+- **Download-worker convergence** (deferred from Phase 8 final report).  `enqueue` and the worker's state transitions now mirror onto `vods.status` so the legacy `downloads.state` machine and the new lifecycle column agree on every row.  Pull-mode picks bridge into the worker via the `distribution_sink::VodPicked` handler (5 s tick latency on first download, accepted).
+
+### Quality + scope-discipline
+
+- New rules introduced before the run: **R-SC-01** (Scope-Reduction-Approval), **R-SC-02** (AC-Vollständigkeits-Check), **R-SC-03** (Versions-Manifest-Konsistenz).  See [`.claude/rules/scope-control.md`](.claude/rules/scope-control.md).
+- 7 sub-phases, 5 R-RC-01 mid-phase reviews, 5 R-RC-02 re-reviews — all CLEAN.  **0 P0/P1 findings** unresolved at end-of-phase.
+- 469 backend tests + 152 frontend tests, all green.
+
+### IPC
+
+3 new commands (no breaking changes to existing surface):
+- `prefetchCheck` — invoked by the player at the 70 % progress threshold.
+- `removeVod` — user-initiated remove on a downloaded VOD; transitions ready/archived → deleted and unlinks the file.
+- `estimateStreamerFootprint` / `estimateGlobalFootprint` — drives the forecast UI.
+
+The `Vod` IPC type now carries `status: VodStatus` so the renderer can render per-card lifecycle badges + filter chips without a parallel query.
+
+### Schema
+
+No new migrations.  Schema version stays at **17**.
+
+### Reverting
+
+Revert is `git revert` of the v2.0.1 commits + downgrade the binary; the schema is unchanged from v2.0 so a v2.0 binary still reads the same database.
+
+### Limitations / known follow-ups
+
+- Per-streamer quality overrides — v2.1.
+- AV1 hardware encoders — post-2026 install-base catch-up.
+- Auto-Issue-Triage workflow — separate follow-up project.
+- Live-update forecast on settings changes — v2.1.
+- Refactor `SuspendController` impls into `infra::process::suspend` — v2.1 cleanup.
+
 ## [2.0.0] — 2026-04-26
 
 > **BREAKING for new installs.** Pull-on-demand is the new default; metadata polling no longer auto-enqueues every newly-discovered VOD.  Existing v1.0 installs are preserved on auto-download mode by the migration's backwards-compat detection — flip Settings → Distribution → Mode at any time.  See [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).

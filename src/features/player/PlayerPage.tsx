@@ -29,6 +29,7 @@ import {
   DEFAULT_PLAYER_SHORTCUTS,
   usePlayerShortcuts,
 } from "./use-player-shortcuts";
+import { usePrefetchHook } from "./use-prefetch-hook";
 import { readVolume, writeVolume } from "./volume-memory";
 import {
   useMarkUnwatched,
@@ -383,6 +384,15 @@ export function PlayerPage({
     close: closeAction,
     frameStep,
     seekToFraction,
+  });
+
+  // ADR-0031: trigger pre-fetch of K+1 once watch progress crosses
+  // the threshold for VOD K.  Throttled per VOD per session by the
+  // hook itself; failures are silent.
+  usePrefetchHook({
+    vodId,
+    currentSeconds,
+    durationSeconds,
   });
 
   // Focus the container on mount so the keyboard hook sees keystrokes

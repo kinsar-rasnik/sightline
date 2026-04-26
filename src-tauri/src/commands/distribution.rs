@@ -1,6 +1,6 @@
 //! Pull-on-demand distribution IPC commands (Phase 8, ADR-0030 + ADR-0031).
 //!
-//! Five thin wrappers over [`crate::services::distribution`].  The
+//! Six thin wrappers over [`crate::services::distribution`].  The
 //! event emission happens at the AppState boundary in `lib.rs`.
 
 use serde::{Deserialize, Serialize};
@@ -103,4 +103,65 @@ pub async fn set_sliding_window_size(
         })
         .await?;
     Ok(updated.sliding_window_size)
+}
+
+/// Input for [`prefetch_check`].  The currently-watching VOD ID is
+/// the only signal — `prefetch_check` derives the streamer + the
+/// chronologically-next `available` candidate from the database.
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefetchCheckInput {
+    pub vod_id: String,
+}
+
+/// Outcome of a `prefetch_check`.  `triggered = true` means a
+/// candidate was transitioned `available -> queued`; `prefetched_vod_id`
+/// carries the VOD ID for the renderer's optimistic update.  Both
+/// fields are `false` / `None` when the check no-ops (settings,
+/// auto mode, full window, no candidate, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefetchCheckResult {
+    pub triggered: bool,
+    pub prefetched_vod_id: Option<String>,
+}
+
+/// ADR-0031 hook: invoked from the player when the active VOD's
+/// watch progress crosses the threshold or the remaining time falls
+/// below the look-ahead window.  The frontend hook
+/// (`src/features/player/use-prefetch-hook.ts`) maintains a
+/// module-scoped `Set<vodId>` so this command fires at most once
+/// per VOD per app session — re-mounting the player on the same
+/// VOD does not re-trigger.  Returns whether a pre-fetch actually
+/// fired so the renderer can show a non-blocking confirmation.
+#[tauri::command]
+#[specta::specta]
+pub async fn prefetch_check(
+    state: tauri::State<'_, AppState>,
+    input: PrefetchCheckInput,
+) -> Result<PrefetchCheckResult, AppError> {
+    let pick = state
+        .distribution
+        .prefetch_check(&input.vod_id, &state.distribution_sink)
+        .await?;
+    Ok(PrefetchCheckResult {
+        triggered: pick.is_some(),
+        prefetched_vod_id: pick,
+    })
+}
+
+/// ADR-0033 §Per-VOD quick actions.  User-initiated remove on a
+/// downloaded VOD: transitions `ready -> deleted` (or
+/// `archived -> deleted`), unlinks the file from disk, and flags
+/// the downloads row so the queue treats it as cancelled.
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_vod(
+    state: tauri::State<'_, AppState>,
+    input: PickVodInput,
+) -> Result<(), AppError> {
+    state
+        .distribution
+        .remove_vod(&input.vod_id, &state.distribution_sink)
+        .await
 }

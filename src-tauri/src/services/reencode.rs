@@ -17,19 +17,23 @@
 //!    Windows-suspend implementation can land in v2.1 without
 //!    blocking v2.0.
 //!
-//! What v2.0 ships:
+//! What v2.0 / v2.0.1 ships:
 //! - Encoder choice + audio-passthrough invariant + priority.
 //! - The throttle's *decision* loop, observable + tested.
-//! - Unix suspend wiring (signal-based) is the default; the
-//!   `NoOpSuspendController` is the v2.0 default for non-Unix and
-//!   power users who don't want suspend.
+//! - Unix suspend wiring (`SIGSTOP` / `SIGCONT` via `kill`) and
+//!   Windows suspend wiring (`NtSuspendProcess` / `NtResumeProcess`
+//!   via PowerShell + `Add-Type` P/Invoke — the same
+//!   `unsafe_code = "forbid"`-respecting shell-out pattern as
+//!   `infra::process::priority`'s `wmic` path).
+//! - Stale-PID guard on every suspend/resume (probes
+//!   `infra::process::liveness::is_process_alive` first; silent
+//!   no-op when the target PID is gone).
 //!
 //! What v2.1 will add:
-//! - Windows `SuspendThread` controller (currently the throttle
-//!   logs the decision but doesn't act on Windows).
 //! - Concurrency cap on multiple in-flight reencodes (today we
 //!   accept the cap from settings but the queue is upstream of
 //!   this service).
+//! - Hardware-aware quality-factor calibration.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,11 +85,20 @@ impl ThrottleState {
     }
 }
 
-/// Trait abstracting "freeze / unfreeze the running ffmpeg".  v2.0
-/// ships [`NoOpSuspendController`] — the throttle decision is logged
-/// but no SIGSTOP / SuspendThread actually fires.  Unix suspend is
-/// available as [`UnixSignalSuspend`] (gated behind a `cfg` so
-/// non-Unix builds stay link-clean).
+/// Trait abstracting "freeze / unfreeze the running ffmpeg".  Every
+/// platform-specific impl runs the stale-PID liveness probe
+/// (`infra::process::liveness::is_process_alive`) before issuing the
+/// suspend/resume primitive — a process that vanished between the
+/// throttle decision and the controller invocation is a benign
+/// no-op, not a crash.
+///
+/// The trait is intentionally PID-shaped (rather than handle-shaped)
+/// so the controller can be constructed once at app startup and
+/// reused across re-encode workers without threading process handles
+/// through the call graph.  TOCTOU between the liveness probe and
+/// the OS call is documented in
+/// `infra::process::liveness` — both sides handle "process gone" as
+/// `Ok(())` to keep the controller fail-open.
 pub trait SuspendController: Send + Sync {
     fn suspend(&self, pid: u32) -> Result<(), String>;
     fn resume(&self, pid: u32) -> Result<(), String>;
@@ -114,6 +127,8 @@ mod unix_suspend {
     //! this to user-supplied input without first changing the
     //! signature.
     use super::SuspendController;
+    use crate::infra::process::liveness::is_process_alive;
+    use tracing::debug;
 
     #[derive(Debug, Clone, Copy)]
     enum UnixSignal {
@@ -135,20 +150,34 @@ mod unix_suspend {
 
     impl SuspendController for UnixSignalSuspend {
         fn suspend(&self, pid: u32) -> Result<(), String> {
-            send_signal(pid, UnixSignal::Stop)
+            send_signal_guarded(pid, UnixSignal::Stop)
         }
         fn resume(&self, pid: u32) -> Result<(), String> {
-            send_signal(pid, UnixSignal::Cont)
+            send_signal_guarded(pid, UnixSignal::Cont)
         }
     }
 
-    fn send_signal(pid: u32, sig: UnixSignal) -> Result<(), String> {
+    fn send_signal_guarded(pid: u32, sig: UnixSignal) -> Result<(), String> {
+        if !is_process_alive(pid) {
+            debug!(pid, signal = sig.flag(), "stale PID — suspend/resume no-op");
+            return Ok(());
+        }
         let flag = sig.flag();
         let output = std::process::Command::new("kill")
             .args([flag, &pid.to_string()])
             .output()
             .map_err(|e| format!("kill spawn: {e}"))?;
         if !output.status.success() {
+            // ESRCH-equivalent: the process died between the liveness
+            // probe and the kill call.  Re-probe via
+            // `is_process_alive` rather than stderr-text matching —
+            // GNU coreutils localises "No such process" so a match on
+            // the English string would mis-classify on non-English
+            // hosts (R-RC-02 fix).
+            if !is_process_alive(pid) {
+                debug!(pid, signal = flag, "process exited mid-signal");
+                return Ok(());
+            }
             return Err(format!(
                 "kill {flag} {pid} exit {:?}: {}",
                 output.status.code(),
@@ -160,6 +189,168 @@ mod unix_suspend {
 }
 #[cfg(unix)]
 pub use unix_suspend::UnixSignalSuspend;
+
+#[cfg(windows)]
+mod windows_suspend {
+    //! Windows `NtSuspendProcess` / `NtResumeProcess` controller.
+    //!
+    //! Implementation choice: shell out to `powershell.exe` with an
+    //! `Add-Type` P/Invoke shim that calls the two `ntdll.dll`
+    //! primitives.  This matches the `infra::process::priority`
+    //! pattern (`wmic CALL SetPriority`) — same shell-out idiom,
+    //! same `unsafe_code = "forbid"` compatibility.  An FFI-direct
+    //! implementation via the `windows` crate would require flipping
+    //! the workspace lint, which is out of scope for v2.0.1.
+    //!
+    //! Cost: roughly 0.3-0.8s per call due to PowerShell startup +
+    //! C# JIT.  The throttle samples at 5-second intervals so this
+    //! is invisible to the user.  A native FFI rewrite is a v2.1
+    //! follow-up if support data shows the latency matters.
+    use super::SuspendController;
+    use crate::infra::process::liveness::is_process_alive;
+    use tracing::debug;
+
+    /// Operation requested of the embedded P/Invoke shim.  Closed
+    /// enum at the type level so a caller can never widen this to a
+    /// user-supplied string (the same R-RC-03 hygiene applied on the
+    /// Unix side).
+    #[derive(Debug, Clone, Copy)]
+    enum NtOp {
+        Suspend,
+        Resume,
+    }
+
+    impl NtOp {
+        fn entrypoint(self) -> &'static str {
+            match self {
+                NtOp::Suspend => "NtSuspendProcess",
+                NtOp::Resume => "NtResumeProcess",
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct WindowsSuspend;
+
+    impl SuspendController for WindowsSuspend {
+        fn suspend(&self, pid: u32) -> Result<(), String> {
+            run_nt_op_guarded(pid, NtOp::Suspend)
+        }
+        fn resume(&self, pid: u32) -> Result<(), String> {
+            run_nt_op_guarded(pid, NtOp::Resume)
+        }
+    }
+
+    fn run_nt_op_guarded(pid: u32, op: NtOp) -> Result<(), String> {
+        if !is_process_alive(pid) {
+            debug!(
+                pid,
+                op = op.entrypoint(),
+                "stale PID — suspend/resume no-op"
+            );
+            return Ok(());
+        }
+        let script = build_script(pid, op);
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("powershell spawn: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "powershell {} pid={pid} exit {:?}: {}",
+                op.entrypoint(),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
+    /// Construct the PowerShell command that performs the
+    /// suspend/resume.  PROCESS_SUSPEND_RESUME = 0x0800 is the
+    /// least-privilege access mask sufficient for both NT calls.
+    /// The class name (`SightlineSus`) is fresh per PowerShell
+    /// process so `Add-Type` won't collide with a pre-existing type
+    /// in the AppDomain.
+    ///
+    /// The NT call + handle close are wrapped in `try { ... }
+    /// finally { CloseHandle ... }` so the handle is always released
+    /// even if the NT primitive throws, and the `$rc` check happens
+    /// after the finally so an exception during close can't mask a
+    /// failed suspend (R-RC-02 fix).
+    fn build_script(pid: u32, op: NtOp) -> String {
+        format!(
+            "$ErrorActionPreference='Stop';\
+             $src='[DllImport(\"ntdll.dll\")]public static extern uint NtSuspendProcess(System.IntPtr h);\
+             [DllImport(\"ntdll.dll\")]public static extern uint NtResumeProcess(System.IntPtr h);\
+             [DllImport(\"kernel32.dll\")]public static extern System.IntPtr OpenProcess(uint a, bool b, int c);\
+             [DllImport(\"kernel32.dll\")]public static extern bool CloseHandle(System.IntPtr h);';\
+             $p=Add-Type -PassThru -Name SightlineSus -Namespace Sightline -MemberDefinition $src;\
+             $h=$p::OpenProcess(0x800, $false, {pid});\
+             if($h -eq [System.IntPtr]::Zero){{exit 2}};\
+             $rc=4294967295;\
+             try {{$rc=$p::{entry}($h)}} finally {{$p::CloseHandle($h)|Out-Null}};\
+             if($rc -ne 0){{exit 3}};\
+             exit 0",
+            pid = pid,
+            entry = op.entrypoint(),
+        )
+    }
+
+    #[cfg(test)]
+    mod script_tests {
+        use super::*;
+
+        #[test]
+        fn suspend_script_includes_pid_and_entrypoint() {
+            let s = build_script(4242, NtOp::Suspend);
+            assert!(
+                s.contains(", 4242)"),
+                "PID must appear in OpenProcess call: {s}"
+            );
+            assert!(
+                s.contains("NtSuspendProcess($h)"),
+                "entrypoint must invoke NtSuspendProcess: {s}"
+            );
+        }
+
+        #[test]
+        fn resume_script_includes_pid_and_entrypoint() {
+            let s = build_script(99, NtOp::Resume);
+            assert!(s.contains(", 99)"));
+            assert!(s.contains("NtResumeProcess($h)"));
+        }
+
+        #[test]
+        fn script_uses_minimum_access_mask() {
+            // 0x800 = PROCESS_SUSPEND_RESUME — least-privilege mask.
+            // A regression that broadened this to 0x1F0FFF
+            // (PROCESS_ALL_ACCESS) would still work but represents a
+            // privilege escalation we don't need.
+            let s = build_script(1, NtOp::Suspend);
+            assert!(
+                s.contains("OpenProcess(0x800,"),
+                "must use PROCESS_SUSPEND_RESUME = 0x800: {s}"
+            );
+        }
+
+        #[test]
+        fn script_wraps_nt_call_in_try_finally() {
+            // R-RC-02 fix: CloseHandle must always run, even if the
+            // NT primitive throws.  A regression that drops the
+            // try/finally would leak the process handle and could
+            // mask suspend failures behind a close exception.
+            let s = build_script(1, NtOp::Suspend);
+            assert!(s.contains("try {"), "missing try block: {s}");
+            assert!(
+                s.contains("finally {$p::CloseHandle"),
+                "CloseHandle must be in finally: {s}"
+            );
+        }
+    }
+}
+#[cfg(windows)]
+pub use windows_suspend::WindowsSuspend;
 
 /// Pure throttle decision step.  Given the previous state, the
 /// current CPU load fraction, and the configured thresholds, return
@@ -305,15 +496,20 @@ impl ReencodeService {
 }
 
 /// Construct a default suspend controller for the current platform.
-/// Unix builds get `UnixSignalSuspend`; everything else (Windows,
-/// targets without a cfg(unix)) gets `NoOpSuspendController` until
-/// v2.1 lands the Windows suspend wiring.
+/// Unix builds get [`UnixSignalSuspend`] (SIGSTOP / SIGCONT via
+/// `kill`).  Windows builds get [`WindowsSuspend`] (NtSuspendProcess /
+/// NtResumeProcess via PowerShell + Add-Type P/Invoke).  Targets
+/// without an OS-specific impl fall back to [`NoOpSuspendController`].
 pub fn default_suspend_controller() -> Arc<dyn SuspendController> {
     #[cfg(unix)]
     {
         Arc::new(UnixSignalSuspend)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        Arc::new(WindowsSuspend)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         Arc::new(NoOpSuspendController)
     }
@@ -524,5 +720,72 @@ mod tests {
         let c = NoOpSuspendController;
         assert!(c.suspend(0).is_ok());
         assert!(c.resume(0).is_ok());
+    }
+
+    /// Stale-PID guard: a controller asked to suspend a PID that
+    /// definitely doesn't exist must return Ok(()) — the throttle
+    /// loop should never escalate "process already gone" to a
+    /// hard error.  Uses `u32::MAX` as the "guaranteed dead" PID
+    /// (Linux pid_max ≤ 2^22; Windows never hands out u32::MAX).
+    #[cfg(unix)]
+    #[test]
+    fn unix_signal_suspend_is_silent_on_dead_pid() {
+        let c = UnixSignalSuspend;
+        assert!(c.suspend(u32::MAX).is_ok());
+        assert!(c.resume(u32::MAX).is_ok());
+    }
+
+    /// PID 0 is reserved on every supported OS.  The guard must
+    /// classify it as dead and skip the OS call entirely.
+    #[cfg(unix)]
+    #[test]
+    fn unix_signal_suspend_pid_zero_is_noop() {
+        let c = UnixSignalSuspend;
+        assert!(c.suspend(0).is_ok());
+        assert!(c.resume(0).is_ok());
+    }
+
+    /// Windows side of the stale-PID guard.  Same contract: a dead
+    /// PID must never produce an error.  The Windows controller
+    /// shells out to `tasklist` for the liveness probe and to
+    /// `powershell` for the suspend op; for a known-dead PID only
+    /// the probe runs and the function returns early without
+    /// touching PowerShell.
+    #[cfg(windows)]
+    #[test]
+    fn windows_suspend_is_silent_on_dead_pid() {
+        let c = WindowsSuspend;
+        assert!(c.suspend(u32::MAX).is_ok());
+        assert!(c.resume(u32::MAX).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_suspend_pid_zero_is_noop() {
+        let c = WindowsSuspend;
+        assert!(c.suspend(0).is_ok());
+        assert!(c.resume(0).is_ok());
+    }
+
+    /// Spawn a real child, kill it, then prove suspend/resume on
+    /// the now-dead PID is benign.  This is the realistic
+    /// stale-PID scenario: the throttle loop sampled CPU, decided
+    /// to suspend, and by the time the controller fires the encode
+    /// has already completed and the PID is gone.
+    #[cfg(unix)]
+    #[test]
+    fn unix_signal_suspend_handles_killed_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.kill().unwrap();
+        let _ = child.wait();
+        let c = UnixSignalSuspend;
+        // Both the liveness probe AND the kill-call ESRCH branch are
+        // tolerant of the dead PID.
+        assert!(c.suspend(pid).is_ok());
+        assert!(c.resume(pid).is_ok());
     }
 }

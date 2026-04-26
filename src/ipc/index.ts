@@ -40,6 +40,11 @@ import {
   type DistributionWindowEnforcedEvent,
   type EncoderCapability,
   type EncoderKind,
+  type EstimateStreamerFootprintInput,
+  type ForecastResult,
+  type GlobalForecast,
+  type StreamerForecast,
+  type WatermarkRisk,
   type ExecuteCleanupInput,
   type OpenReleaseUrlInput,
   type SkipUpdateVersionInput,
@@ -113,6 +118,8 @@ import {
   type PickNextNInput,
   type PickResult,
   type PickVodInput,
+  type PrefetchCheckInput,
+  type PrefetchCheckResult,
   type SetDistributionModeInput,
   type SetSlidingWindowSizeInput,
   type SetSyncLeaderInput,
@@ -181,6 +188,11 @@ export type {
   DistributionWindowEnforcedEvent,
   EncoderCapability,
   EncoderKind,
+  EstimateStreamerFootprintInput,
+  ForecastResult,
+  GlobalForecast,
+  StreamerForecast,
+  WatermarkRisk,
   ExecuteCleanupInput,
   OpenReleaseUrlInput,
   SkipUpdateVersionInput,
@@ -254,6 +266,8 @@ export type {
   PickNextNInput,
   PickResult,
   PickVodInput,
+  PrefetchCheckInput,
+  PrefetchCheckResult,
   SetDistributionModeInput,
   SetSlidingWindowSizeInput,
   SetSyncLeaderInput,
@@ -577,6 +591,20 @@ export const commands = {
     input: SetSlidingWindowSizeInput,
   ): Promise<number> =>
     unwrap(await generatedCommands.setSlidingWindowSize(input)),
+  prefetchCheck: async (
+    input: PrefetchCheckInput,
+  ): Promise<PrefetchCheckResult> =>
+    unwrap(await generatedCommands.prefetchCheck(input)),
+  removeVod: async (input: PickVodInput): Promise<void> => {
+    unwrap(await generatedCommands.removeVod(input));
+  },
+  // --- v2.0.1: storage forecast (ADR-0032) ---
+  estimateStreamerFootprint: async (
+    input: EstimateStreamerFootprintInput,
+  ): Promise<ForecastResult> =>
+    unwrap(await generatedCommands.estimateStreamerFootprint(input)),
+  estimateGlobalFootprint: async (): Promise<GlobalForecast> =>
+    unwrap(await generatedCommands.estimateGlobalFootprint()),
 };
 
 /**

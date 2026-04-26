@@ -83,6 +83,10 @@ pub struct Vod {
     pub status_reason: String,
     pub first_seen_at: i64,
     pub last_seen_at: i64,
+    /// Phase 8 distribution lifecycle (ADR-0030).  Surfaced in the
+    /// VOD list so the Library UI can render status badges +
+    /// quick-action affordances without a second round-trip.
+    pub status: crate::domain::distribution::VodStatus,
 }
 
 #[cfg(test)]
