@@ -169,18 +169,19 @@ mod unix_suspend {
             .map_err(|e| format!("kill spawn: {e}"))?;
         if !output.status.success() {
             // ESRCH-equivalent: the process died between the liveness
-            // probe and the kill call.  Match the dead-PID case from
-            // the guard above and report success so the throttle
-            // loop doesn't escalate.
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("No such process") {
+            // probe and the kill call.  Re-probe via
+            // `is_process_alive` rather than stderr-text matching —
+            // GNU coreutils localises "No such process" so a match on
+            // the English string would mis-classify on non-English
+            // hosts (R-RC-02 fix).
+            if !is_process_alive(pid) {
                 debug!(pid, signal = flag, "process exited mid-signal");
                 return Ok(());
             }
             return Err(format!(
                 "kill {flag} {pid} exit {:?}: {}",
                 output.status.code(),
-                stderr
+                String::from_utf8_lossy(&output.stderr)
             ));
         }
         Ok(())
@@ -271,6 +272,12 @@ mod windows_suspend {
     /// The class name (`SightlineSus`) is fresh per PowerShell
     /// process so `Add-Type` won't collide with a pre-existing type
     /// in the AppDomain.
+    ///
+    /// The NT call + handle close are wrapped in `try { ... }
+    /// finally { CloseHandle ... }` so the handle is always released
+    /// even if the NT primitive throws, and the `$rc` check happens
+    /// after the finally so an exception during close can't mask a
+    /// failed suspend (R-RC-02 fix).
     fn build_script(pid: u32, op: NtOp) -> String {
         format!(
             "$ErrorActionPreference='Stop';\
@@ -281,8 +288,8 @@ mod windows_suspend {
              $p=Add-Type -PassThru -Name SightlineSus -Namespace Sightline -MemberDefinition $src;\
              $h=$p::OpenProcess(0x800, $false, {pid});\
              if($h -eq [System.IntPtr]::Zero){{exit 2}};\
-             $rc=$p::{entry}($h);\
-             $p::CloseHandle($h)|Out-Null;\
+             $rc=4294967295;\
+             try {{$rc=$p::{entry}($h)}} finally {{$p::CloseHandle($h)|Out-Null}};\
              if($rc -ne 0){{exit 3}};\
              exit 0",
             pid = pid,
@@ -324,6 +331,20 @@ mod windows_suspend {
             assert!(
                 s.contains("OpenProcess(0x800,"),
                 "must use PROCESS_SUSPEND_RESUME = 0x800: {s}"
+            );
+        }
+
+        #[test]
+        fn script_wraps_nt_call_in_try_finally() {
+            // R-RC-02 fix: CloseHandle must always run, even if the
+            // NT primitive throws.  A regression that drops the
+            // try/finally would leak the process handle and could
+            // mask suspend failures behind a close exception.
+            let s = build_script(1, NtOp::Suspend);
+            assert!(s.contains("try {"), "missing try block: {s}");
+            assert!(
+                s.contains("finally {$p::CloseHandle"),
+                "CloseHandle must be in finally: {s}"
             );
         }
     }

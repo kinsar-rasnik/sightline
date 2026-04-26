@@ -121,16 +121,23 @@ mod tests {
         // report dead.  Exercises the realistic stale-PID-guard
         // pattern: at the moment we'd send STOP/CONT, the child is
         // already gone.
+        //
+        // Windows uses `powershell Start-Sleep` rather than `cmd /C
+        // ping` — `ping` exits immediately when ICMP is blocked
+        // (Windows Firewall, hardened CI runners), which would
+        // produce a false negative on the "freshly spawned should be
+        // alive" assertion.  PowerShell is present on every Win10+
+        // image and `Start-Sleep` doesn't depend on networking.
         #[cfg(unix)]
         let mut child = std::process::Command::new("sleep")
             .arg("60")
             .spawn()
             .expect("spawn sleep");
         #[cfg(windows)]
-        let mut child = std::process::Command::new("cmd")
-            .args(["/C", "ping", "-n", "60", "127.0.0.1"])
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"])
             .spawn()
-            .expect("spawn cmd");
+            .expect("spawn powershell sleep");
         let pid = child.id();
         assert!(
             is_process_alive(pid),
