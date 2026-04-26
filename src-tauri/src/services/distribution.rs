@@ -190,6 +190,66 @@ impl DistributionService {
         })
     }
 
+    /// Remove a downloaded VOD from disk on user request.  Valid
+    /// from `Ready` (delete the live file) and `Archived` (delete
+    /// the watched-but-not-yet-cleaned-up file).  Transitions
+    /// `vods.status` to `Deleted` and best-effort `tokio::fs::remove_file`s
+    /// the underlying `.mp4` so the user sees the disk freed
+    /// immediately rather than waiting for the next auto-cleanup
+    /// tick.  Idempotent on `Deleted` rows.
+    pub async fn remove_vod(
+        &self,
+        vod_id: &str,
+        sink: &DistributionEventSink,
+    ) -> Result<(), AppError> {
+        let current = self.read_status(vod_id).await?;
+        match current {
+            VodStatus::Ready | VodStatus::Archived => {}
+            VodStatus::Deleted => return Ok(()),
+            other => {
+                return Err(AppError::InvalidInput {
+                    detail: format!(
+                        "remove_vod only valid from ready/archived, got {:?} for {vod_id}",
+                        other
+                    ),
+                });
+            }
+        }
+        // Best-effort: read the final_path off the downloads row
+        // and unlink the file.  Failure is logged but doesn't block
+        // the state transition — auto-cleanup will catch any
+        // stragglers.
+        let final_path: Option<String> =
+            sqlx::query_scalar("SELECT final_path FROM downloads WHERE vod_id = ?")
+                .bind(vod_id)
+                .fetch_optional(self.db.pool())
+                .await?
+                .flatten();
+        if let Some(path) = final_path
+            && let Err(e) = tokio::fs::remove_file(&path).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(vod_id, error = %e, path, "remove_vod: file unlink failed");
+        }
+        validate_transition(current, VodStatus::Deleted).map_err(|e| map_distribution_err(&e))?;
+        self.write_status(vod_id, VodStatus::Deleted).await?;
+        // Also flag the downloads row as cancelled so the queue
+        // doesn't try to "complete" it on a future tick.
+        sqlx::query(
+            "UPDATE downloads SET state = 'failed_permanent',
+                 last_error = 'user_removed', last_error_at = ?
+              WHERE vod_id = ? AND state = 'completed'",
+        )
+        .bind(self.clock.unix_seconds())
+        .bind(vod_id)
+        .execute(self.db.pool())
+        .await?;
+        (sink)(DistributionEvent::VodArchived {
+            vod_id: vod_id.to_owned(),
+        });
+        Ok(())
+    }
+
     /// Watch-progress crossed completion.  Transitions `ready ->
     /// archived` and runs the sliding-window enforcer for the
     /// streamer.  Idempotent — re-watching an already-archived VOD
@@ -601,6 +661,59 @@ mod tests {
         let (sink, _) = capture_sink();
         let picked = svc.prefetch_check("v1", &sink).await.unwrap();
         assert_eq!(picked, None);
+    }
+
+    #[tokio::test]
+    async fn remove_vod_transitions_ready_to_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        let (sink, captured) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        // VOD now Deleted.
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM vods WHERE twitch_video_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(status, "deleted");
+        let evs = captured.lock().unwrap();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, DistributionEvent::VodArchived { .. })),
+            "expected a VodArchived (delete-tier) event"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_vod_transitions_archived_to_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "archived", 100).await;
+        let (sink, _) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM vods WHERE twitch_video_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(status, "deleted");
+    }
+
+    #[tokio::test]
+    async fn remove_vod_idempotent_on_already_deleted() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "deleted", 100).await;
+        let (sink, _) = capture_sink();
+        // Should be a benign no-op rather than an error.
+        svc.remove_vod("v1", &sink).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_vod_rejects_invalid_states() {
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "queued", 100).await;
+        let (sink, _) = capture_sink();
+        let err = svc.remove_vod("v1", &sink).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 
     #[tokio::test]

@@ -232,8 +232,21 @@ fn row_to_vod(row: &sqlx::sqlite::SqliteRow) -> Result<Vod, AppError> {
     let is_sub_only: i64 = row.try_get(13)?;
     let ingest_status_str: String = row.try_get(16)?;
     let vod_status_str: String = row.try_get(20)?;
-    let vod_status = crate::domain::distribution::VodStatus::from_db_str(&vod_status_str)
-        .unwrap_or(crate::domain::distribution::VodStatus::Available);
+    // R-RC-02 fix: log unknown vods.status values at warn level so a
+    // future migration / corruption surfaces in the log rather than
+    // silently rendering as Available. Fallback stays on the safe
+    // side (the user can always re-pick) so a single bad row doesn't
+    // block the entire library query.
+    let vod_status = match crate::domain::distribution::VodStatus::from_db_str(&vod_status_str) {
+        Some(s) => s,
+        None => {
+            tracing::warn!(
+                vod_status_str = %vod_status_str,
+                "row_to_vod: unknown vods.status, falling back to Available"
+            );
+            crate::domain::distribution::VodStatus::Available
+        }
+    };
 
     Ok(Vod {
         twitch_video_id: row.try_get(0)?,

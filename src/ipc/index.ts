@@ -595,6 +595,9 @@ export const commands = {
     input: PrefetchCheckInput,
   ): Promise<PrefetchCheckResult> =>
     unwrap(await generatedCommands.prefetchCheck(input)),
+  removeVod: async (input: PickVodInput): Promise<void> => {
+    unwrap(await generatedCommands.removeVod(input));
+  },
   // --- v2.0.1: storage forecast (ADR-0032) ---
   estimateStreamerFootprint: async (
     input: EstimateStreamerFootprintInput,

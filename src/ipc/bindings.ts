@@ -198,6 +198,13 @@ export const commands = {
 	 */
 	prefetchCheck: (input: PrefetchCheckInput) => typedError<PrefetchCheckResult, AppError>(__TAURI_INVOKE("prefetch_check", { input })),
 	/**
+	 *  ADR-0033 §Per-VOD quick actions.  User-initiated remove on a
+	 *  downloaded VOD: transitions `ready -> deleted` (or
+	 *  `archived -> deleted`), unlinks the file from disk, and flags
+	 *  the downloads row so the queue treats it as cancelled.
+	 */
+	removeVod: (input: PickVodInput) => typedError<null, AppError>(__TAURI_INVOKE("remove_vod", { input })),
+	/**
 	 *  Forecast a single streamer's storage footprint.  Used by the
 	 *  Streamers → Add dialog to set expectations before the user
 	 *  commits, and by the per-streamer breakdown in Settings →

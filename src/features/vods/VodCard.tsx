@@ -235,7 +235,7 @@ export function VodCard({
       <div
         className="pointer-events-none absolute inset-0 flex items-end justify-end p-3 gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-[var(--motion-fast)]"
       >
-        {(status === "available" || status === "deleted") && onDownload && (
+        {status === "available" && onDownload && (
           <button
             type="button"
             onClick={(e) => {
@@ -245,7 +245,7 @@ export function VodCard({
             aria-label={`Download ${v.title}`}
             className="pointer-events-auto bg-[--color-accent] text-[--color-accent-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
           >
-            {status === "deleted" ? "↻ Re-pick" : "↓ Download"}
+            ↓ Download
           </button>
         )}
         {status === "queued" && onCancel && (
@@ -288,7 +288,7 @@ export function VodCard({
             aria-label={`Remove ${v.title} from disk`}
             className="pointer-events-auto bg-[--color-surface] border border-[--color-border] text-[--color-fg] text-xs px-3 py-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--color-accent]"
           >
-            🗑 Remove
+            × Remove
           </button>
         )}
         {status === "deleted" && onRepick && (

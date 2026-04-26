@@ -149,3 +149,19 @@ pub async fn prefetch_check(
         prefetched_vod_id: pick,
     })
 }
+
+/// ADR-0033 §Per-VOD quick actions.  User-initiated remove on a
+/// downloaded VOD: transitions `ready -> deleted` (or
+/// `archived -> deleted`), unlinks the file from disk, and flags
+/// the downloads row so the queue treats it as cancelled.
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_vod(
+    state: tauri::State<'_, AppState>,
+    input: PickVodInput,
+) -> Result<(), AppError> {
+    state
+        .distribution
+        .remove_vod(&input.vod_id, &state.distribution_sink)
+        .await
+}

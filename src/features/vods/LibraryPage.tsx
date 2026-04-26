@@ -59,6 +59,7 @@ export function LibraryPage() {
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
   const [streamerId, setStreamerId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const streamers = useStreamers();
   const qc = useQueryClient();
   const enqueue = useEnqueueDownload();
@@ -94,47 +95,82 @@ export function LibraryPage() {
   // ADR-0033 §Event-driven UI updates: subscribe to distribution
   // events and bust the vods cache so status badges + filter chips
   // reflect reality immediately rather than after the next refetch.
+  // R-RC-02 fix: track resolved unlisteners in a ref so cleanup is
+  // synchronous and the unmounted component cannot receive a late
+  // event tick into invalidateQueries.
   useEffect(() => {
-    const unlisten: Array<Promise<() => void>> = [
-      listen(events.distributionVodPicked, () => {
-        qc.invalidateQueries({ queryKey: ["vods"] });
-      }),
-      listen(events.distributionVodArchived, () => {
-        qc.invalidateQueries({ queryKey: ["vods"] });
-      }),
-      listen(events.distributionWindowEnforced, () => {
-        qc.invalidateQueries({ queryKey: ["vods"] });
-      }),
-      listen(events.downloadCompleted, () => {
-        qc.invalidateQueries({ queryKey: ["vods"] });
-      }),
-    ];
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    const subscribe = async (
+      topic: string,
+      handler: () => void
+    ): Promise<void> => {
+      const unsub = await listen(topic, handler);
+      if (cancelled) {
+        unsub();
+        return;
+      }
+      unlisteners.push(unsub);
+    };
+    const invalidate = () =>
+      qc.invalidateQueries({ queryKey: ["vods"] });
+    void Promise.all([
+      subscribe(events.distributionVodPicked, invalidate),
+      subscribe(events.distributionVodArchived, invalidate),
+      subscribe(events.distributionWindowEnforced, invalidate),
+      subscribe(events.downloadCompleted, invalidate),
+    ]);
     return () => {
-      unlisten.forEach((p) => {
-        void p.then((u) => u());
-      });
+      cancelled = true;
+      unlisteners.forEach((u) => u());
     };
   }, [qc]);
 
   const handleDownload = async (vodId: string) => {
+    setActionError(null);
     try {
       await commands.pickVod({ vodId });
     } catch {
       // Pull-mode pick failed — fall back to the legacy enqueue
       // path so a user in auto-mode (or with a stale vods.status)
-      // still gets the download started.
-      enqueue.mutate(vodId);
+      // still gets the download started. Await mutateAsync so the
+      // subsequent invalidateQueries observes the new row.
+      try {
+        await enqueue.mutateAsync(vodId);
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : "unknown error";
+        setActionError(`Could not start download: ${detail}`);
+        return;
+      }
     }
     void qc.invalidateQueries({ queryKey: ["vods"] });
   };
 
   const handleCancel = async (vodId: string) => {
+    setActionError(null);
     try {
       await commands.unpickVod({ vodId });
     } catch {
       // unpick is only valid from queued; if the row is already
-      // downloading the user has to use the Downloads page's
-      // Cancel button (which routes through cancel_download).
+      // downloading the state machine rejects the transition.
+      // Surface a hint so the user knows where to go next instead
+      // of seeing a Cancel button that appears to do nothing.
+      setActionError(
+        "This download has already started. Cancel it from the Downloads page."
+      );
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const handleRemove = async (vodId: string) => {
+    setActionError(null);
+    try {
+      await commands.removeVod({ vodId });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : "unknown error";
+      setActionError(`Could not remove file: ${detail}`);
+      return;
     }
     void qc.invalidateQueries({ queryKey: ["vods"] });
   };
@@ -142,6 +178,9 @@ export function LibraryPage() {
   const emptyStateCopy = ((): string => {
     if (vods.isLoading) return "";
     if (!vods.data) return "";
+    // The "all" branch is handled by this top-level check —
+    // filteredVods === vods.data when lifecycle === "all", so the
+    // per-filter switch below never runs for the "all" case.
     if (vods.data.length === 0) {
       return "No VODs match these filters yet. Add streamers and let the poller run, or trigger a poll from the Streamers page.";
     }
@@ -153,7 +192,8 @@ export function LibraryPage() {
           return "Nothing downloaded yet. Pick a VOD from the Not downloaded filter.";
         case "watched":
           return "No watched VODs yet. Watching one to completion will move it here.";
-        default:
+        case "all":
+          // Unreachable: vods.data.length === 0 already returned above.
           return "";
       }
     }
@@ -210,6 +250,22 @@ export function LibraryPage() {
           </p>
         )}
         <ErrorBanner error={vods.error} />
+        {actionError && (
+          <div
+            role="alert"
+            className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 flex items-center justify-between gap-3"
+          >
+            <span>{actionError}</span>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setActionError(null)}
+              className="text-amber-300 hover:text-amber-100"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {emptyStateCopy && (
           <p className="text-sm text-[--color-muted]">{emptyStateCopy}</p>
         )}
@@ -247,6 +303,7 @@ export function LibraryPage() {
                     onDownload={() => void handleDownload(vodId)}
                     onCancel={() => void handleCancel(vodId)}
                     onRepick={() => void handleDownload(vodId)}
+                    onRemove={() => void handleRemove(vodId)}
                     {...(cw ? { watchedFraction: cw.watchedFraction } : {})}
                   />
                 </li>

@@ -211,4 +211,52 @@ describe("LibraryPage", () => {
     renderWith(<LibraryPage />);
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
   });
+
+  test("Cancel on a queued VOD that already advanced surfaces a hint", async () => {
+    // unpickVod fails (state machine rejects after the row left
+    // 'queued') — the Library should surface a dismissible alert
+    // pointing the user at the Downloads page.
+    const unpickMock = vi.fn().mockRejectedValue(new Error("invalid state"));
+    vi.mocked(commands).unpickVod = unpickMock;
+    vi.mocked(commands.listVods).mockResolvedValue([
+      stubVod({
+        twitchVideoId: "v_q",
+        title: "Queued VOD",
+        status: "queued",
+      }),
+    ]);
+    renderWith(<LibraryPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Queued VOD")).toBeInTheDocument()
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Cancel queued Queued VOD/i })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /Downloads page/i
+      )
+    );
+  });
+
+  test("Remove on a ready VOD calls removeVod", async () => {
+    const removeMock = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(commands).removeVod = removeMock;
+    vi.mocked(commands.listVods).mockResolvedValue([
+      stubVod({
+        twitchVideoId: "v_ready",
+        title: "Ready VOD",
+        status: "ready",
+      }),
+    ]);
+    renderWith(<LibraryPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Ready VOD")).toBeInTheDocument()
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Remove Ready VOD from disk/i })
+    );
+    await waitFor(() => expect(removeMock).toHaveBeenCalledTimes(1));
+    expect(removeMock).toHaveBeenCalledWith({ vodId: "v_ready" });
+  });
 });
