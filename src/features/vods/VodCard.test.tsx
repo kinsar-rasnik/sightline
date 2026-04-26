@@ -49,6 +49,7 @@ function baseRow(): VodWithChapters {
       statusReason: "",
       firstSeenAt: 0,
       lastSeenAt: 0,
+      status: "available",
     },
     chapters: [],
     streamerDisplayName: "Sampler",

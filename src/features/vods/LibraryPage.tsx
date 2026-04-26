@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
@@ -15,47 +16,63 @@ import { useVods } from "@/features/vods/use-vods";
 import { VodCard } from "@/features/vods/VodCard";
 import {
   commands,
+  events,
   type CoStream,
   type DownloadRow,
+  type VodStatus,
   type VodWithChapters,
 } from "@/ipc";
 import { formatDurationSeconds, formatUnixSeconds } from "@/lib/format";
 import { useNavStore } from "@/stores/nav-store";
 
-type StatusFilter =
-  | "all"
-  | "eligible"
-  | "skipped_game"
-  | "skipped_sub_only"
-  | "skipped_live"
-  | "error";
+/**
+ * Library lifecycle filter (ADR-0033 §Filter chips).  Decoupled
+ * from the legacy ingest-status filter so the new view-by-status
+ * chips can coexist if the user wants to drill in via both axes.
+ */
+type LifecycleFilter = "all" | "not_downloaded" | "downloaded" | "watched";
 
-const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
+const LIFECYCLE_OPTIONS: Array<{ key: LifecycleFilter; label: string }> = [
   { key: "all", label: "All" },
-  { key: "eligible", label: "Eligible" },
-  { key: "skipped_game", label: "Skipped — game" },
-  { key: "skipped_sub_only", label: "Sub-only" },
-  { key: "skipped_live", label: "Live" },
-  { key: "error", label: "Error" },
+  { key: "not_downloaded", label: "Not downloaded" },
+  { key: "downloaded", label: "Downloaded" },
+  { key: "watched", label: "Watched" },
 ];
 
+/** True iff a VOD's lifecycle state matches the chosen filter. */
+function matchesLifecycle(status: VodStatus, filter: LifecycleFilter): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "not_downloaded":
+      return status === "available" || status === "deleted";
+    case "downloaded":
+      return (
+        status === "queued" || status === "downloading" || status === "ready"
+      );
+    case "watched":
+      return status === "archived";
+  }
+}
+
 export function LibraryPage() {
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
   const [streamerId, setStreamerId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const streamers = useStreamers();
+  const qc = useQueryClient();
+  const enqueue = useEnqueueDownload();
 
   const input = useMemo(
     () => ({
       filters: {
         ...(streamerId && { streamerIds: [streamerId] }),
-        ...(statusFilter !== "all" && { statuses: [statusFilter] }),
       },
       sort: "stream_started_at_desc" as const,
       limit: 200,
       offset: 0,
     }),
-    [statusFilter, streamerId]
+    [streamerId]
   );
 
   const vods = useVods(input);
@@ -68,6 +85,81 @@ export function LibraryPage() {
   const continueWatching = useContinueWatching(12);
   const openPlayer = useNavStore((s) => s.openPlayer);
 
+  const filteredVods = useMemo(() => {
+    if (!vods.data) return [];
+    if (lifecycle === "all") return vods.data;
+    return vods.data.filter((v) => matchesLifecycle(v.vod.status, lifecycle));
+  }, [vods.data, lifecycle]);
+
+  // ADR-0033 §Event-driven UI updates: subscribe to distribution
+  // events and bust the vods cache so status badges + filter chips
+  // reflect reality immediately rather than after the next refetch.
+  useEffect(() => {
+    const unlisten: Array<Promise<() => void>> = [
+      listen(events.distributionVodPicked, () => {
+        qc.invalidateQueries({ queryKey: ["vods"] });
+      }),
+      listen(events.distributionVodArchived, () => {
+        qc.invalidateQueries({ queryKey: ["vods"] });
+      }),
+      listen(events.distributionWindowEnforced, () => {
+        qc.invalidateQueries({ queryKey: ["vods"] });
+      }),
+      listen(events.downloadCompleted, () => {
+        qc.invalidateQueries({ queryKey: ["vods"] });
+      }),
+    ];
+    return () => {
+      unlisten.forEach((p) => {
+        void p.then((u) => u());
+      });
+    };
+  }, [qc]);
+
+  const handleDownload = async (vodId: string) => {
+    try {
+      await commands.pickVod({ vodId });
+    } catch {
+      // Pull-mode pick failed — fall back to the legacy enqueue
+      // path so a user in auto-mode (or with a stale vods.status)
+      // still gets the download started.
+      enqueue.mutate(vodId);
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const handleCancel = async (vodId: string) => {
+    try {
+      await commands.unpickVod({ vodId });
+    } catch {
+      // unpick is only valid from queued; if the row is already
+      // downloading the user has to use the Downloads page's
+      // Cancel button (which routes through cancel_download).
+    }
+    void qc.invalidateQueries({ queryKey: ["vods"] });
+  };
+
+  const emptyStateCopy = ((): string => {
+    if (vods.isLoading) return "";
+    if (!vods.data) return "";
+    if (vods.data.length === 0) {
+      return "No VODs match these filters yet. Add streamers and let the poller run, or trigger a poll from the Streamers page.";
+    }
+    if (filteredVods.length === 0) {
+      switch (lifecycle) {
+        case "not_downloaded":
+          return "All caught up — every VOD is already downloaded or watched.";
+        case "downloaded":
+          return "Nothing downloaded yet. Pick a VOD from the Not downloaded filter.";
+        case "watched":
+          return "No watched VODs yet. Watching one to completion will move it here.";
+        default:
+          return "";
+      }
+    }
+    return "";
+  })();
+
   return (
     <div className="flex gap-6 h-full">
       <section
@@ -77,16 +169,16 @@ export function LibraryPage() {
         <div
           className="flex flex-wrap gap-2"
           role="toolbar"
-          aria-label="VOD filters"
+          aria-label="VOD lifecycle filter"
         >
-          {STATUS_OPTIONS.map((opt) => (
+          {LIFECYCLE_OPTIONS.map((opt) => (
             <button
               key={opt.key}
               type="button"
-              aria-pressed={statusFilter === opt.key}
-              onClick={() => setStatusFilter(opt.key)}
+              aria-pressed={lifecycle === opt.key}
+              onClick={() => setLifecycle(opt.key)}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                statusFilter === opt.key
+                lifecycle === opt.key
                   ? "bg-[--color-accent] text-white border-transparent"
                   : "bg-transparent text-[--color-fg] border-[--color-border] hover:bg-[--color-surface]"
               }`}
@@ -118,11 +210,8 @@ export function LibraryPage() {
           </p>
         )}
         <ErrorBanner error={vods.error} />
-        {vods.data?.length === 0 && (
-          <p className="text-sm text-[--color-muted]">
-            No VODs match these filters yet. Add streamers and let the poller
-            run, or trigger a poll from the Streamers page.
-          </p>
+        {emptyStateCopy && (
+          <p className="text-sm text-[--color-muted]">{emptyStateCopy}</p>
         )}
 
         <ContinueWatchingRow
@@ -132,28 +221,32 @@ export function LibraryPage() {
           }
         />
 
-        {vods.data && vods.data.length > 0 && (
+        {filteredVods.length > 0 && (
           <ul
             className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 max-h-[calc(100vh-200px)] overflow-y-auto pr-1"
-            aria-label={`Library — ${vods.data.length} VODs`}
+            aria-label={`Library — ${filteredVods.length} VODs`}
           >
-            {vods.data.map((v) => {
+            {filteredVods.map((v) => {
               const cw = continueWatching.data?.find(
                 (e) => e.vodId === v.vod.twitchVideoId
               );
+              const vodId = v.vod.twitchVideoId;
               return (
-                <li key={v.vod.twitchVideoId}>
+                <li key={vodId}>
                   <VodCard
                     row={v}
-                    download={downloadsById.get(v.vod.twitchVideoId) ?? null}
-                    selected={selected === v.vod.twitchVideoId}
-                    onSelect={() => setSelected(v.vod.twitchVideoId)}
+                    download={downloadsById.get(vodId) ?? null}
+                    selected={selected === vodId}
+                    onSelect={() => setSelected(vodId)}
                     onPlay={() =>
                       openPlayer({
-                        vodId: v.vod.twitchVideoId,
+                        vodId,
                         autoplay: true,
                       })
                     }
+                    onDownload={() => void handleDownload(vodId)}
+                    onCancel={() => void handleCancel(vodId)}
+                    onRepick={() => void handleDownload(vodId)}
                     {...(cw ? { watchedFraction: cw.watchedFraction } : {})}
                   />
                 </li>

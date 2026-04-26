@@ -1567,6 +1567,12 @@ export type Vod = {
 	statusReason: string,
 	firstSeenAt: number,
 	lastSeenAt: number,
+	/**
+	 *  Phase 8 distribution lifecycle (ADR-0030).  Surfaced in the
+	 *  VOD list so the Library UI can render status badges +
+	 *  quick-action affordances without a second round-trip.
+	 */
+	status: VodStatus,
 };
 
 /**

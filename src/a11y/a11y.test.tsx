@@ -21,6 +21,13 @@ import { SettingsPage } from "@/features/settings/SettingsPage";
 
 import type * as IpcModule from "@/ipc";
 
+// LibraryPage subscribes to Tauri events for cache invalidation.
+// jsdom doesn't have a Tauri runtime — short-circuit `listen` to a
+// no-op unsubscribe so the route renders without throwing.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock every backend call axe-touched routes reach for. jsdom never
 // actually boots a Tauri runtime, so each `commands.*` is a direct
 // promise — no timeouts, no loading states blocking the initial render.
