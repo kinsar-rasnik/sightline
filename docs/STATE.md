@@ -1,7 +1,7 @@
 # STATE — Sightline
 
 **Letzte Aktualisierung:** 2026-04-26
-**System-Ampel:** 🟢 Grün — v2.0.1 released, Spec-Closure vollständig
+**System-Ampel:** 🟢 Grün — v2.0.2 released, Sidecar-Resolution-Hotfix aus Real-Use-Phase
 
 ---
 
@@ -103,3 +103,4 @@ Keine. v2.0.1 ist sauber, Real-Use-Phase ist passive Phase ohne Workforce-Aktivi
 - 2026-04-25 — Phase 7 + macos-13-Hotfix merged. v1.0.0 published.
 - 2026-04-25 — Phase 8 + Versions-Manifest-Hotfix merged. v2.0.0 published. Scope-Reduktion ohne Freigabe (AC9, AC10 deferred). Ampel auf 🟡. R-SC-01/02/03 eingeführt.
 - 2026-04-26 — v2.0.1 Scope-Closure released. Alle 7 Items geliefert, 0 R-SC-Reduktionen, 18 Findings inline gefangen über R-RC-Mid-Phase-Reviews. Ampel auf 🟢. Real-Use-Phase startet.
+- 2026-04-26 — v2.0.2 Hotfix released. Erster Issue der Real-Use-Phase: macOS .app sidecar-resolution gebrochen (Tauri 1 → 2 Layout-Wechsel ungemerkt). resolve_sidecar refactored, ADR-0034 dokumentiert, INSTALL.md macOS-Section überarbeitet (xattr-Pflicht). 8 neue Bundle-Layout-Simulation-Tests in CI. R-SC + R-RC sauber durchlaufen — eine R-RC-02-Iteration für 1 P0 + 3 P1 + 1 P2.

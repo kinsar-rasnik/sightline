@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## Project
-Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across streamers into one chronological, sync-playable timeline. **v1.0.0 shipped 2026-04-25**, **v2.0.0 shipped 2026-04-25** (storage-aware capstone), **v2.0.1 shipped 2026-04-26** (Phase 8 scope-closure: forecast UI, unified library, pre-fetch wiring, Windows suspend) — see `CHANGELOG.md` for release notes; `docs/STATE.md` for the live operating snapshot.
+Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across streamers into one chronological, sync-playable timeline. **v1.0.0 shipped 2026-04-25**, **v2.0.0 shipped 2026-04-25** (storage-aware capstone), **v2.0.1 shipped 2026-04-26** (Phase 8 scope-closure: forecast UI, unified library, pre-fetch wiring, Windows suspend), **v2.0.2 shipped 2026-04-26** (sidecar-resolution hotfix per ADR-0034) — see `CHANGELOG.md` for release notes; `docs/STATE.md` for the live operating snapshot.
 
 ## Stack
 - Rust 1.90 stable · Tauri 2 · Tokio · sqlx (SQLite) · reqwest

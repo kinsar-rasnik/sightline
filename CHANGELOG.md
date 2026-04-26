@@ -2,6 +2,37 @@
 
 All notable changes to Sightline. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] — 2026-04-26
+
+> **Critical hotfix.**  v2.0.1 macOS `.dmg` shipped with a broken sidecar resolver — the encoder-detection step on first launch failed with `sidecar: spawn: No such file or directory (os error 2)`.  v2.0.2 fixes the path resolution so the bundled `ffmpeg` and `yt-dlp` are actually found at runtime.  No breaking changes, no schema migrations, no setting renames.
+
+### What was wrong
+
+The bundled sidecars (`ffmpeg-aarch64-apple-darwin`, `yt-dlp-aarch64-apple-darwin`) ship inside the `.app` at `Contents/MacOS/` next to the main binary — that's the Tauri 2 layout.  The runtime resolver was still using the Tauri 1 convention and looking under `Contents/Resources/`, which doesn't contain the sidecars.  Result: the resolver returned `None`, the caller fell through to invoking `ffmpeg` / `yt-dlp` on PATH, and on a typical macOS install those binaries don't exist.  Same root cause on Linux + Windows; macOS surfaced first because the encoder-detection probe runs the moment Settings → Video Quality opens.
+
+### Fix
+
+- `resolve_sidecar` now probes `current_exe().canonicalize().parent()` first (the canonical Tauri 2 sidecar location across macOS `.app` / Linux `.deb` + `.AppImage` / Windows `.msi` + `-setup.exe`), then falls back to `BaseDirectory::Resource` for forward-compat, then to the repo-relative `src-tauri/binaries/` path for `pnpm tauri dev`.
+- Pure helper `find_sidecar_in_dir` extracted as `pub` so the bundle layout invariants are independently testable without a Tauri runtime.
+- Canonicalisation handles AppImage's FUSE-mounted squashfs symlink correctly; falls back to the raw path on canonicalize failure (benign on macOS / Windows).
+
+### CI coverage gap closed
+
+`src-tauri/tests/sidecar_smoke.rs` now contains 8 bundle-layout-simulation tests — one per OS-bundle layout we ship, plus precedence + missing + unicode-path edge cases.  These run on every CI matrix job (macos-latest / windows-latest / ubuntu-latest) without needing a real `pnpm tauri build`.  Catches the regression class that v2.0.0 + v2.0.1 missed because the existing smoke tests probed `src-tauri/binaries/` directly, not the bundled-app resolution path.
+
+### Documentation
+
+- New [ADR-0034](docs/adr/0034-tauri2-sidecar-layout.md) documents the Tauri 2 bundle layout per OS, the canonicalize() rationale, and the alternatives considered (notably `tauri-plugin-shell::Command::new_sidecar` as a v2.1 follow-up).  ADR-0013's "Runtime integration" subsection carries a partial-supersession banner.
+- [docs/INSTALL.md](docs/INSTALL.md) macOS section rewritten — `xattr -d com.apple.quarantine` is now the required first-launch step (right-click → Open is hidden on Sequoia 15.3+), the "App is damaged" Gatekeeper message is explained as a missing-signature confusion not real corruption, and a troubleshooting block includes sidecar-presence verification.
+
+### Schema
+
+No new migrations.  Schema version stays at **17**.
+
+### Reverting
+
+This is a runtime-only fix.  Downgrading to v2.0.1 reproduces the bug; there's no reason to revert.  If you must, the schema is unchanged from v2.0.
+
 ## [2.0.1] — 2026-04-26
 
 > **Scope-closure point release.**  Closes the AC9, AC10, AC8 and AC5 surfaces deferred from v2.0.  No breaking changes; no new schema migrations; no setting renames.  Existing v2.0 installs upgrade silently.

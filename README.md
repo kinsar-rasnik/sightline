@@ -3,8 +3,10 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>v2.0.1 — storage-aware, local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
+  <em>v2.0.2 — storage-aware, local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
 </p>
+
+> **v2.0.2 hotfix** — fixes the broken sidecar resolution that shipped in v2.0.1 (`ffmpeg` / `yt-dlp` were not found inside the `.app` / `.deb` / `.msi` because the resolver used the Tauri 1 layout).  Encoder detection + downloads now work on first launch.  See [`CHANGELOG.md`](CHANGELOG.md) and [ADR-0034](docs/adr/0034-tauri2-sidecar-layout.md).
 
 > **v2.0.1 highlights** (Phase 8 scope-closure) — see [`CHANGELOG.md`](CHANGELOG.md) for full release notes.
 > - **Storage forecast UI** — Streamers → Add now shows a per-streamer disk / bandwidth estimate before you commit. Settings → Storage Outlook shows the global view with per-streamer breakdown and a Green / Amber / Red watermark indicator.
