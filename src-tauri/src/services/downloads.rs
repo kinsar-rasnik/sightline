@@ -466,8 +466,15 @@ impl DownloadQueueService {
     }
 
     /// Reset any `downloading` rows to `queued` — run once at startup.
+    /// Atomic across both tables: the downloads.state reset and the
+    /// vods.status convergence run in a single transaction so a
+    /// concurrent reader cannot observe an inconsistent pair (the
+    /// race window is tiny because crash_recover only runs at boot
+    /// before workers start, but the transaction makes the
+    /// invariant structural rather than schedule-dependent).
     pub async fn crash_recover(&self) -> Result<u64, AppError> {
         let now = self.clock.unix_seconds();
+        let mut tx = self.db.pool().begin().await?;
         let result = sqlx::query(
             "UPDATE downloads
              SET state = 'queued', started_at = NULL,
@@ -476,7 +483,7 @@ impl DownloadQueueService {
              WHERE state = 'downloading'",
         )
         .bind(now)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
         // S5 convergence: vods.status was 'downloading' for any row
         // we just reset; bring it back to 'queued' so the Library
@@ -491,8 +498,9 @@ impl DownloadQueueService {
                     SELECT vod_id FROM downloads WHERE state = 'queued'
                 )",
         )
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 
@@ -1273,6 +1281,20 @@ mod tests {
         let (cancel_target, _) =
             target_vods_status_for_state(DownloadState::FailedPermanent, true).unwrap();
         assert_eq!(cancel_target, "available");
+    }
+
+    #[test]
+    fn target_vods_status_queued_ignores_cancel_flag() {
+        // Invariant guard: the cancel flag should ONLY influence
+        // FailedPermanent. A future refactor that accidentally
+        // adds a cancel-conditional branch in the Queued arm
+        // would break this assertion.
+        let (target_no_cancel, valid_no_cancel) =
+            target_vods_status_for_state(DownloadState::Queued, false).unwrap();
+        let (target_cancel, valid_cancel) =
+            target_vods_status_for_state(DownloadState::Queued, true).unwrap();
+        assert_eq!(target_no_cancel, target_cancel);
+        assert_eq!(valid_no_cancel, valid_cancel);
     }
 
     #[tokio::test]
