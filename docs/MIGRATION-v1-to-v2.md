@@ -50,10 +50,17 @@ v1.0 default was `Source` (whatever the upstream gives, typically
 
 **Existing installs preserve your `quality_preset` value.**  Phase 8
 adds a separate `video_quality_profile` column; the new column gets
-the default `720p30` for all rows including upgrades, but the
-re-encode pipeline only fires when `distribution_mode = 'pull'` AND
-the user explicitly downloads a new VOD.  Existing files on disk
-are never re-encoded — their bytes stay exactly as v1.0 left them.
+the default `720p30` for all rows including upgrades.  In v2.0 the
+re-encode service ships and is fully tested, but the **automatic
+trigger from a completed download is a v2.0.x integration** (see
+Known Limitations under "v2.0.x download-worker integration"
+below).  Until that integration lands, picking a VOD downloads it
+at the source quality the existing Phase 3 download path produces;
+the `video_quality_profile` setting is honoured for any path that
+explicitly invokes `ReencodeService::reencode_to_profile` and is
+the source of truth the v2.0.x integration will read.  Existing
+files on disk are never re-encoded — their bytes stay exactly as
+v1.0 left them.
 
 To opt in to the new quality pipeline:
 

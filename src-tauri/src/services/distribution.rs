@@ -7,14 +7,21 @@
 //!
 //! What v2.0 ships:
 //! - `pick_vod`, `unpick_vod`, `pick_next_n` — explicit user gesture
-//!   transitions `available -> queued` (or back).
-//! - `on_watched_completed` — called by the watch-progress service
-//!   when a row crosses the completion threshold; transitions
-//!   `ready -> archived` and runs the sliding-window enforcer.
-//! - `prefetch_check` — called by the player on the first sustained
-//!   `watch:progress_updated` event.
+//!   transitions `available -> queued` (or back).  IPC-reachable.
 //! - `set_distribution_mode` / `set_sliding_window_size` —
 //!   thin wrappers over the settings service for IPC convenience.
+//! - `on_watched_completed` — implemented + tested but **not yet
+//!   wired** at the watch-progress event hot path; v2.0.x will add
+//!   the call in `lib.rs::WatchEvent::Completed`.
+//! - `prefetch_check` — implemented + tested but **not yet wired**
+//!   from the player; v2.0.x exposes it as an IPC command and
+//!   triggers it from the player's first sustained
+//!   `watch:progress_updated` event.
+//! - `enforce_sliding_window` — runs only as a side effect of
+//!   `on_watched_completed`, so until that's wired the sliding-
+//!   window evictions are dormant in v2.0.  The user-driven
+//!   `pick_vod` / `pick_next_n` paths still respect the cap (no
+//!   eviction needed when there's room).
 //!
 //! Deferred to v2.0.x integration follow-ups:
 //! - Wiring `queued -> downloading` from inside the download worker
@@ -23,6 +30,8 @@
 //!   download worker observe `vods.status = 'queued'` and march it
 //!   to `downloading` / `ready` (mirroring its existing `downloads`
 //!   table state).  See PR description for the rollout note.
+//! - Wiring `on_watched_completed` from `WatchEvent::Completed`.
+//! - Wiring `prefetch_check` from the player's progress hook.
 
 use std::sync::Arc;
 

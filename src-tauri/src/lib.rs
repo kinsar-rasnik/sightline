@@ -325,6 +325,15 @@ pub fn run() {
                             crate::services::events::EV_WATCH_COMPLETED,
                             crate::services::events::WatchCompletedEvent { vod_id },
                         );
+                        // TODO(v2.0.x): call
+                        // `state.distribution.on_watched_completed`
+                        // here so a `Ready -> Archived` transition
+                        // fires + the sliding-window enforcer
+                        // runs.  Until then the v2.0 service is
+                        // implemented + tested but the runtime
+                        // trigger is dormant — see
+                        // `services::distribution` module doc and
+                        // `docs/MIGRATION-v1-to-v2.md`.
                     }
                 });
 
