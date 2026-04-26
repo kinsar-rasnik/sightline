@@ -122,7 +122,11 @@ pub enum DistributionError {
 ///
 /// Allowed transitions:
 /// - `Available` -> `Queued` (user pick or pre-fetch)
-/// - `Queued`    -> `Available` (user unpick)
+/// - `Queued`    -> `Available` (user unpick OR a `Queued` row
+///   whose download failed permanently before transitioning to
+///   `Downloading`; the v2.0.x download-worker integration will
+///   wire this from the failed-download callback so the row
+///   becomes re-pickable)
 /// - `Queued`    -> `Downloading` (worker picked up)
 /// - `Downloading` -> `Ready` (download complete)
 /// - `Downloading` -> `Available` (download cancelled or failed

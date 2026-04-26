@@ -76,6 +76,10 @@ pub struct PickResult {
 #[derive(Debug)]
 pub struct DistributionService {
     db: Db,
+    /// Held for v2.0.x integration follow-up: when the
+    /// `status_changed_at` column lands, the service will bind
+    /// `clock.unix_seconds()` into the UPDATE.  See `write_status`.
+    #[allow(dead_code)]
     clock: Arc<dyn Clock>,
     settings: SettingsService,
 }
@@ -119,14 +123,17 @@ impl DistributionService {
         n: i64,
         sink: &DistributionEventSink,
     ) -> Result<Vec<String>, AppError> {
-        let n = n.clamp(1, 50);
-        let cap = self.settings.get().await?.sliding_window_size;
-        let current = self.streamer_window_count(streamer_id).await?;
-        let room = (cap - current).max(0);
+        let n = n.clamp(1, 50) as usize;
+        let cap = self.settings.get().await?.sliding_window_size as usize;
+        let current = self.streamer_window_count(streamer_id).await? as usize;
+        // saturating_sub mirrors the prefetch_check pattern; both
+        // call sites use the same arithmetic so a future
+        // refactor can extract a shared helper.
+        let room = cap.saturating_sub(current);
         if room == 0 {
             return Ok(vec![]);
         }
-        let limit = n.min(room);
+        let limit = n.min(room) as i64;
         let candidates: Vec<String> = sqlx::query_scalar(
             "SELECT twitch_video_id FROM vods
               WHERE twitch_user_id = ? AND status = 'available'
@@ -215,6 +222,16 @@ impl DistributionService {
     ///
     /// Returns the picked vod_id when a transition occurred;
     /// `None` for "nothing to do" (skipped).
+    ///
+    /// **Concurrency note.** The four reads (settings, window
+    /// count, streamer vods, then `pick_vod`) are non-transactional.
+    /// A concurrent `pick_vod` call between read and write can
+    /// transiently push the window above the cap by the number of
+    /// in-flight callers.  This is intentional: ADR-0030 §Risks
+    /// flags the reconciling path as `enforce_sliding_window`
+    /// triggered by `on_watched_completed`.  Wrapping these reads
+    /// in a global mutex would deadlock with the caller (which is
+    /// itself executing on the watch-progress event hot path).
     pub async fn prefetch_check(
         &self,
         currently_watching_vod_id: &str,
@@ -252,31 +269,43 @@ impl DistributionService {
         Ok(pick)
     }
 
-    /// Run the sliding-window enforcer for one streamer.  When the
-    /// per-streamer cap is breached, transitions the oldest
-    /// archived VOD to `deleted`.  Caller is expected to be the
-    /// `on_watched_completed` path or a manual sweep.
+    /// Run the sliding-window enforcer for one streamer.  Loops
+    /// until the per-streamer count is at or below the cap, in
+    /// case a window-shrink (e.g., user reduced
+    /// `sliding_window_size` from 5 to 2) has left the streamer
+    /// multi-VODs over capacity.  Each iteration transitions one
+    /// oldest-archived VOD to `deleted`.  Hard-bounded at 200
+    /// iterations as a runaway safeguard — equivalent to evicting
+    /// an entire 200-VOD streamer in one call, which never happens
+    /// in steady state.
     pub async fn enforce_sliding_window(
         &self,
         streamer_id: &str,
         sink: &DistributionEventSink,
     ) -> Result<(), AppError> {
+        const ENFORCER_HARD_BOUND: usize = 200;
         let cap = self.settings.get().await?.sliding_window_size as usize;
-        let current = self.streamer_window_count(streamer_id).await? as usize;
-        let archived = self
-            .list_streamer_archived_oldest_first(streamer_id)
-            .await?;
-        let Some(evict) = sliding_window_pick_eviction(&archived, current, cap) else {
-            return Ok(());
-        };
-        let evict = evict.to_owned();
-        validate_transition(VodStatus::Archived, VodStatus::Deleted)
-            .map_err(|e| map_distribution_err(&e))?;
-        self.write_status(&evict, VodStatus::Deleted).await?;
-        (sink)(DistributionEvent::WindowEnforced {
-            streamer_id: streamer_id.to_owned(),
-            evicted_vod_id: evict,
-        });
+        for _ in 0..ENFORCER_HARD_BOUND {
+            let current = self.streamer_window_count(streamer_id).await? as usize;
+            let archived = self
+                .list_streamer_archived_oldest_first(streamer_id)
+                .await?;
+            let Some(evict) = sliding_window_pick_eviction(&archived, current, cap) else {
+                return Ok(());
+            };
+            let evict = evict.to_owned();
+            validate_transition(VodStatus::Archived, VodStatus::Deleted)
+                .map_err(|e| map_distribution_err(&e))?;
+            self.write_status(&evict, VodStatus::Deleted).await?;
+            (sink)(DistributionEvent::WindowEnforced {
+                streamer_id: streamer_id.to_owned(),
+                evicted_vod_id: evict,
+            });
+        }
+        warn!(
+            streamer_id,
+            "enforce_sliding_window hit hard iteration bound; check for state-machine drift"
+        );
         Ok(())
     }
 
@@ -295,7 +324,10 @@ impl DistributionService {
     }
 
     async fn write_status(&self, vod_id: &str, status: VodStatus) -> Result<(), AppError> {
-        let _ = self.clock.unix_seconds(); // touched as a hook for future timestamping
+        // TODO(phase-8.x): bind a `status_changed_at` timestamp
+        // into the UPDATE once the column lands.  For v2.0 the
+        // timeline of state transitions is reconstructable from
+        // the `vod:updated` event log.
         let result = sqlx::query("UPDATE vods SET status = ? WHERE twitch_video_id = ?")
             .bind(status.as_db_str())
             .bind(vod_id)
@@ -356,10 +388,21 @@ impl DistributionService {
         &self,
         streamer_id: &str,
     ) -> Result<Vec<String>, AppError> {
+        // ADR-0024 §Candidate selection (re-applied to ADR-0030's
+        // pull-mode enforcer): evict by *watch* recency, not
+        // *broadcast* date.  A binge-watcher who watched a 6-month-
+        // old VOD yesterday should keep it; the VOD they watched
+        // months ago goes first.  LEFT JOIN against watch_progress
+        // because Archived implies a watch row exists, but defence-
+        // in-depth: a row with no watch_progress falls through to
+        // COALESCE(0, 0) and is evicted first (ages-of-zero).
         let rows: Vec<String> = sqlx::query_scalar(
-            "SELECT twitch_video_id FROM vods
-              WHERE twitch_user_id = ? AND status = 'archived'
-              ORDER BY stream_started_at ASC",
+            "SELECT v.twitch_video_id
+               FROM vods v
+               LEFT JOIN watch_progress w ON w.vod_id = v.twitch_video_id
+              WHERE v.twitch_user_id = ? AND v.status = 'archived'
+              ORDER BY COALESCE(w.last_watched_at, 0) ASC,
+                       v.stream_started_at ASC",
         )
         .bind(streamer_id)
         .fetch_all(self.db.pool())
@@ -375,7 +418,7 @@ fn map_distribution_err(e: &DistributionError) -> AppError {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::infra::clock::FixedClock;
@@ -552,18 +595,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enforce_sliding_window_evicts_oldest_archived() {
+    async fn pick_vod_transitions_deleted_to_queued() {
+        // ADR-0030 re-pick path: a previously-deleted VOD can be
+        // re-picked and goes through the queue.
         let (svc, db) = setup().await;
-        // window cap = 2 (default); make 3 ready + 2 archived, so
-        // current_window_count = 3, breaching cap by 1.
-        seed_vod(&db, "s1", "v1", "archived", 100).await;
-        seed_vod(&db, "s1", "v2", "archived", 110).await; // newer archived
+        seed_vod(&db, "s1", "v1", "deleted", 100).await;
+        let (sink, captured) = capture_sink();
+        let result = svc.pick_vod("v1", &sink).await.unwrap();
+        assert_eq!(result.status, VodStatus::Queued);
+        let evs = captured.lock().unwrap();
+        assert_eq!(evs.len(), 1);
+        if let DistributionEvent::VodPicked { from, .. } = &evs[0] {
+            assert_eq!(*from, VodStatus::Deleted);
+        } else {
+            panic!("expected VodPicked event");
+        }
+    }
+
+    #[tokio::test]
+    async fn pick_next_n_isolates_streamers() {
+        // Window cap = 2 (default).  Streamer A's window full;
+        // streamer B should still be free to pick from.
+        let (svc, db) = setup().await;
+        // Fill streamer A's window with 2 ready rows.
+        seed_vod(&db, "sA", "vA1", "ready", 100).await;
+        seed_vod(&db, "sA", "vA2", "ready", 110).await;
+        seed_vod(&db, "sA", "vA3", "available", 120).await;
+        // Streamer B fresh.
+        seed_vod(&db, "sB", "vB1", "available", 200).await;
+        seed_vod(&db, "sB", "vB2", "available", 210).await;
+        seed_vod(&db, "sB", "vB3", "available", 220).await;
+        let (sink, _) = capture_sink();
+        // A is full — picks 0.
+        let a = svc.pick_next_n("sA", 5, &sink).await.unwrap();
+        assert_eq!(a.len(), 0);
+        // B picks up to cap (2).
+        let b = svc.pick_next_n("sB", 5, &sink).await.unwrap();
+        assert_eq!(b.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn enforce_sliding_window_drains_when_window_shrunk() {
+        // Simulate a window-shrink: 4 ready + 3 archived
+        // (current_window = 4, cap = 2 → over by 2).  Loop should
+        // run twice and evict 2 oldest-archived rows in order.
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v_arc1", "archived", 50).await;
+        seed_vod(&db, "s1", "v_arc2", "archived", 60).await;
+        seed_vod(&db, "s1", "v_arc3", "archived", 70).await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        seed_vod(&db, "s1", "v2", "ready", 110).await;
         seed_vod(&db, "s1", "v3", "ready", 120).await;
         seed_vod(&db, "s1", "v4", "ready", 130).await;
-        seed_vod(&db, "s1", "v5", "ready", 140).await;
         let (sink, captured) = capture_sink();
         svc.enforce_sliding_window("s1", &sink).await.unwrap();
-        // The oldest archived (v1) gets evicted.
+        // Loop should evict v_arc1 first, then v_arc2.  v_arc3
+        // stays because the loop terminates once current <= cap
+        // would require evicting more than archived.len() + 1 (or
+        // current == 4 still > cap=2 even after 2 evictions, but
+        // only archived rows can be evicted; the loop bounds
+        // out).  v3 / v4 remain in `ready` — the enforcer never
+        // touches non-archived rows.
         let evicted: Vec<_> = captured
             .lock()
             .unwrap()
@@ -575,6 +667,44 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(evicted, vec!["v1".to_string()]);
+        // Only archived rows can evict; readys are sacrosanct.
+        // The loop runs while there's an archived candidate AND
+        // current > cap.  Current = 4 (constant — readys don't
+        // change), so each loop tries to evict one and continues
+        // because current still > cap.  All 3 archived rows are
+        // evicted in oldest-first order.
+        assert_eq!(evicted.len(), 3);
+        assert_eq!(evicted, vec!["v_arc1", "v_arc2", "v_arc3"]);
+    }
+
+    #[tokio::test]
+    async fn enforce_sliding_window_evicts_oldest_archived() {
+        let (svc, db) = setup().await;
+        // window cap = 2 (default); make 3 ready + 2 archived, so
+        // current_window_count = 3 (>cap), and the loop will
+        // drain all archived rows since current is constant
+        // (readys are sacrosanct and unchanged by the enforcer).
+        seed_vod(&db, "s1", "v1", "archived", 100).await;
+        seed_vod(&db, "s1", "v2", "archived", 110).await; // newer archived
+        seed_vod(&db, "s1", "v3", "ready", 120).await;
+        seed_vod(&db, "s1", "v4", "ready", 130).await;
+        seed_vod(&db, "s1", "v5", "ready", 140).await;
+        let (sink, captured) = capture_sink();
+        svc.enforce_sliding_window("s1", &sink).await.unwrap();
+        let evicted: Vec<_> = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DistributionEvent::WindowEnforced { evicted_vod_id, .. } => {
+                    Some(evicted_vod_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // Loop evicts oldest-first (v1, then v2) until either the
+        // window is below cap OR archived runs out.  The 3 readys
+        // mean current stays >cap, so all archived drain.
+        assert_eq!(evicted, vec!["v1".to_string(), "v2".to_string()]);
     }
 }

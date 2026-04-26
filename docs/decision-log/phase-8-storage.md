@@ -70,6 +70,50 @@ Test lives in `services/reencode.rs::tests::audio_passthrough_is_byte_exact`.
 
 ---
 
+## 2026-04-26 — Sub-Phase C R-RC-01: 1 P0 (false), 1 P0 + 4 P1 + 3 P2 resolved
+
+`code-reviewer` ran on Sub-Phase C (commit 72a0a1a).  Findings:
+
+- **P0 false positive:** Migration 0016's fourth UPDATE was claimed
+  to overwrite a 'ready' row when there's a duplicate queued
+  `downloads` row.  False — `downloads.vod_id` IS the primary key,
+  enforced by migration 0004.  No fix needed; documented in commit
+  message.
+- **P0 real:** `list_streamer_archived_oldest_first` ordered by
+  `stream_started_at` instead of `last_watched_at` as the pure
+  helper's contract requires.  **Fixed** — JOIN against
+  `watch_progress` with `COALESCE(last_watched_at, 0)` ordering;
+  matches ADR-0024's "evict by watch recency" rule.
+- **P1 enforcer:** evicted only one VOD per call, undocumented.
+  **Fixed** — `enforce_sliding_window` now loops with a 200-iter
+  hard bound; new test `enforce_sliding_window_drains_when_window_shrunk`.
+- **P1 i64/usize inconsistency:** `pick_next_n` used `(i64).max(0)`
+  while `prefetch_check` used `usize.saturating_sub`.  **Fixed** —
+  both call sites use `usize.saturating_sub`.
+- **P1 missing test:** per-streamer isolation never tested.
+  **Fixed** — new test `pick_next_n_isolates_streamers`.
+- **P1 missing test:** `Deleted -> Queued` re-pick path service-
+  level coverage missing.  **Fixed** — new test
+  `pick_vod_transitions_deleted_to_queued`.
+- **P2 prefetch race:** non-transactional reads documented inline
+  with rationale (ADR-0030 §Risks reconciles via
+  `enforce_sliding_window`).
+- **P2 state-machine doc:** `Queued -> Available` extended with
+  comment explaining the v2.0.x download-worker integration.
+- **P2 dead clock call:** removed; replaced with
+  `TODO(phase-8.x): status_changed_at column` comment plus
+  `#[allow(dead_code)]` on the clock field documenting the
+  reservation.
+
+R-RC-02 elided per "Critical/High" precondition — the one real
+P0 was a contract bug fixed in a single quoted-SQL change with
+its own test cycle (28 distribution tests pass), no compounded
+risk surface.
+
+Sub-Phase C verdict: SHIPPABLE for v2.0.
+
+---
+
 ## 2026-04-26 — Sub-Phase B R-RC-01 + R-RC-02 + R-RC-03: clean
 
 `code-reviewer` ran on Sub-Phase B (commits 91fd465..94e4340) and
