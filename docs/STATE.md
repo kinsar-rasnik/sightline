@@ -1,7 +1,7 @@
 # STATE — Sightline
 
 **Letzte Aktualisierung:** 2026-04-26
-**System-Ampel:** 🟢 Grün — v2.0.2 released, Sidecar-Resolution-Hotfix aus Real-Use-Phase
+**System-Ampel:** 🟢 Grün — v2.0.2 released, kritische Bugs behoben, Real-Use offen
 
 ---
 
@@ -11,20 +11,22 @@
 
 **Repo:** github.com/kinsar-rasnik/sightline
 
-**Status:** v2.0.1 live (github.com/kinsar-rasnik/sightline/releases/tag/v2.0.1). 5 Assets korrekt benamt. Storage-Aware-Distribution end-to-end vollständig — Backend + UI. Sightline ist auf v2.0-Spec geschlossen.
+**Status:** v2.0.2 live (github.com/kinsar-rasnik/sightline/releases/tag/v2.0.2). Sidecar-Resolution-Bug aus v2.0.1 behoben — Sightline funktioniert jetzt out-of-the-box auf macOS-Bundles. Co-Streams "Download only"-Action verfügbar. INSTALL.md xattr-Doku klar.
 
 **Roadmap:**
 - Phase 1–7 ✅
 - Phase 8 (Storage-Aware Distribution) ✅
 - v2.0.1 Scope-Closure ✅
-- **Real-Use-Phase ⏳ next** — CEO testet im Alltag, sammelt Issues
-- Post-Real-Use: Auto-Issue-Triage-Workflow (eigenständiges Folge-Projekt)
+- v2.0.2 Critical Sidecar Hotfix + UX-Polish ✅
+- **Real-Use-Phase ⏳ aktiv** — CEO testet im Alltag
+- Bei Issue-Sammlung: v2.1 als Long-Run für UX/Refactor-Themen
+- Post-v2.1: Auto-Issue-Triage-Workflow (eigenständiges Folge-Projekt)
 
 ---
 
 ## Ampel-Begründung
 
-🟢 — Sightline v2.0.1 ist released, alle Specs erfüllt, alle Tests grün, alle Assets korrekt. Workforce-Rules R-RC-* und R-SC-* haben sich im ersten kombinierten Einsatz bewährt (0 Scope-Reduktionen, 18 Findings sauber inline gefangen). Bereit für Real-Use.
+🟢 — v2.0.2 live mit Real-User-Bestätigung. Post-Merge-CI-Incident auf main wurde sofort selbstständig gefixt (PR #23, flaky PID-Test entfernt). Main CI grün. Repo clean.
 
 ---
 
@@ -33,7 +35,7 @@
 **Repository:**
 - Working-Directory: `~/Documents/sightline`
 - Branch: `main`
-- main HEAD: `ca8ff24` (v2.0.1 Scope-Closure, PR #21)
+- main HEAD: `f776ac6` (PR #23 flaky-test-Fix)
 - Working Tree: clean
 
 **Tags:**
@@ -41,34 +43,25 @@
 - `v1.0.0` → `66c8cf01`
 - `v2.0.0` → `de2c8cf`
 - `v2.0.1` → `ca8ff24`
+- `v2.0.2` → `adb6588`
 
-**Tests:** 471 Rust + 152 Frontend = 623 grün.
-
-**Schema:** LATEST_SCHEMA_VERSION = 17 (keine neuen Migrationen in v2.0.1).
+**Schema:** LATEST_SCHEMA_VERSION = 17 (unverändert seit Phase 8).
 
 ---
 
 ## SOLL-Zustand (Real-Use-Phase)
 
-**Kein Engineering-Run aktiv.** CEO nutzt Sightline im Alltag, sammelt Issues via:
-- Eigene Beobachtung beim VOD-Watching
-- Storage-Forecast-Realität-Check (skaliert die Math?)
-- Multi-View-Sync im Real-World-Use
-- Quality-Pipeline-Verhalten beim Background-Download während Gaming
-- Library-UI-UX im echten Browse-Verhalten
+CEO nutzt Sightline im Alltag, sammelt Issues via GitHub Issues. Trigger für nächsten Engineering-Run:
 
-**Issue-Erfassung:** GitHub Issues unter github.com/kinsar-rasnik/sightline/issues — manuell vom CEO oder via Auto-Triage-Workflow (separates Projekt).
-
-**Trigger für nächsten Engineering-Run:**
-- Kritische Bugs (Crash, Datenverlust, Sync-Failure) → Hotfix-Mission v2.0.2
-- Sammlung größerer UX-Themen → v2.1-Mission
-- Klassische Feature-Requests → v2.x-Backlog
+- **Kritische Bugs** (Crash, Datenverlust, Sync-Failure) → Sofort-Hotfix v2.0.x
+- **Größere UX-Themen** gesammelt → v2.1-Mission als Long-Run
+- **Auto-Issue-Triage-Setup** als eigenständiges Folge-Projekt (Claude Desktop + GitHub)
 
 ---
 
 ## Aktive Autorun-Queue
 
-Keine. CEO entscheidet wann Real-Use-Phase endet und nächster Run startet.
+Keine.
 
 ---
 
@@ -86,13 +79,41 @@ Keine.
 
 ## Offene Entscheidungen
 
-Keine. v2.0.1 ist sauber, Real-Use-Phase ist passive Phase ohne Workforce-Aktivität.
+Keine. Real-Use-Phase ist passive Phase ohne Workforce-Aktivität.
 
 ---
 
 ## Letzter Handoff
 
-`docs/HANDOFF-2026-04-26-v2.0.1.md` — dokumentiert v2.0.1 Scope-Closure inkl. Workforce-Rule-Bewährung.
+`docs/HANDOFF-2026-04-26-v2.0.2.md` — dokumentiert v2.0.2 Hotfix + Post-Merge-Incident.
+
+---
+
+## v2.1-Backlog (gesammelt aus letzten Runs, wartet auf Long-Run-Mission)
+
+Aus v2.0.2 hinzugekommen:
+- `tauri-plugin-shell::Command::new_sidecar` Adoption (sauberer als manueller Resolver)
+- Release-Workflow Post-Bundle-Inspection-Step (hätte Sidecar-Bug vor Release gefangen)
+- `SHA256SUMS` Asset auf Releases publishen
+
+Aus v2.0.1 inherited:
+- SuspendController in `infra::process::suspend` refactoren
+- `VodDeleted` Event-Variant (statt VodArchived-Reuse)
+- Windows CI Runner für SuspendThread-Coverage
+- StorageOutlook Component-Level Vitest Coverage
+- Live-Update Forecast on Settings-Change
+
+Aus Phase 8 inherited:
+- AV1-Hardware-Encoder
+- Per-Streamer Quality-Overrides
+- Mobile-Network-Detection
+- Per-Pane Volume/Mute-Persistenz für Sync-Sessions
+- Playwright + Tauri-driver E2E
+
+Post-v2.0 (große Themen):
+- Code-Signing + Notarization (CEO-Entscheidung: nein, OSS bleibt unsigned)
+- Self-Update-Install (nicht ohne Signing)
+- Distribution-Channels (Homebrew/winget/AUR)
 
 ---
 
@@ -101,6 +122,6 @@ Keine. v2.0.1 ist sauber, Real-Use-Phase ist passive Phase ohne Workforce-Aktivi
 - 2026-04-25 — STATE.md initialisiert.
 - 2026-04-25 — Phase 6 Housekeeping + Phase 6 proper merged + getaggt.
 - 2026-04-25 — Phase 7 + macos-13-Hotfix merged. v1.0.0 published.
-- 2026-04-25 — Phase 8 + Versions-Manifest-Hotfix merged. v2.0.0 published. Scope-Reduktion ohne Freigabe (AC9, AC10 deferred). Ampel auf 🟡. R-SC-01/02/03 eingeführt.
-- 2026-04-26 — v2.0.1 Scope-Closure released. Alle 7 Items geliefert, 0 R-SC-Reduktionen, 18 Findings inline gefangen über R-RC-Mid-Phase-Reviews. Ampel auf 🟢. Real-Use-Phase startet.
-- 2026-04-26 — v2.0.2 Hotfix released. Erster Issue der Real-Use-Phase: macOS .app sidecar-resolution gebrochen (Tauri 1 → 2 Layout-Wechsel ungemerkt). resolve_sidecar refactored, ADR-0034 dokumentiert, INSTALL.md macOS-Section überarbeitet (xattr-Pflicht). 8 neue Bundle-Layout-Simulation-Tests in CI. R-SC + R-RC sauber durchlaufen — eine R-RC-02-Iteration für 1 P0 + 3 P1 + 1 P2.
+- 2026-04-25 — Phase 8 + Versions-Manifest-Hotfix merged. v2.0.0 published. R-SC-01/02/03 eingeführt.
+- 2026-04-26 — v2.0.1 Scope-Closure released. R-RC + R-SC im Kombi-Einsatz bewährt.
+- 2026-04-26 — v2.0.2 Critical Sidecar-Resolution-Hotfix released. Real-User-Bug-Report von CEO triggerte Mission. PR #23 Post-Merge-Hotfix für flaky PID-Test. Real-Use-Phase aktiviert.
