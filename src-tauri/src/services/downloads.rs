@@ -906,6 +906,16 @@ impl DownloadQueueService {
 
         Ok(PipelineOk {
             final_path,
+            // v2.0.3 semantics: `quality_resolved` is the user's
+            // requested profile, not the actual downloaded tier.  The
+            // legacy resolver downgraded it to match what the source
+            // could satisfy; the Phase 8 selector chain handles fallback
+            // inside yt-dlp itself, so we no longer have a clean post-
+            // hoc "what tier did we land on" signal here.  Recording
+            // the requested profile keeps the column populated and the
+            // UI consistent with the Settings page.  v2.1 backlog item:
+            // parse yt-dlp's output `format_id` to record the actual
+            // downloaded tier.
             quality_resolved: Some(profile.as_db_str().into()),
         })
     }
@@ -1681,6 +1691,11 @@ mod tests {
         svc.process_one(&events, "v1").await.unwrap();
 
         let calls = ytdlp_fake.calls();
+        assert_eq!(
+            calls.downloads.len(),
+            1,
+            "expected exactly one yt-dlp download spawn"
+        );
         let sel = &calls.downloads[0].format_selector;
         assert_eq!(sel, "bestvideo+bestaudio/best");
     }

@@ -120,20 +120,37 @@ impl VideoQualityProfile {
     /// Phase 8 H.265 target is reached by the post-download re-encode
     /// pass (`services::reencode`), not by yt-dlp's source pick.
     ///
-    /// **30-fps fallback chain.**  30-fps profiles include a
-    /// height-only fallback step so a source that exposes only
-    /// 60-fps variants downloads at the requested height (the
-    /// re-encoder downsamples fps).  60-fps profiles don't need this
-    /// step because `[fps<=60]` already accepts every reasonable
-    /// Twitch variant.  In both cases the final `/best` is the
-    /// safety net for sources missing every height tier.
+    /// **30-fps height-first chain.**  yt-dlp's `/` is a left-to-right
+    /// fallback: the first arm whose filters match *any* available
+    /// format wins, and `bestvideo` then picks the highest-quality
+    /// match within that arm.  A naive
+    /// `bestvideo[height<=720][fps<=30]` arm therefore picks 480p30
+    /// out of `{720p60, 480p30}` — both formats satisfy
+    /// `[height<=720][fps<=30]` after the filter, but 720p60 is
+    /// excluded by the fps clause, so `bestvideo` picks 480p30 even
+    /// though 720p60 was the user's actual height target.
+    ///
+    /// ADR-0028 explicitly frames 720p as the GTA-RP floor for text
+    /// legibility, so we want the height target honoured even at
+    /// the cost of the fps target (the re-encoder downsamples fps).
+    /// The fix: probe the exact target height first (with and
+    /// without the fps filter), only then walk down through lower
+    /// heights.  Twitch heights are discrete (1080 / 720 / 480 /
+    /// 360 / 160) so `[height=N]` is a reliable exact-match.
+    ///
+    /// 60-fps profiles don't need the same expansion — `[fps<=60]`
+    /// accepts every reasonable Twitch variant — so they stay on
+    /// the simpler `[height<=N][fps<=60]` chain.  The final `/best`
+    /// in every chain is the safety net for sources missing every
+    /// height tier.
     pub fn format_selector(self) -> &'static str {
         match self {
             VideoQualityProfile::Source => "bestvideo+bestaudio/best",
             VideoQualityProfile::P480p30 => {
-                "bestvideo[height<=480][fps<=30]+bestaudio\
-                 /best[height<=480][fps<=30]\
-                 /bestvideo[height<=480]+bestaudio\
+                "bestvideo[height=480][fps<=30]+bestaudio\
+                 /bestvideo[height=480]+bestaudio\
+                 /bestvideo[height<480][fps<=30]+bestaudio\
+                 /bestvideo[height<480]+bestaudio\
                  /best[height<=480]/best"
             }
             VideoQualityProfile::P480p60 => {
@@ -141,9 +158,10 @@ impl VideoQualityProfile {
                  /best[height<=480][fps<=60]/best"
             }
             VideoQualityProfile::P720p30 => {
-                "bestvideo[height<=720][fps<=30]+bestaudio\
-                 /best[height<=720][fps<=30]\
-                 /bestvideo[height<=720]+bestaudio\
+                "bestvideo[height=720][fps<=30]+bestaudio\
+                 /bestvideo[height=720]+bestaudio\
+                 /bestvideo[height<720][fps<=30]+bestaudio\
+                 /bestvideo[height<720]+bestaudio\
                  /best[height<=720]/best"
             }
             VideoQualityProfile::P720p60 => {
@@ -151,9 +169,10 @@ impl VideoQualityProfile {
                  /best[height<=720][fps<=60]/best"
             }
             VideoQualityProfile::P1080p30 => {
-                "bestvideo[height<=1080][fps<=30]+bestaudio\
-                 /best[height<=1080][fps<=30]\
-                 /bestvideo[height<=1080]+bestaudio\
+                "bestvideo[height=1080][fps<=30]+bestaudio\
+                 /bestvideo[height=1080]+bestaudio\
+                 /bestvideo[height<1080][fps<=30]+bestaudio\
+                 /bestvideo[height<1080]+bestaudio\
                  /best[height<=1080]/best"
             }
             VideoQualityProfile::P1080p60 => {
@@ -322,7 +341,9 @@ impl ThrottleThresholds {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+// Test code: panics on assertion failures are the contract; the
+// crate-wide bans on unwrap/expect don't apply here.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -575,11 +596,67 @@ mod tests {
             VideoQualityProfile::P1080p30,
         ] {
             let cap = p.max_height().unwrap();
-            let needle = format!("/bestvideo[height<={cap}]+bestaudio");
+            let needle = format!("/bestvideo[height={cap}]+bestaudio");
             let sel = p.format_selector();
             assert!(
                 sel.contains(&needle),
                 "{p:?} selector missing height-only fallback {needle}: {sel}"
+            );
+        }
+    }
+
+    /// R-RC-01 fix: yt-dlp's `/` is left-to-right "first match wins";
+    /// each arm runs `bestvideo` against whatever survives that arm's
+    /// filters.  For 30-fps profiles that means the
+    /// `[height={N}]+bestaudio` arm (no fps filter) must come AFTER
+    /// the `[height={N}][fps<=30]+bestaudio` arm — otherwise the
+    /// height-only arm matches first and `bestvideo` picks the 60-fps
+    /// variant even when a 30-fps variant exists.  This trip-wire pins
+    /// the relative position so a future engineer who "tidies up" the
+    /// chain can't silently regress it.
+    #[test]
+    fn thirty_fps_profiles_prefer_fps_match_over_any_fps_at_target_height() {
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P1080p30,
+        ] {
+            let cap = p.max_height().unwrap();
+            let with_fps = format!("[height={cap}][fps<=30]+bestaudio");
+            let any_fps = format!("[height={cap}]+bestaudio");
+            let sel = p.format_selector();
+            let with_fps_pos = sel.find(&with_fps).expect("with-fps arm present");
+            let any_fps_pos = sel.find(&any_fps).expect("any-fps arm present");
+            assert!(
+                with_fps_pos < any_fps_pos,
+                "{p:?}: `{with_fps}` arm must precede `{any_fps}` arm \
+                 so yt-dlp picks the 30-fps variant when one exists; got: {sel}"
+            );
+        }
+    }
+
+    /// Equally important: the exact-target-height arms must come
+    /// BEFORE the lower-height arms, so a `{1080p60, 720p60, 480p30}`
+    /// source picks 720p60 (height target hit) for a P720p30 request
+    /// rather than 480p30 (one of the lower-height variants).  Pins
+    /// the height-first chain that ADR-0028's "720p as floor"
+    /// argument depends on.
+    #[test]
+    fn thirty_fps_profiles_prefer_target_height_over_lower_height() {
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P1080p30,
+        ] {
+            let cap = p.max_height().unwrap();
+            let target = format!("[height={cap}]+bestaudio");
+            let lower = format!("[height<{cap}][fps<=30]+bestaudio");
+            let sel = p.format_selector();
+            let target_pos = sel.find(&target).expect("target-height arm present");
+            let lower_pos = sel.find(&lower).expect("lower-height arm present");
+            assert!(
+                target_pos < lower_pos,
+                "{p:?}: `{target}` arm must precede `{lower}` arm; got: {sel}"
             );
         }
     }
