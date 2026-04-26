@@ -57,6 +57,9 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0026](docs/adr/0026-update-checker.md) — Update checker (opt-in, GitHub API, notification-only)
 - [ADR-0027](docs/adr/0027-asset-protocol-scope-narrowing.md) — Asset protocol scope narrowing (closes ADR-0019 follow-up)
 - [ADR-0034](docs/adr/0034-tauri2-sidecar-layout.md) — Tauri 2 sidecar bundle layout (corrects ADR-0013's Tauri 1 runtime-resolution assumption)
+- [ADR-0035](docs/adr/0035-download-engine-settings-wiring.md) — Download-engine settings wiring (Phase 8 quality + concurrency, finally connected end-to-end)
+- [ADR-0036](docs/adr/0036-per-download-process-lock.md) — Per-download in-memory process lock (AC3 of v2.0.3)
+- [ADR-0037](docs/adr/0037-file-logger-activation.md) — File-logger activation (Tech-Spec §8 backfill)
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.
