@@ -1053,18 +1053,25 @@ static LOG_GUARD: once_cell::sync::OnceCell<tracing_appender::non_blocking::Work
 /// best-effort: a non-writable home directory degrades to stderr-only
 /// rather than aborting startup.
 ///
-/// Default verbosity per sink: file = `info`, stderr = `warn`.  Both
-/// honour `RUST_LOG` when set — that override applies to both layers
-/// uniformly so a developer running `RUST_LOG=debug pnpm tauri dev`
-/// sees the same lines on screen and on disk.
+/// Default verbosity per sink: file = `info`, stderr = `warn`.  When
+/// `RUST_LOG` is set both layers parse it identically — there is no
+/// per-sink override (no `RUST_LOG_FILE` / `RUST_LOG_STDERR`); a
+/// developer running `RUST_LOG=debug pnpm tauri dev` sees the same
+/// lines on screen and on disk.
 fn init_tracing() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, Layer, fmt};
 
-    let stderr_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
-    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Build one filter from RUST_LOG; clone for each sink so the
+    // uniformity is structural rather than relying on two independent
+    // env-var lookups returning the same answer.  When RUST_LOG is
+    // unset, the cloned filters are constructed separately so each
+    // sink can carry its own default level (file=info, stderr=warn).
+    let (stderr_filter, file_filter) = match EnvFilter::try_from_default_env() {
+        Ok(env) => (env.clone(), env),
+        Err(_) => (EnvFilter::new("warn"), EnvFilter::new("info")),
+    };
 
     let stderr_layer = fmt::layer()
         .with_target(false)
@@ -1078,6 +1085,11 @@ fn init_tracing() {
         // Tokio worker.  The returned guard MUST outlive the process;
         // see `LOG_GUARD` above.
         let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        // Second call (e.g. test harness re-entering init_tracing)
+        // returns Err(guard); the duplicate guard drops here, which
+        // tears down its background thread immediately. That's fine
+        // because the registry's try_init below also fails on the
+        // second call and the second appender is unused anyway.
         let _ = LOG_GUARD.set(guard);
         fmt::layer()
             .with_target(true)
