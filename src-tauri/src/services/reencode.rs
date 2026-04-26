@@ -108,28 +108,49 @@ mod unix_suspend {
     //! Unix SIGSTOP / SIGCONT controller.  Uses the OS `kill` CLI
     //! so the implementation stays inside the repo's `unsafe_code
     //! = "forbid"` lint.
+    //!
+    //! The signal name is constrained to a closed enum at the type
+    //! level (R-RC-03 hygiene) so a future caller can never widen
+    //! this to user-supplied input without first changing the
+    //! signature.
     use super::SuspendController;
+
+    #[derive(Debug, Clone, Copy)]
+    enum UnixSignal {
+        Stop,
+        Cont,
+    }
+
+    impl UnixSignal {
+        fn flag(self) -> &'static str {
+            match self {
+                UnixSignal::Stop => "-STOP",
+                UnixSignal::Cont => "-CONT",
+            }
+        }
+    }
 
     #[derive(Debug, Default)]
     pub struct UnixSignalSuspend;
 
     impl SuspendController for UnixSignalSuspend {
         fn suspend(&self, pid: u32) -> Result<(), String> {
-            send_signal(pid, "STOP")
+            send_signal(pid, UnixSignal::Stop)
         }
         fn resume(&self, pid: u32) -> Result<(), String> {
-            send_signal(pid, "CONT")
+            send_signal(pid, UnixSignal::Cont)
         }
     }
 
-    fn send_signal(pid: u32, sig: &str) -> Result<(), String> {
+    fn send_signal(pid: u32, sig: UnixSignal) -> Result<(), String> {
+        let flag = sig.flag();
         let output = std::process::Command::new("kill")
-            .args([&format!("-{sig}"), &pid.to_string()])
+            .args([flag, &pid.to_string()])
             .output()
             .map_err(|e| format!("kill spawn: {e}"))?;
         if !output.status.success() {
             return Err(format!(
-                "kill -{sig} {pid} exit {:?}: {}",
+                "kill {flag} {pid} exit {:?}: {}",
                 output.status.code(),
                 String::from_utf8_lossy(&output.stderr)
             ));

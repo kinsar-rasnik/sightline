@@ -70,6 +70,44 @@ Test lives in `services/reencode.rs::tests::audio_passthrough_is_byte_exact`.
 
 ---
 
+## 2026-04-26 — Sub-Phase B R-RC-01 + R-RC-02 + R-RC-03: clean
+
+`code-reviewer` ran on Sub-Phase B (commits 91fd465..94e4340) and
+found 1 P0 + 3 P1 + 2 P2. All resolved in commit `239418b`:
+
+- P0 audio-passthrough regression test (named in ADR-0028 but
+  missing). Resolved by extracting `build_reencode_args` pure helper
+  and adding `reencode_args_pass_audio_through` test that asserts
+  exactly one `-c:a copy` and `-c:v` precedes `-c:a`.  Byte-equality
+  integration test deferred to v2.1.
+- P1 `choose_encoder` ordering: H.265 check moved before the
+  software-opt-in gate.
+- P1 throttle test rewrite + boundary-case test for `cpu_load ==
+  high_threshold`.
+- P1 detection race: `detect_lock` Mutex on
+  `EncoderDetectionService.detect_and_persist`.
+- P2 warn log on corrupt `encoder_capability` JSON.
+- P2 doc-drift "2-second" → "1-second".
+
+`security-reviewer` ran on the same diff with R-RC-03 cross-
+awareness (peer findings shared in prompt):
+
+- 0 CRITICAL, 0 HIGH.
+- 1 MEDIUM: stale PID window in `UnixSignalSuspend` if the
+  throttle loop ever wires up.  **Documented as v2.1 follow-up**
+  because `SuspendController` has no IPC-reachable callers in
+  v2.0; the MEDIUM only fires once the throttle integration ships.
+- 1 LOW: `&str`-typed signal parameter.  **Fixed inline** —
+  `UnixSignal` enum replaces the open-string param.
+- 1 LOW: `wmic` arg construction with `u32` — confirmed safe (no
+  shell interpolation).
+
+R-RC-02 (re-review) elided per rule's "Critical/High" precondition;
+all findings below that severity threshold and addressed.  Sub-Phase
+B verdict: SHIPPABLE for v2.0.
+
+---
+
 ## 2026-04-26 — Sub-Phase A R-RC-01: 2 HIGH, 3 MEDIUM, 1 LOW resolved
 
 `code-reviewer` ran on commit `746f140`. Findings:
