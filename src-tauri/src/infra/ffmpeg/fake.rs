@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use super::{Ffmpeg, FfmpegVersion, RemuxSpec, ThumbnailSpec};
+use super::{EncoderListing, Ffmpeg, FfmpegVersion, ReencodeSpec, RemuxSpec, ThumbnailSpec};
 use crate::error::AppError;
 
 #[derive(Debug, Default, Clone)]
@@ -16,6 +16,15 @@ pub struct FfmpegScript {
     pub version_err: Option<String>,
     pub remux_err: Option<String>,
     pub thumbnail_err: Option<String>,
+    /// Encoders the fake reports from `list_encoders`.  Empty
+    /// `Vec` is the "ffmpeg knows about no tracked encoders" case.
+    pub encoders: Vec<String>,
+    pub list_encoders_err: Option<String>,
+    /// Encoder names that pass `test_encoder`.  Anything not in the
+    /// set returns an error (mimics a hardware encoder that's
+    /// listed but not actually available).
+    pub working_encoders: Vec<String>,
+    pub reencode_err: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -23,6 +32,9 @@ pub struct FfmpegCallLog {
     pub versions: u32,
     pub remuxes: Vec<RemuxSpec>,
     pub thumbnails: Vec<ThumbnailSpec>,
+    pub list_encoders: u32,
+    pub test_encoder_calls: Vec<String>,
+    pub reencodes: Vec<ReencodeSpec>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -107,6 +119,72 @@ impl Ffmpeg for FfmpegFake {
         tokio::fs::write(&spec.destination, b"\xff\xd8\xff\xe0")
             .await
             .ok();
+        Ok(())
+    }
+
+    async fn list_encoders(&self) -> Result<Vec<EncoderListing>, AppError> {
+        let s = {
+            #[allow(clippy::unwrap_used)]
+            {
+                self.calls.lock().unwrap().list_encoders += 1;
+            }
+            #[allow(clippy::unwrap_used)]
+            self.script.lock().unwrap().clone()
+        };
+        if let Some(err) = s.list_encoders_err {
+            return Err(AppError::Sidecar {
+                tool: "ffmpeg".into(),
+                detail: err,
+            });
+        }
+        Ok(s.encoders
+            .into_iter()
+            .map(|name| EncoderListing { name })
+            .collect())
+    }
+
+    async fn test_encoder(&self, video_encoder_arg: &str) -> Result<(), AppError> {
+        let s = {
+            #[allow(clippy::unwrap_used)]
+            self.calls
+                .lock()
+                .unwrap()
+                .test_encoder_calls
+                .push(video_encoder_arg.to_owned());
+            #[allow(clippy::unwrap_used)]
+            self.script.lock().unwrap().clone()
+        };
+        if s.working_encoders.iter().any(|s| s == video_encoder_arg) {
+            Ok(())
+        } else {
+            Err(AppError::Sidecar {
+                tool: "ffmpeg".into(),
+                detail: format!("test encode failed for {video_encoder_arg}"),
+            })
+        }
+    }
+
+    async fn reencode(&self, spec: &ReencodeSpec) -> Result<(), AppError> {
+        let s = {
+            #[allow(clippy::unwrap_used)]
+            self.calls.lock().unwrap().reencodes.push(spec.clone());
+            #[allow(clippy::unwrap_used)]
+            self.script.lock().unwrap().clone()
+        };
+        if let Some(err) = s.reencode_err {
+            return Err(AppError::Sidecar {
+                tool: "ffmpeg".into(),
+                detail: err,
+            });
+        }
+        if let Some(parent) = spec.destination.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        // Stub destination so callers that stat the output file
+        // (e.g. atomic_move) succeed.  Content is meaningless — the
+        // audio-passthrough byte-equality test uses a different
+        // pathway via a real ffmpeg or its own purpose-built fake.
+        tokio::fs::write(&spec.destination, b"").await.ok();
         Ok(())
     }
 }
