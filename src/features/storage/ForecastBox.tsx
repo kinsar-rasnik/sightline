@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 import type { ForecastResult } from "@/ipc";
 
 interface ForecastBoxProps {
@@ -19,11 +21,10 @@ interface ForecastBoxProps {
  * when to render.
  */
 export function ForecastBox({ forecast, title, compact }: ForecastBoxProps) {
-  const headingId = `forecast-heading-${
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2)
-  }`;
+  // R-RC-02 fix: useId provides a stable id across renders + SSR
+  // and avoids the per-render randomness of the previous inline
+  // crypto.randomUUID() approach.
+  const headingId = useId();
   return (
     <section
       aria-labelledby={headingId}

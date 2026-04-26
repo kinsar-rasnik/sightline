@@ -876,6 +876,12 @@ export type GetWatchStatsInput = {
  *  `combined` field is the SUM of every active streamer's forecast,
  *  not a re-derivation from aggregated history.  This matches what
  *  the user actually sees on disk at peak.
+ * 
+ *  `combined.data_driven` follows an "at-least-one" semantic — true
+ *  iff any single streamer in the breakdown contributed real
+ *  30-day history.  The renderer can use this to badge the global
+ *  forecast as estimated-from-real-data even when most streamers
+ *  are fresh.
  */
 export type GlobalForecast = {
 	combined: ForecastResult,

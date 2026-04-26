@@ -22,6 +22,7 @@ use sqlx::Row;
 
 use crate::domain::quality::VideoQualityProfile;
 use crate::error::AppError;
+use crate::infra::clock::Clock;
 use crate::infra::db::Db;
 use crate::infra::fs::space::FreeSpaceProbe;
 use crate::services::settings::SettingsService;
@@ -102,6 +103,12 @@ pub struct StreamerForecast {
 /// `combined` field is the SUM of every active streamer's forecast,
 /// not a re-derivation from aggregated history.  This matches what
 /// the user actually sees on disk at peak.
+///
+/// `combined.data_driven` follows an "at-least-one" semantic — true
+/// iff any single streamer in the breakdown contributed real
+/// 30-day history.  The renderer can use this to badge the global
+/// forecast as estimated-from-real-data even when most streamers
+/// are fresh.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalForecast {
@@ -181,14 +188,21 @@ fn round_tenth(v: f64) -> f64 {
 #[derive(Debug)]
 pub struct ForecastService {
     db: Db,
+    clock: Arc<dyn Clock>,
     settings: SettingsService,
     space_probe: Arc<dyn FreeSpaceProbe>,
 }
 
 impl ForecastService {
-    pub fn new(db: Db, settings: SettingsService, space_probe: Arc<dyn FreeSpaceProbe>) -> Self {
+    pub fn new(
+        db: Db,
+        clock: Arc<dyn Clock>,
+        settings: SettingsService,
+        space_probe: Arc<dyn FreeSpaceProbe>,
+    ) -> Self {
         Self {
             db,
+            clock,
             settings,
             space_probe,
         }
@@ -200,7 +214,6 @@ impl ForecastService {
     pub async fn estimate_streamer_footprint(
         &self,
         twitch_user_id: &str,
-        now_unix: i64,
     ) -> Result<ForecastResult, AppError> {
         // Confirm the streamer exists so the call surface is stable
         // (otherwise we'd return a "default" forecast for nothing).
@@ -213,6 +226,7 @@ impl ForecastService {
         if exists == 0 {
             return Err(AppError::NotFound);
         }
+        let now_unix = self.clock.unix_seconds();
         let inputs = self.build_inputs(twitch_user_id, now_unix).await?;
         Ok(estimate(inputs))
     }
@@ -220,10 +234,8 @@ impl ForecastService {
     /// Global forecast: sum of every active streamer's forecast +
     /// per-streamer breakdown for the UI.  Free-disk read happens
     /// once, not per streamer, since they all share the partition.
-    pub async fn estimate_global_footprint(
-        &self,
-        now_unix: i64,
-    ) -> Result<GlobalForecast, AppError> {
+    pub async fn estimate_global_footprint(&self) -> Result<GlobalForecast, AppError> {
+        let now_unix = self.clock.unix_seconds();
         let settings = self.settings.get().await?;
         let free_gb = self.read_free_disk_gb(&settings.library_root).await;
         let rows = sqlx::query(
@@ -450,14 +462,18 @@ mod tests {
         assert!((ratio - 5.71).abs() < 0.1, "source/default ratio = {ratio}");
     }
 
-    async fn setup_service() -> (ForecastService, Db, Arc<dyn Clock>) {
+    async fn setup_service_at(now: i64) -> (ForecastService, Db) {
         let db = Db::open_in_memory().await.unwrap();
         db.migrate().await.unwrap();
-        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(2_000_000));
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(now));
         let settings = SettingsService::new(db.clone(), clock.clone());
         let probe: Arc<dyn FreeSpaceProbe> = Arc::new(FakeFreeSpace(u64::MAX));
-        let svc = ForecastService::new(db.clone(), settings, probe);
-        (svc, db, clock)
+        let svc = ForecastService::new(db.clone(), clock, settings, probe);
+        (svc, db)
+    }
+
+    async fn setup_service() -> (ForecastService, Db) {
+        setup_service_at(2_000_000).await
     }
 
     async fn seed_streamer(db: &Db, twitch_user_id: &str, login: &str) {
@@ -493,12 +509,9 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_footprint_falls_back_to_defaults_for_fresh_streamer() {
-        let (svc, db, _clock) = setup_service().await;
+        let (svc, db) = setup_service().await;
         seed_streamer(&db, "100", "fresh").await;
-        let res = svc
-            .estimate_streamer_footprint("100", 2_000_000)
-            .await
-            .unwrap();
+        let res = svc.estimate_streamer_footprint("100").await.unwrap();
         // Fresh streamer (no VODs) hits the fallback path —
         // data_driven must be false.
         assert!(!res.data_driven);
@@ -508,17 +521,14 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_footprint_uses_30_day_history_when_available() {
-        let (svc, db, _clock) = setup_service().await;
+        let now = 30 * 24 * 60 * 60i64; // 30 days in seconds — seeds land within window
+        let (svc, db) = setup_service_at(now + 86_400).await;
         seed_streamer(&db, "100", "active").await;
-        let now = 30 * 24 * 60 * 60; // 30 days in seconds, picked so all seeds land within window
         // Seed 6 VODs in the last 30 days, each 4 hours (14_400 s).
         for i in 1..=6 {
             seed_vod(&db, "100", &format!("v{i}"), now - i * 86_400, 14_400).await;
         }
-        let res = svc
-            .estimate_streamer_footprint("100", now + 86_400)
-            .await
-            .unwrap();
+        let res = svc.estimate_streamer_footprint("100").await.unwrap();
         assert!(res.data_driven);
         assert!((res.avg_vod_hours - 4.0).abs() < 0.1);
         // 6 VODs / 30 days = 0.2/day
@@ -527,17 +537,17 @@ mod tests {
 
     #[tokio::test]
     async fn streamer_footprint_returns_not_found_for_unknown_id() {
-        let (svc, _db, _clock) = setup_service().await;
-        let err = svc.estimate_streamer_footprint("999", 1).await.unwrap_err();
+        let (svc, _db) = setup_service().await;
+        let err = svc.estimate_streamer_footprint("999").await.unwrap_err();
         assert!(matches!(err, AppError::NotFound));
     }
 
     #[tokio::test]
     async fn global_footprint_combines_all_streamers() {
-        let (svc, db, _clock) = setup_service().await;
+        let (svc, db) = setup_service().await;
         seed_streamer(&db, "100", "alice").await;
         seed_streamer(&db, "200", "bob").await;
-        let res = svc.estimate_global_footprint(2_000_000).await.unwrap();
+        let res = svc.estimate_global_footprint().await.unwrap();
         // Two streamers, each falling back to defaults.
         assert_eq!(res.per_streamer.len(), 2);
         // Combined weekly should be 2× a single streamer's weekly
@@ -545,5 +555,31 @@ mod tests {
         let single = &res.per_streamer[0].forecast;
         let combined = &res.combined;
         assert!((combined.weekly_download_gb - single.weekly_download_gb * 2.0).abs() < 0.5);
+        // Both streamers fresh → combined.data_driven false.
+        assert!(!combined.data_driven);
+    }
+
+    #[tokio::test]
+    async fn global_footprint_data_driven_uses_at_least_one_semantic() {
+        // R-RC-02 fix: explicitly verify the documented "at-least-one"
+        // semantic of `combined.data_driven` — true iff any single
+        // streamer in the breakdown contributed real history.
+        let now = 30 * 24 * 60 * 60i64;
+        let (svc, db) = setup_service_at(now + 86_400).await;
+        seed_streamer(&db, "100", "active").await;
+        seed_streamer(&db, "200", "fresh").await;
+        // Active streamer has 4 VODs in the last 30 days.
+        for i in 1..=4 {
+            seed_vod(&db, "100", &format!("v{i}"), now - i * 86_400, 14_400).await;
+        }
+        let res = svc.estimate_global_footprint().await.unwrap();
+        assert_eq!(res.per_streamer.len(), 2);
+        assert!(
+            res.combined.data_driven,
+            "combined.data_driven must reflect that at least one streamer had history"
+        );
+        // Login is the deterministic ORDER BY key — 'active' < 'fresh'.
+        assert!(res.per_streamer[0].forecast.data_driven);
+        assert!(!res.per_streamer[1].forecast.data_driven);
     }
 }

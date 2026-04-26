@@ -306,9 +306,12 @@ pub fn run() {
 
                 // v2.0.1: storage forecast (ADR-0032). Pure-function
                 // math + DB-backed inputs; no event surface needed.
+                // Clock is injected so the service's unit tests
+                // stay deterministic (rust-backend.md rule).
                 let forecast_svc = Arc::new(
                     crate::services::forecast::ForecastService::new(
                         db.clone(),
+                        clock.clone(),
                         SettingsService::new(db.clone(), clock.clone()),
                         Arc::new(SystemFreeSpace),
                     ),
