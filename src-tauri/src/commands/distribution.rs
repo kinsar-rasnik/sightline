@@ -128,8 +128,11 @@ pub struct PrefetchCheckResult {
 
 /// ADR-0031 hook: invoked from the player when the active VOD's
 /// watch progress crosses the threshold or the remaining time falls
-/// below the look-ahead window (frontend-side throttle ensures one
-/// call per VOD per session).  Returns whether a pre-fetch actually
+/// below the look-ahead window.  The frontend hook
+/// (`src/features/player/use-prefetch-hook.ts`) maintains a
+/// module-scoped `Set<vodId>` so this command fires at most once
+/// per VOD per app session — re-mounting the player on the same
+/// VOD does not re-trigger.  Returns whether a pre-fetch actually
 /// fired so the renderer can show a non-blocking confirmation.
 #[tauri::command]
 #[specta::specta]

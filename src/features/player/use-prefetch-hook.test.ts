@@ -2,6 +2,8 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  _clearTriggeredVodsForTests,
+  MIN_WATCHED_SECONDS_BEFORE_PREFETCH,
   PREFETCH_PROGRESS_THRESHOLD,
   PREFETCH_REMAINING_SECONDS_THRESHOLD,
   shouldTriggerPrefetch,
@@ -28,6 +30,43 @@ describe("shouldTriggerPrefetch", () => {
         alreadyTriggered: false,
       })
     ).toBe(false);
+  });
+
+  it("does not trigger on a short clip at currentSeconds = 0 (R-RC-02 fix)", () => {
+    // Short clip (90s) opened at start: remaining = 90 < 120 would
+    // otherwise satisfy the floor branch and fire the pre-fetch
+    // before the user has watched a frame. The MIN_WATCHED guard
+    // blocks both branches uniformly.
+    expect(
+      shouldTriggerPrefetch({
+        currentSeconds: 0,
+        durationSeconds: 90,
+        alreadyTriggered: false,
+      })
+    ).toBe(false);
+  });
+
+  it("does not trigger before MIN_WATCHED_SECONDS_BEFORE_PREFETCH", () => {
+    // At the boundary minus a hair: still below the minimum.
+    expect(
+      shouldTriggerPrefetch({
+        currentSeconds: MIN_WATCHED_SECONDS_BEFORE_PREFETCH - 0.01,
+        durationSeconds: 90,
+        alreadyTriggered: false,
+      })
+    ).toBe(false);
+  });
+
+  it("triggers at MIN_WATCHED_SECONDS_BEFORE_PREFETCH on a short clip", () => {
+    // 5s into a 90s clip: remaining = 85s < 120s floor and
+    // currentSeconds is at the minimum, so the floor branch fires.
+    expect(
+      shouldTriggerPrefetch({
+        currentSeconds: MIN_WATCHED_SECONDS_BEFORE_PREFETCH,
+        durationSeconds: 90,
+        alreadyTriggered: false,
+      })
+    ).toBe(true);
   });
 
   it("triggers at exactly the progress threshold", () => {
@@ -120,10 +159,36 @@ describe("shouldTriggerPrefetch", () => {
 describe("usePrefetchHook", () => {
   beforeEach(() => {
     vi.mocked(commands.prefetchCheck).mockClear();
+    _clearTriggeredVodsForTests();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    _clearTriggeredVodsForTests();
+  });
+
+  it("does not re-trigger across re-mounts of the same VOD (app-session scope)", () => {
+    // First mount triggers the prefetch.
+    const first = renderHook(() =>
+      usePrefetchHook({
+        vodId: "v1",
+        currentSeconds: 800,
+        durationSeconds: 1000,
+      })
+    );
+    expect(commands.prefetchCheck).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    // Second mount of the same VOD must NOT re-trigger because
+    // the throttle is module-scoped, not component-scoped.
+    renderHook(() =>
+      usePrefetchHook({
+        vodId: "v1",
+        currentSeconds: 800,
+        durationSeconds: 1000,
+      })
+    );
+    expect(commands.prefetchCheck).toHaveBeenCalledTimes(1);
   });
 
   it("invokes prefetchCheck once when the threshold is crossed", () => {
