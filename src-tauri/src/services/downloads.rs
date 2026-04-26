@@ -658,13 +658,17 @@ impl DownloadQueueService {
             // authoritative claim.  If two drain passes ever race
             // (the manager loop is single-threaded today, but a
             // future refactor or a misuse from tests could change
-            // that), the lock is the wall.
+            // that), the lock is the wall.  When it triggers we
+            // `continue` rather than `return`: the next iteration's
+            // `in_flight_snapshot()` includes the now-locked vod_id,
+            // so `pick_next_queued_excluding` returns the next
+            // queued row instead of looping on the same one.
             let Some(guard) = self.try_lock_inflight(&row.vod_id) else {
                 warn!(
                     vod_id = %row.vod_id,
-                    "AC3 lock-conflict (concurrent drain pass) — skipping spawn"
+                    "AC3 lock-conflict (concurrent drain pass) — skipping VOD, trying next queued row"
                 );
-                return Ok(());
+                continue;
             };
 
             // The throttle wants to know how many workers are active
