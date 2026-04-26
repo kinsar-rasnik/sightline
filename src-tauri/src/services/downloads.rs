@@ -306,6 +306,12 @@ impl DownloadQueueService {
         .bind(vod_id)
         .execute(self.db.pool())
         .await?;
+        // S5 convergence: a resumed row goes back into the worker
+        // queue. vods.status was last 'downloading' (paused mid-run)
+        // or 'queued' (paused before pickup) — both should land at
+        // 'queued' so the next worker tick re-syncs them.
+        sync_vods_after_download_state(self.db.pool(), vod_id, DownloadState::Queued, false)
+            .await?;
         self.get(vod_id).await?.ok_or(AppError::NotFound)
     }
 
@@ -330,6 +336,13 @@ impl DownloadQueueService {
         .bind(vod_id)
         .execute(self.db.pool())
         .await?;
+        // S5 convergence: a retried row may have been a user-cancel
+        // (vods.status = 'available') or an auto-failure
+        // (vods.status = 'queued'); the Queued mapping covers both
+        // by allowing 'available' / 'deleted' / 'queued' / 'downloading'
+        // → 'queued'.
+        sync_vods_after_download_state(self.db.pool(), vod_id, DownloadState::Queued, false)
+            .await?;
         self.get(vod_id).await?.ok_or(AppError::NotFound)
     }
 
@@ -411,6 +424,7 @@ impl DownloadQueueService {
         })?;
         let now = self.clock.unix_seconds();
         let err = new_error(next_state);
+        let was_user_cancel = err.as_deref().is_some_and(|e| e == reason::USER_CANCELLED);
         sqlx::query(
             "UPDATE downloads
              SET state = ?,
@@ -431,6 +445,11 @@ impl DownloadQueueService {
         .bind(vod_id)
         .execute(self.db.pool())
         .await?;
+        // S5 convergence: every state-machine-driven transition
+        // also mirrors onto vods.status. The cancel flag distinguishes
+        // a user-initiated FailedPermanent (vods.status → 'available')
+        // from an auto-failure (vods.status → 'queued').
+        sync_vods_after_download_state(self.db.pool(), vod_id, next_state, was_user_cancel).await?;
         self.get(vod_id).await?.ok_or(AppError::NotFound)
     }
 
@@ -457,6 +476,21 @@ impl DownloadQueueService {
              WHERE state = 'downloading'",
         )
         .bind(now)
+        .execute(self.db.pool())
+        .await?;
+        // S5 convergence: vods.status was 'downloading' for any row
+        // we just reset; bring it back to 'queued' so the Library
+        // UI doesn't flash a permanently-downloading badge between
+        // crash and the worker's first subsequent transition.  Bulk
+        // UPDATE scoped to vods that ARE in fact in 'downloading'
+        // AND have a corresponding queued downloads row.
+        sqlx::query(
+            "UPDATE vods SET status = 'queued'
+              WHERE status = 'downloading'
+                AND twitch_video_id IN (
+                    SELECT vod_id FROM downloads WHERE state = 'queued'
+                )",
+        )
         .execute(self.db.pool())
         .await?;
         Ok(result.rows_affected())
@@ -891,7 +925,8 @@ impl DownloadQueueService {
         // (or 'queued', if the worker raced past it) to 'ready'.
         // Idempotent — ready/archived stay where they are because
         // they are not in the WHERE filter.
-        sync_vod_status(self.db.pool(), vod_id, "ready", &["downloading", "queued"]).await?;
+        sync_vods_after_download_state(self.db.pool(), vod_id, DownloadState::Completed, false)
+            .await?;
         Ok(())
     }
 
@@ -912,6 +947,9 @@ impl DownloadQueueService {
         state: DownloadState,
         last_error: Option<String>,
     ) -> Result<(), AppError> {
+        let was_user_cancel = last_error
+            .as_deref()
+            .is_some_and(|e| e == reason::USER_CANCELLED);
         sqlx::query(
             "UPDATE downloads
              SET state = ?,
@@ -927,46 +965,58 @@ impl DownloadQueueService {
         .bind(vod_id)
         .execute(self.db.pool())
         .await?;
-        // S5 convergence: mirror selected downloads.state changes
-        // onto vods.status so the pull-mode state machine and the
-        // legacy auto-mode queue stay aligned.  See ADR-0030 for
-        // the canonical machine.  We only touch the vods row when
-        // the source state in vods is one we expect — never blow
-        // over `archived`, `deleted`, or `available` rows.
-        match state {
-            DownloadState::Downloading => {
-                sync_vod_status(
-                    self.db.pool(),
-                    vod_id,
-                    "downloading",
-                    &["queued", "downloading"],
-                )
-                .await?;
-            }
-            DownloadState::FailedPermanent => {
-                // Pull-mode UX: a permanent failure rolls vods.status
-                // back to 'queued' so the user's retry through the
-                // Downloads UI lands cleanly without a state-machine
-                // contradiction.  We don't go all the way back to
-                // 'available' because the user still wants this VOD
-                // — they just need a retry.
-                sync_vod_status(self.db.pool(), vod_id, "queued", &["downloading", "queued"])
-                    .await?;
-            }
-            DownloadState::Queued
-            | DownloadState::Paused
-            | DownloadState::Completed
-            | DownloadState::FailedRetryable => {
-                // Queued: handled by `enqueue` (which gets called via
-                // the distribution sink).  Paused: doesn't change
-                // vods.status — the file is still committed.
-                // Completed: handled by `mark_completed`.  Retryable:
-                // worker will pick it up on the next tick; vods.status
-                // remains as-is (likely still 'downloading').
-            }
-        }
-        Ok(())
+        sync_vods_after_download_state(self.db.pool(), vod_id, state, was_user_cancel).await
     }
+}
+
+/// Map a `DownloadState` change to the matching `vods.status`
+/// transition. The `cancel` flag distinguishes a user-initiated
+/// cancel (vods.status → 'available' — they don't want this VOD)
+/// from an auto-failure (vods.status → 'queued' — they still want
+/// it, retry friendly).  Returns `None` for download states that
+/// must NOT touch the vods row (Paused / FailedRetryable).
+///
+/// Pure helper exposed for unit tests so the mapping is explicit
+/// rather than buried in the SQL caller.
+fn target_vods_status_for_state(
+    state: DownloadState,
+    cancel: bool,
+) -> Option<(&'static str, &'static [&'static str])> {
+    match state {
+        DownloadState::Queued => Some((
+            "queued",
+            // Used by `retry`, `resume`, `crash_recover` — covers
+            // every state from which a row could legitimately be
+            // re-queued.
+            &["available", "deleted", "queued", "downloading"][..],
+        )),
+        DownloadState::Downloading => Some(("downloading", &["queued", "downloading"][..])),
+        DownloadState::Completed => Some(("ready", &["downloading", "queued"][..])),
+        DownloadState::FailedPermanent if cancel => {
+            Some(("available", &["queued", "downloading"][..]))
+        }
+        DownloadState::FailedPermanent => Some(("queued", &["downloading", "queued"][..])),
+        // Paused leaves the file (or the queue position) intact;
+        // FailedRetryable hands back to the worker which will
+        // re-transition. Both are no-ops for vods.status.
+        DownloadState::Paused | DownloadState::FailedRetryable => None,
+    }
+}
+
+/// Convergence helper used by every code path that mutates
+/// `downloads.state`.  Resolves the target via
+/// [`target_vods_status_for_state`] and applies it atomically with
+/// a guard on the source vods.status.
+async fn sync_vods_after_download_state(
+    pool: &sqlx::SqlitePool,
+    vod_id: &str,
+    state: DownloadState,
+    cancel: bool,
+) -> Result<(), AppError> {
+    let Some((target, valid_from)) = target_vods_status_for_state(state, cancel) else {
+        return Ok(());
+    };
+    sync_vod_status(pool, vod_id, target, valid_from).await
 }
 
 /// Update `vods.status` to `target` only when the row's current
@@ -1204,6 +1254,27 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn target_vods_status_paused_and_retryable_are_noops() {
+        // Both states must keep vods.status untouched — file may
+        // still exist (paused) or worker about to retry
+        // (retryable). Document via assertion.
+        assert!(target_vods_status_for_state(DownloadState::Paused, false).is_none());
+        assert!(target_vods_status_for_state(DownloadState::FailedRetryable, false).is_none());
+    }
+
+    #[test]
+    fn target_vods_status_failed_permanent_branches_on_cancel() {
+        // The cancel-vs-auto-failure distinction is the entire
+        // point of the `cancel` flag. Cover both branches.
+        let (auto_target, _) =
+            target_vods_status_for_state(DownloadState::FailedPermanent, false).unwrap();
+        assert_eq!(auto_target, "queued");
+        let (cancel_target, _) =
+            target_vods_status_for_state(DownloadState::FailedPermanent, true).unwrap();
+        assert_eq!(cancel_target, "available");
+    }
+
     #[tokio::test]
     async fn enqueue_promotes_vods_status_from_available_to_queued() {
         // Pure auto-mode path: poller seeds an 'available' row, the
@@ -1327,6 +1398,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancel_rolls_vods_status_back_to_available() {
+        // R-RC-02 fix: cancel is the explicit "I don't want this"
+        // path; vods.status should land at 'available' so the user
+        // can re-pick if they change their mind, NOT 'queued'
+        // (which would imply they still want it).
+        let (svc, db) = setup_service().await;
+        seed_streamer_and_vod(&db).await;
+        svc.enqueue("v1", None).await.unwrap();
+        assert_eq!(vod_status(&db, "v1").await, "queued");
+        svc.cancel("v1").await.unwrap();
+        assert_eq!(vod_status(&db, "v1").await, "available");
+    }
+
+    #[tokio::test]
     async fn retry_resets_attempts_and_requeues() {
         let (svc, db) = setup_service().await;
         seed_streamer_and_vod(&db).await;
@@ -1336,6 +1421,42 @@ mod tests {
         assert_eq!(row.state, DownloadState::Queued);
         assert_eq!(row.attempts, 0);
         assert_eq!(row.bytes_done, 0);
+    }
+
+    #[tokio::test]
+    async fn retry_after_cancel_advances_vods_status_to_queued() {
+        // R-RC-02 fix: retry on a cancelled-and-now-available row
+        // brings vods.status back to 'queued' so the worker can
+        // pick it up again.
+        let (svc, db) = setup_service().await;
+        seed_streamer_and_vod(&db).await;
+        svc.enqueue("v1", None).await.unwrap();
+        svc.cancel("v1").await.unwrap();
+        assert_eq!(vod_status(&db, "v1").await, "available");
+        svc.retry("v1").await.unwrap();
+        assert_eq!(vod_status(&db, "v1").await, "queued");
+    }
+
+    #[tokio::test]
+    async fn resume_after_pause_realigns_vods_status() {
+        // R-RC-02 fix: a paused row that was previously downloading
+        // would leave vods.status='downloading'.  After resume the
+        // downloads.state goes 'queued' but vods.status was stuck.
+        // The convergence puts it back to 'queued' so the next
+        // worker tick re-syncs cleanly.
+        let (svc, db) = setup_service().await;
+        seed_streamer_and_vod(&db).await;
+        svc.enqueue("v1", None).await.unwrap();
+        svc.set_state("v1", DownloadState::Downloading, None)
+            .await
+            .unwrap();
+        // Mid-download pause via the state machine.
+        svc.pause("v1").await.unwrap();
+        // Pause keeps vods.status as 'downloading' (file is on disk).
+        assert_eq!(vod_status(&db, "v1").await, "downloading");
+        // Resume returns vods.status to 'queued' so worker can re-pick.
+        svc.resume("v1").await.unwrap();
+        assert_eq!(vod_status(&db, "v1").await, "queued");
     }
 
     #[tokio::test]
@@ -1372,10 +1493,21 @@ mod tests {
             .execute(db.pool())
             .await
             .unwrap();
+        // Simulate a real mid-download crash: vods.status would also
+        // be 'downloading' at the time of the crash.  The recovery
+        // pass must converge both rows.
+        sqlx::query("UPDATE vods SET status = 'downloading' WHERE twitch_video_id = 'v1'")
+            .execute(db.pool())
+            .await
+            .unwrap();
         let moved = svc.crash_recover().await.unwrap();
         assert_eq!(moved, 1);
         let row = svc.get("v1").await.unwrap().unwrap();
         assert_eq!(row.state, DownloadState::Queued);
+        // R-RC-02 fix: the vods row must follow the downloads row
+        // back to 'queued' so the Library UI doesn't show a
+        // permanently-downloading badge after recovery.
+        assert_eq!(vod_status(&db, "v1").await, "queued");
     }
 
     #[tokio::test]
