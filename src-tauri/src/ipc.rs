@@ -26,15 +26,17 @@ pub fn ipc_builder() -> Builder<Wry> {
     use crate::services::events::{
         AppReadyEvent, AppShutdownRequestedEvent, AppTrayActionEvent, CleanupDiskPressureEvent,
         CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
-        DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent,
-        DownloadStateChangedEvent, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
-        LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent,
-        StorageLowDiskWarningEvent, StreamerAddedEvent, StreamerFavoritedEvent,
-        StreamerRemovedEvent, StreamerUnfavoritedEvent, SyncDriftCorrectedEvent,
-        SyncGroupClosedEvent, SyncLeaderChangedEvent, SyncMemberOutOfRangeEvent,
-        SyncStateChangedEvent, TimelineIndexRebuildingEvent, TimelineIndexRebuiltEvent,
-        UpdaterCheckFailedEvent, UpdaterUpdateAvailableEvent, VodIngestedEvent, VodUpdatedEvent,
-        WatchCompletedEvent, WatchProgressUpdatedEvent, WatchStateChangedEvent,
+        DistributionPrefetchTriggeredEvent, DistributionVodArchivedEvent,
+        DistributionVodPickedEvent, DistributionWindowEnforcedEvent, DownloadCompletedEvent,
+        DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
+        LibraryMigratingEvent, LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent,
+        PollFinishedEvent, PollStartedEvent, StorageLowDiskWarningEvent, StreamerAddedEvent,
+        StreamerFavoritedEvent, StreamerRemovedEvent, StreamerUnfavoritedEvent,
+        SyncDriftCorrectedEvent, SyncGroupClosedEvent, SyncLeaderChangedEvent,
+        SyncMemberOutOfRangeEvent, SyncStateChangedEvent, TimelineIndexRebuildingEvent,
+        TimelineIndexRebuiltEvent, UpdaterCheckFailedEvent, UpdaterUpdateAvailableEvent,
+        VodIngestedEvent, VodUpdatedEvent, WatchCompletedEvent, WatchProgressUpdatedEvent,
+        WatchStateChangedEvent,
     };
     use crate::services::notifications::NotificationPayload;
 
@@ -120,6 +122,12 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::quality::get_encoder_capability,
             commands::quality::redetect_encoders,
             commands::quality::set_video_quality_profile,
+            // Phase 8: pull-on-demand distribution
+            commands::distribution::pick_vod,
+            commands::distribution::pick_next_n,
+            commands::distribution::unpick_vod,
+            commands::distribution::set_distribution_mode,
+            commands::distribution::set_sliding_window_size,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS
@@ -167,6 +175,11 @@ pub fn ipc_builder() -> Builder<Wry> {
         .typ::<CleanupDiskPressureEvent>()
         .typ::<UpdaterUpdateAvailableEvent>()
         .typ::<UpdaterCheckFailedEvent>()
+        // Phase 8
+        .typ::<DistributionVodPickedEvent>()
+        .typ::<DistributionVodArchivedEvent>()
+        .typ::<DistributionPrefetchTriggeredEvent>()
+        .typ::<DistributionWindowEnforcedEvent>()
 }
 
 /// Target path of the generated TS bindings, relative to the workspace

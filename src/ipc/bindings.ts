@@ -181,6 +181,11 @@ export const commands = {
 	 */
 	redetectEncoders: () => typedError<EncoderCapability, AppError>(__TAURI_INVOKE("redetect_encoders")),
 	setVideoQualityProfile: (input: SetVideoQualityProfileInput) => typedError<VideoQualityProfile, AppError>(__TAURI_INVOKE("set_video_quality_profile", { input })),
+	pickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("pick_vod", { input })),
+	pickNextN: (input: PickNextNInput) => typedError<string[], AppError>(__TAURI_INVOKE("pick_next_n", { input })),
+	unpickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("unpick_vod", { input })),
+	setDistributionMode: (input: SetDistributionModeInput) => typedError<DistributionMode, AppError>(__TAURI_INVOKE("set_distribution_mode", { input })),
+	setSlidingWindowSize: (input: SetSlidingWindowSizeInput) => typedError<number, AppError>(__TAURI_INVOKE("set_sliding_window_size", { input })),
 };
 
 /* Types */
@@ -387,6 +392,22 @@ export type AppSettings = {
 	 *  (service-layer rejects an inverted pair).
 	 */
 	cpuThrottleLowThreshold: number,
+	/**
+	 *  Default `Pull` for new installs; existing v1.0 installs are
+	 *  pinned to `Auto` by migration 0017.
+	 */
+	distributionMode: DistributionMode,
+	/**
+	 *  Per-streamer cap on `(queued + downloading + ready)` rows.
+	 *  Default 2; range [1, 20].
+	 */
+	slidingWindowSize: number,
+	/**
+	 *  Whether the player's prefetch hook (ADR-0031) is allowed to
+	 *  auto-pick the next VOD.  Defaults to true; off = strict
+	 *  pull-only, the user picks every VOD by hand.
+	 */
+	prefetchEnabled: boolean,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -598,6 +619,50 @@ export type DiskUsage = {
 	highWatermark: number,
 	lowWatermark: number,
 	aboveHighWatermark: boolean,
+};
+
+/**
+ *  Distribution mode — selects between v1.0 auto-download
+ *  behaviour and the v2.0 pull-on-demand model.  Persisted in
+ *  `app_settings.distribution_mode` (migration 0017).  New installs
+ *  default to `Pull`; existing installs are pinned to `Auto` by the
+ *  migration's backward-compat detection.
+ */
+export type DistributionMode = 
+/**
+ *  v1.0 behaviour: polling auto-enqueues every newly-discovered
+ *  VOD into the download queue.
+ */
+"auto" | 
+/**
+ *  v2.0 default: polling produces `available` rows; the user
+ *  picks explicitly (or pre-fetch picks one VOD ahead).
+ */
+"pull";
+
+export type DistributionPrefetchTriggeredEvent = {
+	currentlyWatching: string,
+	prefetched: string,
+};
+
+export type DistributionVodArchivedEvent = {
+	vodId: string,
+};
+
+export type DistributionVodPickedEvent = {
+	vodId: string,
+	/**
+	 *  State the row was in before the pick.  Useful for the
+	 *  renderer's optimistic-update path: a `available -> queued`
+	 *  transition needs different cache invalidation than a
+	 *  `deleted -> queued` re-pick.
+	 */
+	fromStatus: string,
+};
+
+export type DistributionWindowEnforcedEvent = {
+	streamerId: string,
+	evictedVodId: string,
 };
 
 export type DownloadCompletedEvent = {
@@ -915,6 +980,24 @@ export type OverlapWindow = {
 	endAt: number,
 };
 
+export type PickNextNInput = {
+	streamerId: string,
+	n: number,
+};
+
+/**
+ *  Result of a `pick_vod` / `unpick_vod` call.  Carries the new
+ *  status so the renderer can update its cache without a re-fetch.
+ */
+export type PickResult = {
+	vodId: string,
+	status: VodStatus,
+};
+
+export type PickVodInput = {
+	vodId: string,
+};
+
 export type PollFinishedEvent = {
 	twitchUserId: string,
 	finishedAt: number,
@@ -967,9 +1050,17 @@ export type SetAutostartInput = {
 	enabled: boolean,
 };
 
+export type SetDistributionModeInput = {
+	mode: DistributionMode,
+};
+
 export type SetShortcutInput = {
 	actionId: string,
 	keys: string,
+};
+
+export type SetSlidingWindowSizeInput = {
+	size: number,
 };
 
 export type SetSyncLeaderInput = {
@@ -1056,6 +1147,9 @@ export type SettingsPatch = {
 	maxConcurrentReencodes?: number | null,
 	cpuThrottleHighThreshold?: number | null,
 	cpuThrottleLowThreshold?: number | null,
+	distributionMode?: DistributionMode | null,
+	slidingWindowSize?: number | null,
+	prefetchEnabled?: boolean | null,
 };
 
 /**
@@ -1415,6 +1509,34 @@ export type VodIngestedEvent = {
 };
 
 export type VodSort = "stream_started_at_desc" | "stream_started_at_asc";
+
+/**
+ *  Lifecycle state of a single VOD row in the distribution model.
+ *  Persisted as `vods.status` (migration 0016).  CHECK constraint
+ *  in the migration file enforces the same closed set.
+ */
+export type VodStatus = 
+// Polled by the background, metadata only — file not on disk.
+"available" | 
+/**
+ *  User picked this VOD (or pre-fetch did); waiting for a
+ *  download worker.
+ */
+"queued" | 
+// Download in flight.
+"downloading" | 
+// File on disk, ready to play.
+"ready" | 
+/**
+ *  Watched (`watch_progress.state ∈ {completed, manually_watched}`)
+ *  — eligible for sliding-window cleanup.
+ */
+"archived" | 
+/**
+ *  Cleanup deleted the file.  Row stays so the user can re-pick
+ *  for a fresh download.
+ */
+"deleted";
 
 export type VodUpdatedEvent = {
 	twitchVideoId: string,

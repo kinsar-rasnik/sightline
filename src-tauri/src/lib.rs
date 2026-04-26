@@ -25,21 +25,27 @@ use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
 use crate::services::cleanup::{CleanupEvent, CleanupEventSink, CleanupService};
 use crate::services::credentials::CredentialsService;
+use crate::services::distribution::{
+    DistributionEvent, DistributionEventSink, DistributionService,
+};
 use crate::services::downloads::{
     DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
 };
 use crate::services::encoder_detection::EncoderDetectionService;
 use crate::services::events::{
     CleanupDiskPressureEvent, CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
-    DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
-    EV_CLEANUP_DISK_PRESSURE, EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
-    EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED, EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED,
-    EV_LIBRARY_MIGRATING, EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED,
-    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED,
-    EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
-    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
-    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, UpdaterUpdateAvailableEvent,
-    VodIngestedEvent, VodUpdatedEvent,
+    DistributionPrefetchTriggeredEvent, DistributionVodArchivedEvent, DistributionVodPickedEvent,
+    DistributionWindowEnforcedEvent, DownloadCompletedEvent, DownloadFailedEvent,
+    DownloadProgressEvent, DownloadStateChangedEvent, EV_CLEANUP_DISK_PRESSURE,
+    EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
+    EV_DISTRIBUTION_PREFETCH_TRIGGERED, EV_DISTRIBUTION_VOD_ARCHIVED, EV_DISTRIBUTION_VOD_PICKED,
+    EV_DISTRIBUTION_WINDOW_ENFORCED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
+    EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
+    EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
+    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED,
+    EV_VOD_UPDATED, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
+    LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent, StreamerAddedEvent,
+    StreamerRemovedEvent, UpdaterUpdateAvailableEvent, VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -94,6 +100,9 @@ pub struct AppState {
     pub updater_sink: UpdaterEventSink,
     // --- Phase 8: quality pipeline ---
     pub encoder_detection: Arc<EncoderDetectionService>,
+    // --- Phase 8: pull-on-demand distribution ---
+    pub distribution: Arc<DistributionService>,
+    pub distribution_sink: DistributionEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -354,6 +363,59 @@ pub fn run() {
                     SettingsService::new(db.clone(), clock.clone()),
                     clock.clone(),
                 ));
+
+                // Phase 8: pull-on-demand distribution service +
+                // event sink.  The IPC commands wrap the service;
+                // events fan out via the same handle pattern as
+                // the cleanup / sync services.
+                let distribution_svc = Arc::new(DistributionService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+                let distribution_handle = handle.clone();
+                let distribution_sink: DistributionEventSink =
+                    Arc::new(move |ev| match ev {
+                        DistributionEvent::VodPicked { vod_id, from } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_PICKED,
+                                DistributionVodPickedEvent {
+                                    vod_id,
+                                    from_status: from.as_db_str().to_owned(),
+                                },
+                            );
+                        }
+                        DistributionEvent::VodArchived { vod_id } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_ARCHIVED,
+                                DistributionVodArchivedEvent { vod_id },
+                            );
+                        }
+                        DistributionEvent::PrefetchTriggered {
+                            currently_watching,
+                            prefetched,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_PREFETCH_TRIGGERED,
+                                DistributionPrefetchTriggeredEvent {
+                                    currently_watching,
+                                    prefetched,
+                                },
+                            );
+                        }
+                        DistributionEvent::WindowEnforced {
+                            streamer_id,
+                            evicted_vod_id,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_WINDOW_ENFORCED,
+                                DistributionWindowEnforcedEvent {
+                                    streamer_id,
+                                    evicted_vod_id,
+                                },
+                            );
+                        }
+                    });
 
                 // Phase 7: auto-cleanup service + event sink.
                 let cleanup_svc = Arc::new(CleanupService::new(
@@ -755,6 +817,8 @@ pub fn run() {
                     updater: updater_svc.clone(),
                     updater_sink: updater_sink.clone(),
                     encoder_detection: encoder_detection_svc.clone(),
+                    distribution: distribution_svc,
+                    distribution_sink: distribution_sink.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });

@@ -77,7 +77,7 @@ mod tests {
 
     /// Latest migration bumps `PRAGMA user_version` to this value. Keep this
     /// in lock-step with the highest-numbered `migrations/*.sql` file.
-    const LATEST_SCHEMA_VERSION: i64 = 15;
+    const LATEST_SCHEMA_VERSION: i64 = 17;
 
     #[tokio::test]
     async fn in_memory_migrates_to_latest() {

@@ -6,6 +6,7 @@ pub mod app;
 pub mod autostart;
 pub mod cleanup;
 pub mod credentials;
+pub mod distribution;
 pub mod downloads;
 pub mod health;
 pub mod media;

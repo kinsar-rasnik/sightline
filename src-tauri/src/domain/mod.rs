@@ -3,6 +3,7 @@
 pub mod chapter;
 pub mod cleanup;
 pub mod deep_link;
+pub mod distribution;
 pub mod download_state;
 pub mod duration;
 pub mod game_filter;

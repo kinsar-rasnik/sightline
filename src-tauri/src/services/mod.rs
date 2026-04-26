@@ -5,6 +5,7 @@
 pub mod autostart;
 pub mod cleanup;
 pub mod credentials;
+pub mod distribution;
 pub mod downloads;
 pub mod encoder_detection;
 pub mod events;

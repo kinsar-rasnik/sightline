@@ -74,6 +74,9 @@ const baseSettings = {
   maxConcurrentReencodes: 1,
   cpuThrottleHighThreshold: 0.7,
   cpuThrottleLowThreshold: 0.5,
+  distributionMode: "pull" as const,
+  slidingWindowSize: 2,
+  prefetchEnabled: true,
 };
 
 function renderSection(props?: Partial<typeof baseSettings>) {

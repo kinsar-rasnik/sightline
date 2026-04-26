@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use sqlx::Row;
 
+use crate::domain::distribution::DistributionMode;
 use crate::domain::library_layout::LibraryLayoutKind;
 use crate::domain::poll_schedule::PollIntervals;
 use crate::domain::quality::{EncoderCapability, VideoQualityProfile};
@@ -129,6 +130,18 @@ pub struct AppSettings {
     /// a paused encoder.  Strictly less than `cpu_throttle_high_threshold`
     /// (service-layer rejects an inverted pair).
     pub cpu_throttle_low_threshold: f64,
+
+    // --- Phase 8: distribution model (ADR-0030, ADR-0031). ---
+    /// Default `Pull` for new installs; existing v1.0 installs are
+    /// pinned to `Auto` by migration 0017.
+    pub distribution_mode: DistributionMode,
+    /// Per-streamer cap on `(queued + downloading + ready)` rows.
+    /// Default 2; range [1, 20].
+    pub sliding_window_size: i64,
+    /// Whether the player's prefetch hook (ADR-0031) is allowed to
+    /// auto-pick the next VOD.  Defaults to true; off = strict
+    /// pull-only, the user picks every VOD by hand.
+    pub prefetch_enabled: bool,
 }
 
 /// What happens when the user clicks the window close button.
@@ -263,6 +276,13 @@ pub struct SettingsPatch {
     pub cpu_throttle_high_threshold: Option<f64>,
     #[specta(optional)]
     pub cpu_throttle_low_threshold: Option<f64>,
+
+    #[specta(optional)]
+    pub distribution_mode: Option<DistributionMode>,
+    #[specta(optional)]
+    pub sliding_window_size: Option<i64>,
+    #[specta(optional)]
+    pub prefetch_enabled: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -295,7 +315,8 @@ impl SettingsService {
                     update_check_enabled, update_check_last_run, update_check_skip_version,
                     video_quality_profile, software_encode_opt_in, encoder_capability,
                     max_concurrent_reencodes,
-                    cpu_throttle_high_threshold, cpu_throttle_low_threshold
+                    cpu_throttle_high_threshold, cpu_throttle_low_threshold,
+                    distribution_mode, sliding_window_size, prefetch_enabled
              FROM app_settings WHERE id = 1",
         )
         .fetch_one(self.db.pool())
@@ -362,6 +383,11 @@ impl SettingsService {
         let max_concurrent_reencodes: i64 = row.try_get(35)?;
         let cpu_throttle_high_threshold: f64 = row.try_get(36)?;
         let cpu_throttle_low_threshold: f64 = row.try_get(37)?;
+        let distribution_mode_str: String = row.try_get(38)?;
+        let distribution_mode =
+            DistributionMode::from_db_str(&distribution_mode_str).unwrap_or(DistributionMode::Pull);
+        let sliding_window_size: i64 = row.try_get(39)?;
+        let prefetch_enabled_raw: i64 = row.try_get(40)?;
 
         Ok(AppSettings {
             enabled_game_ids,
@@ -403,6 +429,9 @@ impl SettingsService {
             max_concurrent_reencodes,
             cpu_throttle_high_threshold,
             cpu_throttle_low_threshold,
+            distribution_mode,
+            sliding_window_size,
+            prefetch_enabled: prefetch_enabled_raw != 0,
         })
     }
 
@@ -594,6 +623,14 @@ impl SettingsService {
             });
         }
 
+        // --- Phase 8 distribution knobs (ADR-0030, ADR-0031). ---
+        let distribution_mode = patch.distribution_mode.unwrap_or(current.distribution_mode);
+        let sliding_window_size = patch
+            .sliding_window_size
+            .unwrap_or(current.sliding_window_size)
+            .clamp(1, 20);
+        let prefetch_enabled = patch.prefetch_enabled.unwrap_or(current.prefetch_enabled);
+
         let games_json = serde_json::to_string(&games).map_err(AppError::from)?;
         let now = self.clock.unix_seconds();
 
@@ -635,6 +672,9 @@ impl SettingsService {
                  max_concurrent_reencodes = ?,
                  cpu_throttle_high_threshold = ?,
                  cpu_throttle_low_threshold = ?,
+                 distribution_mode = ?,
+                 sliding_window_size = ?,
+                 prefetch_enabled = ?,
                  updated_at = ?
              WHERE id = 1",
         )
@@ -674,6 +714,9 @@ impl SettingsService {
         .bind(max_concurrent_reencodes)
         .bind(cpu_throttle_high_threshold)
         .bind(cpu_throttle_low_threshold)
+        .bind(distribution_mode.as_db_str())
+        .bind(sliding_window_size)
+        .bind(if prefetch_enabled { 1 } else { 0 })
         .bind(now)
         .execute(self.db.pool())
         .await?;
@@ -1348,5 +1391,64 @@ mod tests {
         svc.record_encoder_capability(&cap).await.unwrap();
         let out = svc.get().await.unwrap();
         assert_eq!(out.encoder_capability, Some(cap));
+    }
+
+    // --- Phase 8 distribution-mode tests (ADR-0030). ---
+
+    #[tokio::test]
+    async fn phase_8_distribution_defaults() {
+        let svc = setup().await;
+        let s = svc.get().await.unwrap();
+        // Empty downloads table → migration leaves DEFAULT 'pull'.
+        assert_eq!(s.distribution_mode, DistributionMode::Pull);
+        assert_eq!(s.sliding_window_size, 2);
+        assert!(s.prefetch_enabled);
+    }
+
+    #[tokio::test]
+    async fn distribution_mode_round_trips() {
+        let svc = setup().await;
+        let out = svc
+            .update(SettingsPatch {
+                distribution_mode: Some(DistributionMode::Auto),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.distribution_mode, DistributionMode::Auto);
+    }
+
+    #[tokio::test]
+    async fn sliding_window_size_clamped_1_to_20() {
+        let svc = setup().await;
+        let high = svc
+            .update(SettingsPatch {
+                sliding_window_size: Some(99),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(high.sliding_window_size, 20);
+        let low = svc
+            .update(SettingsPatch {
+                sliding_window_size: Some(0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(low.sliding_window_size, 1);
+    }
+
+    #[tokio::test]
+    async fn prefetch_enabled_round_trips() {
+        let svc = setup().await;
+        let off = svc
+            .update(SettingsPatch {
+                prefetch_enabled: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!off.prefetch_enabled);
     }
 }

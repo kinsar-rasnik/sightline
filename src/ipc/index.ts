@@ -33,6 +33,11 @@ import {
   type CredentialsStatus,
   type CheckForUpdateInput,
   type DiskUsage,
+  type DistributionMode,
+  type DistributionPrefetchTriggeredEvent,
+  type DistributionVodArchivedEvent,
+  type DistributionVodPickedEvent,
+  type DistributionWindowEnforcedEvent,
   type EncoderCapability,
   type EncoderKind,
   type ExecuteCleanupInput,
@@ -105,6 +110,11 @@ import {
   type OverlapWindow,
   type RecordSyncDriftInput,
   type ReportSyncOutOfRangeInput,
+  type PickNextNInput,
+  type PickResult,
+  type PickVodInput,
+  type SetDistributionModeInput,
+  type SetSlidingWindowSizeInput,
   type SetSyncLeaderInput,
   type SetVideoQualityProfileInput,
   type SyncDriftCorrectedEvent,
@@ -123,6 +133,7 @@ import {
   type VideoQualityProfile,
   type VideoSource,
   type VideoSourceState,
+  type VodStatus,
   type VodAssets,
   type VodAssetsInput,
   type VodIdInput,
@@ -163,6 +174,11 @@ export type {
   CredentialsStatus,
   CheckForUpdateInput,
   DiskUsage,
+  DistributionMode,
+  DistributionPrefetchTriggeredEvent,
+  DistributionVodArchivedEvent,
+  DistributionVodPickedEvent,
+  DistributionWindowEnforcedEvent,
   EncoderCapability,
   EncoderKind,
   ExecuteCleanupInput,
@@ -235,6 +251,11 @@ export type {
   OverlapWindow,
   RecordSyncDriftInput,
   ReportSyncOutOfRangeInput,
+  PickNextNInput,
+  PickResult,
+  PickVodInput,
+  SetDistributionModeInput,
+  SetSlidingWindowSizeInput,
   SetSyncLeaderInput,
   SetVideoQualityProfileInput,
   SyncDriftCorrectedEvent,
@@ -253,6 +274,7 @@ export type {
   VideoQualityProfile,
   VideoSource,
   VideoSourceState,
+  VodStatus,
   VodAssets,
   VodAssetsInput,
   VodIdInput,
@@ -330,6 +352,10 @@ export const events = {
   cleanupDiskPressure: "cleanup:disk_pressure",
   updaterUpdateAvailable: "updater:update_available",
   updaterCheckFailed: "updater:check_failed",
+  distributionVodPicked: "distribution:vod_picked",
+  distributionVodArchived: "distribution:vod_archived",
+  distributionPrefetchTriggered: "distribution:prefetch_triggered",
+  distributionWindowEnforced: "distribution:window_enforced",
 } as const;
 
 /**
@@ -536,6 +562,21 @@ export const commands = {
     input: SetVideoQualityProfileInput,
   ): Promise<VideoQualityProfile> =>
     unwrap(await generatedCommands.setVideoQualityProfile(input)),
+  // --- Phase 8: pull-on-demand distribution ---
+  pickVod: async (input: PickVodInput): Promise<PickResult> =>
+    unwrap(await generatedCommands.pickVod(input)),
+  pickNextN: async (input: PickNextNInput): Promise<string[]> =>
+    unwrap(await generatedCommands.pickNextN(input)),
+  unpickVod: async (input: PickVodInput): Promise<PickResult> =>
+    unwrap(await generatedCommands.unpickVod(input)),
+  setDistributionMode: async (
+    input: SetDistributionModeInput,
+  ): Promise<DistributionMode> =>
+    unwrap(await generatedCommands.setDistributionMode(input)),
+  setSlidingWindowSize: async (
+    input: SetSlidingWindowSizeInput,
+  ): Promise<number> =>
+    unwrap(await generatedCommands.setSlidingWindowSize(input)),
 };
 
 /**

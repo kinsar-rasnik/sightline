@@ -231,6 +231,9 @@ mod tests {
             max_concurrent_reencodes: 1,
             cpu_throttle_high_threshold: 0.7,
             cpu_throttle_low_threshold: 0.5,
+            distribution_mode: crate::domain::distribution::DistributionMode::Pull,
+            sliding_window_size: 2,
+            prefetch_enabled: true,
         };
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
         s.notifications_enabled = false;
@@ -283,6 +286,9 @@ mod tests {
             max_concurrent_reencodes: 1,
             cpu_throttle_high_threshold: 0.7,
             cpu_throttle_low_threshold: 0.5,
+            distribution_mode: crate::domain::distribution::DistributionMode::Pull,
+            sliding_window_size: 2,
+            prefetch_enabled: true,
         };
         assert!(!NotificationCategory::DownloadComplete.is_enabled(&s));
         assert!(NotificationCategory::DownloadFailed.is_enabled(&s));
