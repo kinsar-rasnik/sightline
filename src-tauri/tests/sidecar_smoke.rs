@@ -157,17 +157,30 @@ fn linux_deb_layout_resolves_sidecar_alongside_main_binary() {
 }
 
 #[test]
-fn linux_appimage_layout_resolves_sidecar_in_runtime_mount() {
-    // AppImage mounts to /tmp/.mount_<random> at run time; the
-    // structure inside is `<mount>/usr/bin/sightline` plus sidecars.
+fn linux_appimage_layout_resolves_both_sidecars_in_runtime_mount() {
+    // AppImage mounts to /tmp/.mount_<binary-name><random-8-hex>/
+    // at run time (e.g. /tmp/.mount_Sightlin1a2b3c4d/) with the
+    // squashfs root containing usr/bin/sightline plus the sidecars.
+    // The mount-point name is irrelevant to the resolver — only the
+    // directory passed in matters — so the test name reflects the
+    // structure being verified rather than the mount nomenclature.
+    // We seed both yt-dlp + ffmpeg here to confirm the resolver
+    // doesn't accidentally short-circuit on the first hit.
     let tmp = tempfile::tempdir().unwrap();
-    let mount = tmp.path().join(".mount_sightABC").join("usr").join("bin");
+    let mount = tmp
+        .path()
+        .join(".mount_Sightlin1a2b3c4d")
+        .join("usr")
+        .join("bin");
     let triple = "aarch64-unknown-linux-gnu";
     touch(&mount.join("sightline"));
     touch(&mount.join(format!("yt-dlp-{triple}")));
+    touch(&mount.join(format!("ffmpeg-{triple}")));
 
-    let resolved = find_sidecar_in_dir(&mount, "yt-dlp", triple, "");
-    assert_eq!(resolved, Some(mount.join(format!("yt-dlp-{triple}"))));
+    let yt_dlp = find_sidecar_in_dir(&mount, "yt-dlp", triple, "");
+    assert_eq!(yt_dlp, Some(mount.join(format!("yt-dlp-{triple}"))));
+    let ffmpeg = find_sidecar_in_dir(&mount, "ffmpeg", triple, "");
+    assert_eq!(ffmpeg, Some(mount.join(format!("ffmpeg-{triple}"))));
 }
 
 #[test]
@@ -225,4 +238,25 @@ fn canonical_name_triple_takes_precedence_over_bare_name() {
     touch(&dir.join(format!("ffmpeg-{triple}")));
     let res = find_sidecar_in_dir(dir, "ffmpeg", triple, "");
     assert_eq!(res, Some(dir.join(format!("ffmpeg-{triple}"))));
+}
+
+#[test]
+fn path_with_spaces_and_unicode_resolves() {
+    // macOS .app bundles routinely live under user-chosen directory
+    // names; "/Applications/Sightline.app" is the default but a user
+    // can install under "/Users/<name>/Apps/Sightline 2.app" or any
+    // path with spaces or non-ASCII characters.  std::path is
+    // Unicode-safe across all 3 OS but a future Path-manipulation
+    // mistake could break it — this test guards that invariant.
+    let tmp = tempfile::tempdir().unwrap();
+    let app_dir = tmp
+        .path()
+        .join("Sightline 2 — übersicht")
+        .join("Contents")
+        .join("MacOS");
+    let triple = "aarch64-apple-darwin";
+    touch(&app_dir.join("sightline"));
+    touch(&app_dir.join(format!("ffmpeg-{triple}")));
+    let res = find_sidecar_in_dir(&app_dir, "ffmpeg", triple, "");
+    assert_eq!(res, Some(app_dir.join(format!("ffmpeg-{triple}"))));
 }

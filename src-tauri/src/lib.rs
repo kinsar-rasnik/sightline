@@ -1132,12 +1132,18 @@ fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::P
     };
 
     // 1. Same-dir-as-own-binary — the canonical Tauri 2 sidecar
-    //    location across every bundle format we ship.
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-        && let Some(path) = find_sidecar_in_dir(dir, name, triple, ext)
-    {
-        return Some(path);
+    //    location across every bundle format we ship.  Canonicalise
+    //    first so an AppImage's FUSE-mount squashfs path or a macOS
+    //    symlinked binary resolves to the directory the kernel
+    //    actually runs the executable from before we strip the
+    //    filename.
+    if let Ok(exe_raw) = std::env::current_exe() {
+        let exe = exe_raw.canonicalize().unwrap_or(exe_raw);
+        if let Some(dir) = exe.parent()
+            && let Some(path) = find_sidecar_in_dir(dir, name, triple, ext)
+        {
+            return Some(path);
+        }
     }
 
     // 2. BaseDirectory::Resource fallback — covers any future bundle
@@ -1157,11 +1163,13 @@ fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::P
 
     // 3. Dev fallback — `pnpm tauri dev` runs the binary out of
     //    `src-tauri/target/...` and the sidecars live in
-    //    `src-tauri/binaries/` next to the lockfile.
-    let repo_candidate =
-        std::path::PathBuf::from("src-tauri/binaries").join(format!("{name}-{triple}{ext}"));
-    if repo_candidate.exists() {
-        return Some(repo_candidate);
+    //    `src-tauri/binaries/` next to the lockfile.  Use the same
+    //    two-form probe as step 1 so a developer who manually
+    //    placed a bare-named `yt-dlp` (no triple suffix, Tauri 1
+    //    convention) is still resolved.
+    let repo_dir = std::path::PathBuf::from("src-tauri/binaries");
+    if let Some(path) = find_sidecar_in_dir(&repo_dir, name, triple, ext) {
+        return Some(path);
     }
     None
 }

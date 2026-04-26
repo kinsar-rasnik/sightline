@@ -56,6 +56,7 @@ Sightline — a cross-platform desktop app that aggregates GTA-RP VODs across st
 - [ADR-0025](docs/adr/0025-release-pipeline.md) — Release pipeline (GitHub Releases, unsigned binaries)
 - [ADR-0026](docs/adr/0026-update-checker.md) — Update checker (opt-in, GitHub API, notification-only)
 - [ADR-0027](docs/adr/0027-asset-protocol-scope-narrowing.md) — Asset protocol scope narrowing (closes ADR-0019 follow-up)
+- [ADR-0034](docs/adr/0034-tauri2-sidecar-layout.md) — Tauri 2 sidecar bundle layout (corrects ADR-0013's Tauri 1 runtime-resolution assumption)
 
 ## Key paths
 - `docs/reference/synthetic-workforce-blueprint.md` — operating model for this repo. Read first.

@@ -8,25 +8,45 @@ If you'd rather build from source, the [Build from source](#build-from-source) s
 
 ## macOS
 
+1. Download `Sightline_<version>_aarch64.dmg` (Apple Silicon: M1, M2, M3, M4).
+2. Open the `.dmg` and drag **Sightline.app** to `/Applications`.
+3. **First launch — required step.** Open Terminal and run:
+   ```bash
+   xattr -d com.apple.quarantine /Applications/Sightline.app
+   ```
+   Then double-click Sightline.app from `/Applications` (or Launchpad).
+
+### What's actually happening
+
+When macOS downloads a file from the internet (Safari, Chrome, `curl`, anything), it tags the file with the `com.apple.quarantine` extended attribute. Gatekeeper inspects that attribute on launch and runs additional signature checks.
+
+Because Sightline is **unsigned** (we don't pay Apple's $99/year Developer ID), Gatekeeper has nothing to verify against. Recent macOS releases (Sonoma 14.x and Sequoia 15.x) interpret a missing valid signature on a quarantined app as **"the app is damaged and can't be opened. You should move it to the Trash."**
+
+The app is **not actually damaged** — every byte is intact. The `xattr -d com.apple.quarantine ...` command above removes the quarantine attribute, so Gatekeeper stops trying to verify a signature that doesn't exist, and the app launches normally.
+
+> **Why not right-click → Open?**
+> Pre-Sequoia this worked. macOS 15.3+ hides the "Open" button on unsigned apps in the Gatekeeper dialog — `xattr` is the only reliable path. Some users on 14.x can still **System Settings → Privacy & Security → Open Anyway** after a blocked launch; the `xattr` command works on every supported version.
+
+### Troubleshooting
+
+If the app still won't launch after `xattr`:
+
+```bash
+# Re-run xattr in case the OS re-applied the flag (rare):
+xattr -dr com.apple.quarantine /Applications/Sightline.app
+
+# Confirm no quarantine attribute remains (output should be empty):
+xattr -p com.apple.quarantine /Applications/Sightline.app
+
+# Verify the bundled sidecars are present + executable:
+ls -lh /Applications/Sightline.app/Contents/MacOS/{ffmpeg-aarch64-apple-darwin,yt-dlp-aarch64-apple-darwin}
+```
+
 > **Intel Mac note.** GitHub retired the macos-13 hosted runner in
 > late 2025, so v1.0 ships an Apple-Silicon-only `.dmg`.  Intel Mac
 > users have a first-class build-from-source path — see
 > [Build from source](#build-from-source) below; the same `pnpm
 > tauri build` produces a working `.dmg` on an Intel host.
-
-1. Download `Sightline_<version>_aarch64.dmg` (Apple Silicon: M1, M2, M3, M4).
-2. Open the `.dmg` and drag **Sightline.app** to `/Applications`.
-3. **First launch** — choose one of:
-   - **Right-click → Open** on the app icon, then click **Open** in the warning dialog. macOS remembers the choice; subsequent launches don't prompt.
-   - Or run this from Terminal once after installing:
-     ```bash
-     xattr -d com.apple.quarantine /Applications/Sightline.app
-     ```
-     This removes the quarantine flag macOS adds to anything downloaded from the internet.
-
-If you see "Sightline is damaged and can't be opened" — that's macOS Gatekeeper on a recent update. The `xattr` command above resolves it.
-
-> **macOS 15.3 (Sequoia) and later:** the right-click → Open path is sometimes hidden. Use **System Settings → Privacy & Security → Open Anyway** after a blocked launch.
 
 ---
 
