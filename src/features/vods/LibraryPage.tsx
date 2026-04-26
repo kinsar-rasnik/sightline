@@ -528,14 +528,28 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
           const label = formatDurationSeconds(Math.floor(clamped));
           const other = downloadMap.get(cs.interval.vodId);
           const downloaded = other?.state === "completed";
+          // ADR-0033 follow-up (v2.0.2 UX gap): a co-stream that
+          // hasn't started downloading shows BOTH "Download only"
+          // (background fetch, stay on the current player) and
+          // "Download & watch" (pulls the player to the new VOD).
+          // queued/downloading rows show neither — the queue is
+          // already handling them.
+          const downloadInFlight =
+            other?.state === "queued" || other?.state === "downloading";
           const streamerName =
             streamerNameById.get(cs.interval.streamerId) ?? cs.interval.streamerId;
           const isMultiSelected = multiSelected === cs.interval.vodId;
+          const handleDownloadOnly = () => {
+            void commands.enqueueDownload({
+              vodId: cs.interval.vodId,
+              priority: 500, // higher than the default 100
+            });
+          };
           const handleClick = () => {
             if (!downloaded) {
               void commands.enqueueDownload({
                 vodId: cs.interval.vodId,
-                priority: 500, // higher than the default 100
+                priority: 500,
               });
             }
             openPlayer({
@@ -570,9 +584,24 @@ function CoStreamsSection({ vod }: { vod: VodWithChapters }) {
                   {formatDurationSeconds(Math.floor(cs.overlapSeconds))}
                 </p>
               </div>
-              <Button variant="secondary" onClick={handleClick}>
-                {downloaded ? `Jump to ${label}` : `Download & watch @ ${label}`}
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                {!downloaded && !downloadInFlight && (
+                  <Button
+                    variant="secondary"
+                    onClick={handleDownloadOnly}
+                    aria-label={`Download ${streamerName}'s co-stream without leaving this player`}
+                  >
+                    ↓ Download only
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={handleClick}>
+                  {downloaded
+                    ? `Jump to ${label}`
+                    : downloadInFlight
+                      ? `Watch @ ${label}`
+                      : `Download & watch @ ${label}`}
+                </Button>
+              </div>
             </li>
           );
         })}
