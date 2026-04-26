@@ -103,6 +103,8 @@ pub struct AppState {
     // --- Phase 8: pull-on-demand distribution ---
     pub distribution: Arc<DistributionService>,
     pub distribution_sink: DistributionEventSink,
+    // --- v2.0.1: storage forecast (ADR-0032) ---
+    pub forecast: Arc<crate::services::forecast::ForecastService>,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -301,6 +303,16 @@ pub fn run() {
                     clock.clone(),
                     SettingsService::new(db.clone(), clock.clone()),
                 ));
+
+                // v2.0.1: storage forecast (ADR-0032). Pure-function
+                // math + DB-backed inputs; no event surface needed.
+                let forecast_svc = Arc::new(
+                    crate::services::forecast::ForecastService::new(
+                        db.clone(),
+                        SettingsService::new(db.clone(), clock.clone()),
+                        Arc::new(SystemFreeSpace),
+                    ),
+                );
                 let distribution_handle = handle.clone();
                 let distribution_downloads = downloads_svc.clone();
                 let distribution_sink: DistributionEventSink =
@@ -871,6 +883,7 @@ pub fn run() {
                     encoder_detection: encoder_detection_svc.clone(),
                     distribution: distribution_svc,
                     distribution_sink: distribution_sink.clone(),
+                    forecast: forecast_svc.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });

@@ -197,6 +197,18 @@ export const commands = {
 	 *  fired so the renderer can show a non-blocking confirmation.
 	 */
 	prefetchCheck: (input: PrefetchCheckInput) => typedError<PrefetchCheckResult, AppError>(__TAURI_INVOKE("prefetch_check", { input })),
+	/**
+	 *  Forecast a single streamer's storage footprint.  Used by the
+	 *  Streamers → Add dialog to set expectations before the user
+	 *  commits, and by the per-streamer breakdown in Settings →
+	 *  Storage Outlook.
+	 */
+	estimateStreamerFootprint: (input: EstimateStreamerFootprintInput) => typedError<ForecastResult, AppError>(__TAURI_INVOKE("estimate_streamer_footprint", { input })),
+	/**
+	 *  Combined forecast across every active streamer + per-streamer
+	 *  breakdown.  Drives the Settings → Storage Outlook section.
+	 */
+	estimateGlobalFootprint: () => typedError<GlobalForecast, AppError>(__TAURI_INVOKE("estimate_global_footprint")),
 };
 
 /* Types */
@@ -798,8 +810,49 @@ export type EnqueueDownloadInput = {
 	priority?: number | null,
 };
 
+export type EstimateStreamerFootprintInput = {
+	twitchUserId: string,
+};
+
 export type ExecuteCleanupInput = {
 	dryRun: boolean,
+};
+
+/**
+ *  Per-streamer (or global) forecast.  Numbers are best-effort
+ *  estimates; ADR-0032 §Known inaccuracies documents the fuzz.
+ */
+export type ForecastResult = {
+	/**
+	 *  GB the streamer is expected to download in a typical week
+	 *  at the user's current quality + window settings.
+	 */
+	weeklyDownloadGb: number,
+	/**
+	 *  Peak GB the streamer's content can occupy on disk
+	 *  simultaneously (i.e., `sliding_window_size × avg_vod_gb`).
+	 */
+	peakDiskGb: number,
+	/**
+	 *  Coloured indicator combining `peak_disk_gb` with the user's
+	 *  free disk on the library partition.
+	 */
+	watermarkRisk: WatermarkRisk,
+	// Rounded average VOD length in hours used for the math.
+	avgVodHours: number,
+	// Streams per day used for the math.
+	streamsPerDay: number,
+	/**
+	 *  Free disk on the library partition at probe time, in GB.
+	 *  Useful for the UI's "X GB free" line so the renderer
+	 *  doesn't have to round-trip.
+	 */
+	freeDiskGb: number,
+	/**
+	 *  Whether the avg / frequency numbers came from real history
+	 *  (`true`) or the global defaults (`false`).
+	 */
+	dataDriven: boolean,
 };
 
 export type GetCoStreamsInput = {
@@ -816,6 +869,17 @@ export type GetVodInput = {
 
 export type GetWatchStatsInput = {
 	streamerId?: string | null,
+};
+
+/**
+ *  Global forecast: combined totals + per-streamer breakdown.  The
+ *  `combined` field is the SUM of every active streamer's forecast,
+ *  not a re-derivation from aggregated history.  This matches what
+ *  the user actually sees on disk at peak.
+ */
+export type GlobalForecast = {
+	combined: ForecastResult,
+	perStreamer: StreamerForecast[],
 };
 
 export type HealthReport = {
@@ -1241,6 +1305,18 @@ export type StreamerFavoritedEvent = {
 	twitchUserId: string,
 };
 
+/**
+ *  Per-streamer entry inside the global forecast.  Surfaces the
+ *  streamer's identity alongside the forecast row so the UI can
+ *  render a breakdown table without an extra round-trip.
+ */
+export type StreamerForecast = {
+	twitchUserId: string,
+	displayName: string,
+	login: string,
+	forecast: ForecastResult,
+};
+
 export type StreamerRemovedEvent = {
 	twitchUserId: string,
 };
@@ -1641,6 +1717,22 @@ export type WatchStats = {
 export type WatchVodIdInput = {
 	vodId: string,
 };
+
+/**
+ *  Watermark risk indicator (ADR-0032 §Outputs).  Maps the peak
+ *  disk forecast against the user's free disk to one of three
+ *  buckets that the UI can render as green/amber/red.
+ */
+export type WatermarkRisk = 
+// Peak forecast occupies < 50 % of free disk.
+"green" | 
+// Peak forecast occupies 50–80 % of free disk.
+"amber" | 
+/**
+ *  Peak forecast occupies > 80 % of free disk — would
+ *  trip the auto-cleanup high watermark.
+ */
+"red";
 
 /**
  *  What happens when the user clicks the window close button.

@@ -40,6 +40,9 @@ import {
   type DistributionWindowEnforcedEvent,
   type EncoderCapability,
   type EncoderKind,
+  type EstimateStreamerFootprintInput,
+  type ForecastResult,
+  type GlobalForecast,
   type ExecuteCleanupInput,
   type OpenReleaseUrlInput,
   type SkipUpdateVersionInput,
@@ -183,6 +186,9 @@ export type {
   DistributionWindowEnforcedEvent,
   EncoderCapability,
   EncoderKind,
+  EstimateStreamerFootprintInput,
+  ForecastResult,
+  GlobalForecast,
   ExecuteCleanupInput,
   OpenReleaseUrlInput,
   SkipUpdateVersionInput,
@@ -585,6 +591,13 @@ export const commands = {
     input: PrefetchCheckInput,
   ): Promise<PrefetchCheckResult> =>
     unwrap(await generatedCommands.prefetchCheck(input)),
+  // --- v2.0.1: storage forecast (ADR-0032) ---
+  estimateStreamerFootprint: async (
+    input: EstimateStreamerFootprintInput,
+  ): Promise<ForecastResult> =>
+    unwrap(await generatedCommands.estimateStreamerFootprint(input)),
+  estimateGlobalFootprint: async (): Promise<GlobalForecast> =>
+    unwrap(await generatedCommands.estimateGlobalFootprint()),
 };
 
 /**

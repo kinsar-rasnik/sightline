@@ -22,6 +22,7 @@ import {
 } from "@/features/settings/use-autostart";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
 import { VideoQualitySection } from "@/features/settings/VideoQualitySection";
+import { StorageOutlook } from "@/features/storage/StorageOutlook";
 import { StorageSection } from "@/features/storage/StorageSection";
 import { UpdateSettingsSection } from "@/features/updater/UpdateSettingsSection";
 import { commands } from "@/ipc";
@@ -79,6 +80,7 @@ export function SettingsPage() {
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}
       />
+      <StorageOutlook />
       <UpdateSettingsSection
         settings={data}
         onUpdate={(patch) => update.mutate(patch)}
