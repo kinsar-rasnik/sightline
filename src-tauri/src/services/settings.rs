@@ -485,10 +485,15 @@ impl SettingsService {
             }
             None => current.staging_path,
         };
+        // v2.0.3: hard-clamp to 1..=3.  Values above 3 historically
+        // produced fragment-rename races on Twitch under load
+        // (the actual cause of the v2.0.2 download-engine bug)
+        // because each yt-dlp worker contends for the same staging
+        // dir.  See ADR-0035.
         let max_concurrent = patch
             .max_concurrent_downloads
             .unwrap_or(current.max_concurrent_downloads)
-            .clamp(1, 5);
+            .clamp(1, 3);
         // `-1` sentinel means "clear the cap" (unlimited).
         let bandwidth_limit_bps = match patch.bandwidth_limit_bps {
             Some(-1) => None,
@@ -1173,7 +1178,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_concurrent_downloads_clamped_to_1_5() {
+    async fn max_concurrent_downloads_clamped_to_1_3() {
+        // v2.0.3: cap tightened from 1..=5 to 1..=3 (ADR-0035).
         let svc = setup().await;
         let high = svc
             .update(SettingsPatch {
@@ -1182,7 +1188,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(high.max_concurrent_downloads, 5);
+        assert_eq!(high.max_concurrent_downloads, 3);
         let low = svc
             .update(SettingsPatch {
                 max_concurrent_downloads: Some(0),
@@ -1191,6 +1197,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(low.max_concurrent_downloads, 1);
+    }
+
+    #[tokio::test]
+    async fn max_concurrent_downloads_inrange_round_trips() {
+        // 1, 2, 3 must all be writable verbatim — the hard cap of 3
+        // is a ceiling, not a forced default.  This pins the AC2
+        // contract that an existing user with value 2 (CEO context)
+        // doesn't get silently flattened.
+        let svc = setup().await;
+        for v in 1..=3 {
+            let out = svc
+                .update(SettingsPatch {
+                    max_concurrent_downloads: Some(v),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(out.max_concurrent_downloads, v);
+        }
     }
 
     #[tokio::test]

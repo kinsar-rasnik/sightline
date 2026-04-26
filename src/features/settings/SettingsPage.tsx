@@ -658,15 +658,20 @@ function DownloadsAndStorageSection({
       </h3>
 
       <div className="grid grid-cols-2 gap-6 max-w-2xl">
-        <IntervalField
-          label="Max concurrent downloads"
-          value={settings.maxConcurrentDownloads}
-          setValue={(n) => onUpdate({ maxConcurrentDownloads: n })}
-          min={1}
-          max={5}
-          step={1}
-          unit=""
-        />
+        <div className="space-y-1">
+          <IntervalField
+            label="Max concurrent downloads (1–3)"
+            value={settings.maxConcurrentDownloads}
+            setValue={(n) => onUpdate({ maxConcurrentDownloads: n })}
+            min={1}
+            max={3}
+            step={1}
+            unit=""
+          />
+          <p className="text-[10px] text-[--color-muted]">
+            Higher values risk fragment-rename races on Twitch under load. Recommended: 1.
+          </p>
+        </div>
         <BandwidthLimit
           currentBps={settings.bandwidthLimitBps}
           onUpdate={(bps) => onUpdate({ bandwidthLimitBps: bps })}
