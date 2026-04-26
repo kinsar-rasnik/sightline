@@ -203,16 +203,18 @@ struct InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        // Lock contention here would mean another drain_once tick is
-        // checking the set; that's fine, it'll see our removal.
-        // `lock().unwrap()` is acceptable because the only way this
-        // mutex gets poisoned is if a holder panicked AND we're
-        // entering it from a different thread — at which point the
-        // app is already in a degraded state and dropping a lock
-        // won't make it worse.
-        if let Ok(mut set) = self.set.lock() {
-            set.remove(&self.vod_id);
-        }
+        // Recover from a poisoned mutex (a previous holder panicked)
+        // by taking the inner data anyway — the alternative of
+        // silently skipping the removal would leak this `vod_id`
+        // and permanently block future downloads of that VOD.  The
+        // lock-acquisition pattern matches `try_lock_inflight` and
+        // `in_flight_snapshot` so all three call-sites converge on
+        // the same poison-recovery posture.
+        let mut set = match self.set.lock() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(&self.vod_id);
     }
 }
 
@@ -628,6 +630,17 @@ impl DownloadQueueService {
     /// failure, panic, or shutdown).
     async fn drain_once(self: &Arc<Self>, events: &DownloadEventSink) -> Result<(), AppError> {
         let cap = current_concurrency(self).await as usize;
+
+        // Refresh the global throttle's worker count from the live
+        // in-flight set first — guards from downloads that completed
+        // since the previous drain pass have already dropped, and
+        // there's no other code path that resyncs the count between
+        // ticks.  Without this refresh GlobalRate keeps dividing
+        // the bandwidth budget by the previous-tick worker count,
+        // under-allocating to the survivors.
+        self.rate
+            .set_active_workers(self.in_flight_snapshot().len());
+
         loop {
             // Snapshot before each pick so the exclusion list reflects
             // anything we just spawned in this same drain pass.
@@ -1910,9 +1923,13 @@ mod tests {
         let events: DownloadEventSink = Arc::new(|_| {});
         svc.drain_once(&events).await.unwrap();
 
-        // Right after drain_once returns the spawned task is still
-        // inside its tick_delay_ms wait, so in_flight reflects the
-        // cap.
+        // This assertion is synchronously safe: drain_once is awaited
+        // above, and its inner `tokio::spawn` cannot drop the
+        // InFlightGuard before the spawned task even runs (the guard
+        // is moved into the closure).  The guard only drops when the
+        // task ends — and the task is currently inside the
+        // `tick_delay_ms` wait of YtDlpFake.  Do NOT add a `sleep`
+        // before this assertion — it would only weaken the guarantee.
         assert_eq!(
             svc.in_flight_snapshot().len(),
             1,
