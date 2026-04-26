@@ -1095,14 +1095,33 @@ fn install_tray(handle: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("tray install: {e}"))
 }
 
-/// Resolve a bundled sidecar binary by name. Returns `None` if Tauri's
-/// resolver can't find it — callers fall back to the binary on PATH
-/// (dev workflow) or surface a Sidecar error to the user.
+/// Resolve a bundled sidecar binary by name. Returns `None` if no
+/// candidate exists — callers fall back to the binary on PATH (dev
+/// workflow) or surface a Sidecar error to the user.
 ///
-/// Tauri's `bundle.externalBin` convention places binaries at
-/// `binaries/<name>-<target-triple>[.exe]`. `TARGET_TRIPLE` is baked in
-/// at compile time via `build.rs`, matching the filenames produced by
-/// `scripts/bundle-sidecars.sh` (ADR-0013).
+/// **v2.0.2 fix.** Tauri 2 places `externalBin` sidecars next to the
+/// main app binary in every bundle format, NOT under
+/// `BaseDirectory::Resource` (which was the Tauri 1 convention
+/// ADR-0013 originally documented).  Concrete layouts:
+///
+/// * **macOS `.app`** — `Contents/MacOS/<name>-<triple>` (alongside
+///   the main `Contents/MacOS/sightline` binary).
+/// * **Linux `.deb` / `.AppImage`** — same directory as the launched
+///   binary (`/usr/bin/` for the deb, `<AppDir>/usr/bin/` for the
+///   AppImage's runtime mount).
+/// * **Windows `.msi` / `-setup.exe`** — install dir, alongside
+///   `sightline.exe`.
+///
+/// The fix is to probe `current_exe().parent()` first; if that fails
+/// (cold-start before the runtime knows the executable path) we fall
+/// back to the legacy `BaseDirectory::Resource` lookup, then to the
+/// repo-relative `src-tauri/binaries/` path that `pnpm tauri dev` uses
+/// before a `tauri build` has produced a bundle.
+///
+/// `TARGET_TRIPLE` is baked in at compile time via `build.rs`,
+/// matching the filenames produced by `scripts/bundle-sidecars.sh`
+/// (ADR-0034 documents the post-Tauri-2 layout; ADR-0013 captures the
+/// historical context).
 fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::PathBuf> {
     use tauri::path::BaseDirectory;
     let triple = env!("TARGET_TRIPLE");
@@ -1111,27 +1130,66 @@ fn resolve_sidecar(handle: &tauri::AppHandle, name: &str) -> Option<std::path::P
     } else {
         ""
     };
-    // Try the canonical bundled path first, then the repo's `src-tauri/binaries`
-    // (covers `pnpm tauri dev` before a `tauri build` has copied resources).
-    let candidates = [
+
+    // 1. Same-dir-as-own-binary — the canonical Tauri 2 sidecar
+    //    location across every bundle format we ship.  Canonicalise
+    //    first so an AppImage's FUSE-mount squashfs path or a macOS
+    //    symlinked binary resolves to the directory the kernel
+    //    actually runs the executable from before we strip the
+    //    filename.
+    if let Ok(exe_raw) = std::env::current_exe() {
+        let exe = exe_raw.canonicalize().unwrap_or(exe_raw);
+        if let Some(dir) = exe.parent()
+            && let Some(path) = find_sidecar_in_dir(dir, name, triple, ext)
+        {
+            return Some(path);
+        }
+    }
+
+    // 2. BaseDirectory::Resource fallback — covers any future bundle
+    //    format that places sidecars under Resources/, plus the
+    //    historical Tauri 1 layout for users on older builds.
+    let resource_paths = [
         format!("binaries/{name}-{triple}{ext}"),
         format!("binaries/{name}{ext}"),
-        format!("binaries/{name}"),
     ];
-    for candidate in &candidates {
+    for candidate in &resource_paths {
         if let Ok(path) = handle.path().resolve(candidate, BaseDirectory::Resource)
             && path.exists()
         {
             return Some(path);
         }
     }
-    // Dev fallback: look relative to the repo.
-    let repo_candidate =
-        std::path::PathBuf::from("src-tauri/binaries").join(format!("{name}-{triple}{ext}"));
-    if repo_candidate.exists() {
-        return Some(repo_candidate);
+
+    // 3. Dev fallback — `pnpm tauri dev` runs the binary out of
+    //    `src-tauri/target/...` and the sidecars live in
+    //    `src-tauri/binaries/` next to the lockfile.  Use the same
+    //    two-form probe as step 1 so a developer who manually
+    //    placed a bare-named `yt-dlp` (no triple suffix, Tauri 1
+    //    convention) is still resolved.
+    let repo_dir = std::path::PathBuf::from("src-tauri/binaries");
+    if let Some(path) = find_sidecar_in_dir(&repo_dir, name, triple, ext) {
+        return Some(path);
     }
     None
+}
+
+/// Pure path-resolution helper: look in `dir` for the canonical
+/// sidecar filename `<name>-<triple>[.exe]`, falling back to a bare
+/// `<name>[.exe]` (Tauri's auto-stripped form).  Exposed (`pub`) so
+/// integration tests in `tests/sidecar_smoke.rs` can assert the
+/// OS-bundle layout invariants without a Tauri runtime.
+pub fn find_sidecar_in_dir(
+    dir: &std::path::Path,
+    name: &str,
+    triple: &str,
+    ext: &str,
+) -> Option<std::path::PathBuf> {
+    let candidates = [
+        dir.join(format!("{name}-{triple}{ext}")),
+        dir.join(format!("{name}{ext}")),
+    ];
+    candidates.into_iter().find(|p| p.exists())
 }
 
 /// Resolve the SQLite file path. In Phase 1 we keep it simple and place

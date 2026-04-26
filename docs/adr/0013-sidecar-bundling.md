@@ -128,6 +128,15 @@ OS, not just that the bytes landed.
 
 ### Runtime integration
 
+> **⚠️ Partially superseded by [ADR-0034](0034-tauri2-sidecar-layout.md)
+> (v2.0.2, 2026-04-26).**  The `BaseDirectory::Resource` lookup
+> documented below is the Tauri 1 convention; Tauri 2 places
+> sidecars next to the main binary in every bundle format.  The
+> `lib.rs::resolve_sidecar` description below is OUT OF DATE — see
+> ADR-0034 for the current probe order (`current_exe().parent()` →
+> Resource fallback → repo-relative).  The lockfile + bundler-script
+> + verifier sections of this ADR are unchanged.
+
 - `src-tauri/build.rs` re-exports the Rust `TARGET` env var as
   `TARGET_TRIPLE` so runtime code can build the same path the bundler
   produced.
