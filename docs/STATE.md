@@ -1,7 +1,7 @@
 # STATE — Sightline
 
-**Letzte Aktualisierung:** 2026-04-25
-**System-Ampel:** 🟢 Grün — v1.0.0 released
+**Letzte Aktualisierung:** 2026-04-26
+**System-Ampel:** 🟢 Grün — v2.0.0 released (Phase 8 storage-aware)
 
 ---
 
@@ -14,8 +14,8 @@
 **Status:** v1.0.0 live unter github.com/kinsar-rasnik/sightline/releases/tag/v1.0.0 — 5 Assets (macOS aarch64, Linux AppImage + Deb, Windows MSI + NSIS).
 
 **Roadmap:**
-- Phase 1–7 ✅
-- Phase 8 — Storage-Aware Distribution (Quality-Pipeline + Pull-Modell + Storage-Forecast) ⏳ next, single-run-mission
+- Phase 1–8 ✅
+- Post-v2.0 follow-ups (v2.0.1, v2.1) tracked as Open Follow-ups below.
 
 ---
 
