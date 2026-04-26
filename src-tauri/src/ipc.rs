@@ -116,6 +116,10 @@ pub fn ipc_builder() -> Builder<Wry> {
             commands::updater::get_update_status,
             commands::updater::skip_update_version,
             commands::updater::open_release_url,
+            // Phase 8: quality pipeline
+            commands::quality::get_encoder_capability,
+            commands::quality::redetect_encoders,
+            commands::quality::set_video_quality_profile,
         ])
         .events(collect_events![])
         // Register the event payload shapes so the frontend gets their TS

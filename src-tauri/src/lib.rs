@@ -28,6 +28,7 @@ use crate::services::credentials::CredentialsService;
 use crate::services::downloads::{
     DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
 };
+use crate::services::encoder_detection::EncoderDetectionService;
 use crate::services::events::{
     CleanupDiskPressureEvent, CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
     DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
@@ -91,6 +92,8 @@ pub struct AppState {
     // --- Phase 7: update checker ---
     pub updater: Arc<UpdaterService>,
     pub updater_sink: UpdaterEventSink,
+    // --- Phase 8: quality pipeline ---
+    pub encoder_detection: Arc<EncoderDetectionService>,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -341,6 +344,16 @@ pub fn run() {
                         );
                     }
                 });
+
+                // Phase 8: encoder detection service.  Cheap to
+                // construct; the actual probe runs async in the
+                // background task spawned a few lines below so cold
+                // start isn't blocked on a 2-second ffmpeg probe.
+                let encoder_detection_svc = Arc::new(EncoderDetectionService::new(
+                    ffmpeg.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
 
                 // Phase 7: auto-cleanup service + event sink.
                 let cleanup_svc = Arc::new(CleanupService::new(
@@ -741,9 +754,31 @@ pub fn run() {
                     cleanup_sink: cleanup_sink.clone(),
                     updater: updater_svc.clone(),
                     updater_sink: updater_sink.clone(),
+                    encoder_detection: encoder_detection_svc.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });
+
+                // Phase 8: run encoder detection in the background
+                // so cold-start UX isn't blocked.  If an existing
+                // capability is already persisted, the user sees it
+                // immediately while the probe refreshes.
+                {
+                    let svc = encoder_detection_svc.clone();
+                    tokio::spawn(async move {
+                        match svc.detect_and_persist().await {
+                            Ok(cap) => {
+                                info!(
+                                    primary = %cap.primary.as_str(),
+                                    "encoder capability detected"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(error = ?e, "encoder detection failed at startup");
+                            }
+                        }
+                    });
+                }
 
                 // Phase 7: spawn the cleanup tray-daemon tick.  It
                 // wakes every 5 minutes, checks disk pressure, and

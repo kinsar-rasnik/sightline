@@ -10,6 +10,7 @@ pub mod downloads;
 pub mod health;
 pub mod media;
 pub mod poll;
+pub mod quality;
 pub mod settings;
 pub mod storage;
 pub mod streamers;

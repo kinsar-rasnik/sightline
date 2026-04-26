@@ -144,6 +144,43 @@ export const commands = {
 	 *  `https://api.github.com/repos/.../releases/latest`.
 	 */
 	openReleaseUrl: (input: OpenReleaseUrlInput) => typedError<null, AppError>(__TAURI_INVOKE("open_release_url", { input })),
+	/**
+	 *  Persisted encoder-capability snapshot (or `None` if detection has
+	 *  never run).  Returns the raw `EncoderCapability` blob — the
+	 *  renderer renders the per-encoder-kind labels.
+	 */
+	getEncoderCapability: () => typedError<{
+	/**
+	 *  Encoder the service will use first.  When this is
+	 *  [`EncoderKind::Software`] but `software_encode_opt_in = 0`
+	 *  in settings, the re-encode pass refuses to run and surfaces
+	 *  an error instead.
+	 */
+	primary: EncoderKind,
+	/**
+	 *  Every encoder that passed both the `-encoders` listing AND
+	 *  the runtime test encode.  Always contains [`EncoderKind::Software`]
+	 *  in the fallback position because libx265 is bundled with
+	 *  every ffmpeg sidecar build (ADR-0013).
+	 */
+	available: EncoderKind[],
+	// Whether the primary encoder supports H.265.
+	h265: boolean,
+	// Whether the primary encoder supports H.264.
+	h264: boolean,
+	/**
+	 *  Wall-clock seconds at which the detection ran.  Used by the
+	 *  Settings UI to render "Auto-detected (NN minutes ago)".
+	 */
+	testedAt: number,
+} | null, AppError>(__TAURI_INVOKE("get_encoder_capability")),
+	/**
+	 *  Force a fresh detection probe (`ffmpeg -encoders` + 2-second test
+	 *  encode).  Persists the new capability and returns it.  Triggered
+	 *  by the Settings UI's "Re-detect" button.
+	 */
+	redetectEncoders: () => typedError<EncoderCapability, AppError>(__TAURI_INVOKE("redetect_encoders")),
+	setVideoQualityProfile: (input: SetVideoQualityProfileInput) => typedError<VideoQualityProfile, AppError>(__TAURI_INVOKE("set_video_quality_profile", { input })),
 };
 
 /* Types */
@@ -314,6 +351,42 @@ export type AppSettings = {
 	 *  Empty / cleared when the user clicks "Don't skip".
 	 */
 	updateCheckSkipVersion: string | null,
+	/**
+	 *  Chosen video-quality profile.  Default `'720p30'` for new
+	 *  installs.  Persisted in `app_settings.video_quality_profile`
+	 *  (migration 0015).  Distinct from the legacy `quality_preset`
+	 *  field which is preserved for backwards-compat with v1.0
+	 *  installs that already have a value there.
+	 */
+	videoQualityProfile: VideoQualityProfile,
+	/**
+	 *  User opt-in for the libx265 / libx264 software fallback path.
+	 *  Default false; the encoder-detection pass surfaces a warning
+	 *  when no hardware encoder is available and this is off.
+	 */
+	softwareEncodeOptIn: boolean,
+	/**
+	 *  Detection result from `services::encoder_detection`.  `None`
+	 *  when detection has never run (cold start or after the user
+	 *  clicked "Re-detect" and the call hasn't yet completed).
+	 */
+	encoderCapability: EncoderCapability | null,
+	/**
+	 *  Concurrency cap on background re-encodes.  Default 1, hard
+	 *  clamped to 1..=2.
+	 */
+	maxConcurrentReencodes: number,
+	/**
+	 *  CPU-load fraction above which a sustained burst pauses the
+	 *  in-flight ffmpeg encoder (ADR-0029).
+	 */
+	cpuThrottleHighThreshold: number,
+	/**
+	 *  CPU-load fraction below which a sustained idle period resumes
+	 *  a paused encoder.  Strictly less than `cpu_throttle_high_threshold`
+	 *  (service-layer rejects an inverted pair).
+	 */
+	cpuThrottleLowThreshold: number,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -606,6 +679,44 @@ export type DriftMeasurement = {
 	driftMs: number,
 };
 
+/**
+ *  Detection result persisted in `app_settings.encoder_capability`
+ *  as JSON.  Documented in ADR-0028 §Detection.
+ */
+export type EncoderCapability = {
+	/**
+	 *  Encoder the service will use first.  When this is
+	 *  [`EncoderKind::Software`] but `software_encode_opt_in = 0`
+	 *  in settings, the re-encode pass refuses to run and surfaces
+	 *  an error instead.
+	 */
+	primary: EncoderKind,
+	/**
+	 *  Every encoder that passed both the `-encoders` listing AND
+	 *  the runtime test encode.  Always contains [`EncoderKind::Software`]
+	 *  in the fallback position because libx265 is bundled with
+	 *  every ffmpeg sidecar build (ADR-0013).
+	 */
+	available: EncoderKind[],
+	// Whether the primary encoder supports H.265.
+	h265: boolean,
+	// Whether the primary encoder supports H.264.
+	h264: boolean,
+	/**
+	 *  Wall-clock seconds at which the detection ran.  Used by the
+	 *  Settings UI to render "Auto-detected (NN minutes ago)".
+	 */
+	testedAt: number,
+};
+
+/**
+ *  Hardware (or software) encoder available on this machine.  The
+ *  detection service (`services::encoder_detection`) builds an
+ *  [`EncoderCapability`] from running `ffmpeg -encoders` plus a
+ *  2-second test encode.
+ */
+export type EncoderKind = "video_toolbox" | "nvenc" | "amf" | "quick_sync" | "vaapi" | "software";
+
 export type EnqueueDownloadInput = {
 	vodId: string,
 	priority?: number | null,
@@ -877,6 +988,17 @@ export type SetTwitchCredentialsInput = {
 	clientSecret: string,
 };
 
+/**
+ *  Persist the chosen quality profile.  Wraps `update_settings` for
+ *  the typed-from-the-renderer "user picked a profile" gesture; the
+ *  generic `update_settings` command also accepts the field through
+ *  `SettingsPatch.video_quality_profile`, but a dedicated command
+ *  keeps the IPC surface readable on the Settings UI side.
+ */
+export type SetVideoQualityProfileInput = {
+	profile: VideoQualityProfile,
+};
+
 export type SetWindowCloseBehaviorInput = {
 	behavior: WindowCloseBehavior,
 };
@@ -929,6 +1051,11 @@ export type SettingsPatch = {
 	 *  that release.  Omit to leave unchanged.
 	 */
 	updateCheckSkipVersion?: string | null,
+	videoQualityProfile?: VideoQualityProfile | null,
+	softwareEncodeOptIn?: boolean | null,
+	maxConcurrentReencodes?: number | null,
+	cpuThrottleHighThreshold?: number | null,
+	cpuThrottleLowThreshold?: number | null,
 };
 
 /**
@@ -1184,6 +1311,13 @@ export type UpdaterUpdateAvailableEvent = {
 	releaseUrl: string,
 	body: string,
 };
+
+/**
+ *  User-facing quality profile.  The wire strings are the strings we
+ *  persist in `app_settings.video_quality_profile`; do not rename
+ *  them without a migration.
+ */
+export type VideoQualityProfile = "480p30" | "480p60" | "720p30" | "720p60" | "1080p30" | "1080p60" | "source";
 
 /**
  *  Single-choke-point answer for `<video src>`. The player uses this
