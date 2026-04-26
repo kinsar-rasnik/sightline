@@ -302,16 +302,38 @@ pub fn run() {
                     SettingsService::new(db.clone(), clock.clone()),
                 ));
                 let distribution_handle = handle.clone();
+                let distribution_downloads = downloads_svc.clone();
                 let distribution_sink: DistributionEventSink =
                     Arc::new(move |ev| match ev {
                         DistributionEvent::VodPicked { vod_id, from } => {
                             let _ = distribution_handle.emit(
                                 EV_DISTRIBUTION_VOD_PICKED,
                                 DistributionVodPickedEvent {
-                                    vod_id,
+                                    vod_id: vod_id.clone(),
                                     from_status: from.as_db_str().to_owned(),
                                 },
                             );
+                            // S5 convergence: bridge pull-mode picks
+                            // into the legacy downloads queue. The
+                            // worker observes the new row on its
+                            // next tick (≤ 5s); explicit wake-up
+                            // would require capturing the queue
+                            // handle, which only exists after spawn,
+                            // so we accept the tick latency and rely
+                            // on the existing scheduling cadence.
+                            let dl = distribution_downloads.clone();
+                            let pick_vod_id = vod_id;
+                            tokio::spawn(async move {
+                                if let Err(err) =
+                                    dl.enqueue(&pick_vod_id, None).await
+                                {
+                                    warn!(
+                                        ?err,
+                                        vod_id = pick_vod_id,
+                                        "downloads enqueue from VodPicked failed"
+                                    );
+                                }
+                            });
                         }
                         DistributionEvent::VodArchived { vod_id } => {
                             let _ = distribution_handle.emit(
