@@ -1041,31 +1041,55 @@ pub fn run() {
         });
 }
 
+/// Holds the [`tracing_appender::non_blocking::WorkerGuard`] for the
+/// lifetime of the process.  Dropping the guard would shut down the
+/// background writer thread and silently drop pending log lines, so
+/// we stash it in a `OnceCell` that lives as long as the binary.
+static LOG_GUARD: once_cell::sync::OnceCell<tracing_appender::non_blocking::WorkerGuard> =
+    once_cell::sync::OnceCell::new();
+
 /// Initialise tracing with both stderr and a daily-rotating file sink
 /// in the OS-native log directory.  See ADR-0037.  The file sink is
 /// best-effort: a non-writable home directory degrades to stderr-only
 /// rather than aborting startup.
+///
+/// Default verbosity per sink: file = `info`, stderr = `warn`.  Both
+/// honour `RUST_LOG` when set — that override applies to both layers
+/// uniformly so a developer running `RUST_LOG=debug pnpm tauri dev`
+/// sees the same lines on screen and on disk.
 fn init_tracing() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{EnvFilter, fmt};
+    use tracing_subscriber::{EnvFilter, Layer, fmt};
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stderr_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let stderr_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
+    let stderr_layer = fmt::layer()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_filter(stderr_filter);
 
     let file_layer = init_rolling_file_appender().map(|appender| {
+        // tracing-appender's `RollingFileAppender` is a synchronous
+        // blocking writer — `non_blocking` queues events to a
+        // background thread so a slow filesystem cannot stall a
+        // Tokio worker.  The returned guard MUST outlive the process;
+        // see `LOG_GUARD` above.
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        let _ = LOG_GUARD.set(guard);
         fmt::layer()
             .with_target(true)
             .with_ansi(false)
-            .with_writer(appender)
+            .with_writer(non_blocking)
+            .with_filter(file_filter)
     });
     if file_layer.is_none() {
         eprintln!("[sightline] file logger disabled — proceeding with stderr only");
     }
 
     let result = tracing_subscriber::registry()
-        .with(filter)
         .with(stderr_layer)
         .with(file_layer)
         .try_init();
@@ -1116,15 +1140,17 @@ fn init_rolling_file_appender() -> Option<tracing_appender::rolling::RollingFile
     }
 }
 
-/// OS-native log directory for the application.  Mirrors Tauri's
-/// `PathResolver::app_log_dir()` for bundle id `dev.sightline.app`,
-/// computed without an `AppHandle` so [`init_tracing`] can run before
-/// the Tauri runtime exists.
+/// OS-native log directory for the application.  Computed manually
+/// because [`init_tracing`] runs before the Tauri runtime exists, so
+/// `tauri::path::PathResolver::app_log_dir()` is unavailable.  The
+/// algorithm matches Tauri 2's `app_log_dir()` for bundle id
+/// `dev.sightline.app` so the file we write is the same file the
+/// runtime would point at:
 ///
 /// * macOS:   `$HOME/Library/Logs/dev.sightline.app/`
-/// * Windows: `%LOCALAPPDATA%\dev.sightline.app\Logs\`
-/// * Linux:   `$XDG_STATE_HOME/dev.sightline.app/` (or
-///   `$HOME/.local/state/dev.sightline.app/` if XDG is unset)
+/// * Windows: `%LOCALAPPDATA%\dev.sightline.app\logs\`
+/// * Linux:   `$XDG_CACHE_HOME/dev.sightline.app/logs/` (or
+///   `$HOME/.cache/dev.sightline.app/logs/` if XDG is unset)
 ///
 /// Returns `None` when the underlying environment variables are unset
 /// — usually only in stripped-down container environments.
@@ -1144,18 +1170,18 @@ fn default_log_dir() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     {
         std::env::var_os("LOCALAPPDATA")
-            .map(|p| std::path::PathBuf::from(p).join(BUNDLE_ID).join("Logs"))
+            .map(|p| std::path::PathBuf::from(p).join(BUNDLE_ID).join("logs"))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        std::env::var_os("XDG_STATE_HOME")
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
             .map(std::path::PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|h| std::path::PathBuf::from(h).join(".local").join("state"))
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache"))
             })
-            .map(|p| p.join(BUNDLE_ID))
+            .map(|p| p.join(BUNDLE_ID).join("logs"))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
@@ -1325,6 +1351,8 @@ fn resolve_db_path(handle: &tauri::AppHandle) -> Result<std::path::PathBuf, erro
 pub type SharedState = Arc<AppState>;
 
 #[cfg(test)]
+// Test code: panics on assertion failures are the contract; the main
+// crate-wide bans on unwrap/expect don't apply here.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
