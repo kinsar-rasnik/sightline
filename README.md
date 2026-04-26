@@ -76,6 +76,16 @@ Sightline ships unsigned binaries on the [GitHub Releases page](https://github.c
 
 First-launch warnings are expected (the binaries are unsigned — see [ADR-0025](docs/adr/0025-release-pipeline.md) for why we don't sign for v1). [`docs/INSTALL.md`](docs/INSTALL.md) walks through the per-OS workaround.
 
+#### Logs
+
+If something goes wrong and you want to attach logs to a bug report, the rolling daily log file lives at:
+
+- **macOS** — `~/Library/Logs/dev.sightline.app/sightline.<date>.log`
+- **Windows** — `%LOCALAPPDATA%\dev.sightline.app\Logs\sightline.<date>.log`
+- **Linux** — `$XDG_STATE_HOME/dev.sightline.app/sightline.<date>.log` (or `~/.local/state/dev.sightline.app/...` if `XDG_STATE_HOME` is unset)
+
+The seven most recent days are retained. See [ADR-0037](docs/adr/0037-file-logger-activation.md) for the rotation policy.
+
 ### Build from source
 
 Build-from-source is a first-class path — security-conscious users should prefer it.
