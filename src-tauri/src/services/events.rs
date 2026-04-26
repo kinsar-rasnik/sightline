@@ -329,3 +329,40 @@ pub struct UpdaterUpdateAvailableEvent {
 pub struct UpdaterCheckFailedEvent {
     pub reason: String,
 }
+
+// --- Phase 8: distribution events (ADR-0030, ADR-0031). ---
+pub const EV_DISTRIBUTION_VOD_PICKED: &str = "distribution:vod_picked";
+pub const EV_DISTRIBUTION_VOD_ARCHIVED: &str = "distribution:vod_archived";
+pub const EV_DISTRIBUTION_PREFETCH_TRIGGERED: &str = "distribution:prefetch_triggered";
+pub const EV_DISTRIBUTION_WINDOW_ENFORCED: &str = "distribution:window_enforced";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionVodPickedEvent {
+    pub vod_id: String,
+    /// State the row was in before the pick.  Useful for the
+    /// renderer's optimistic-update path: a `available -> queued`
+    /// transition needs different cache invalidation than a
+    /// `deleted -> queued` re-pick.
+    pub from_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionVodArchivedEvent {
+    pub vod_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionPrefetchTriggeredEvent {
+    pub currently_watching: String,
+    pub prefetched: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionWindowEnforcedEvent {
+    pub streamer_id: String,
+    pub evicted_vod_id: String,
+}

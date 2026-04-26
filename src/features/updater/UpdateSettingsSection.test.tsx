@@ -68,6 +68,15 @@ const baseSettings = {
   updateCheckEnabled: false,
   updateCheckLastRun: null,
   updateCheckSkipVersion: null,
+  videoQualityProfile: "720p30" as const,
+  softwareEncodeOptIn: false,
+  encoderCapability: null,
+  maxConcurrentReencodes: 1,
+  cpuThrottleHighThreshold: 0.7,
+  cpuThrottleLowThreshold: 0.5,
+  distributionMode: "pull" as const,
+  slidingWindowSize: 2,
+  prefetchEnabled: true,
 };
 
 function renderSection(props?: Partial<typeof baseSettings>) {

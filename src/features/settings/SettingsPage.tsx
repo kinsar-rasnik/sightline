@@ -21,6 +21,7 @@ import {
   useSetAutostart,
 } from "@/features/settings/use-autostart";
 import { useSettings, useUpdateSettings } from "@/features/settings/use-settings";
+import { VideoQualitySection } from "@/features/settings/VideoQualitySection";
 import { StorageSection } from "@/features/storage/StorageSection";
 import { UpdateSettingsSection } from "@/features/updater/UpdateSettingsSection";
 import { commands } from "@/ipc";
@@ -64,6 +65,11 @@ export function SettingsPage() {
         pending={update.isPending}
       />
       <DownloadsAndStorageSection
+        settings={data}
+        onUpdate={(patch) => update.mutate(patch)}
+        pending={update.isPending}
+      />
+      <VideoQualitySection
         settings={data}
         onUpdate={(patch) => update.mutate(patch)}
         pending={update.isPending}

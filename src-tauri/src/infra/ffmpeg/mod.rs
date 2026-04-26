@@ -69,6 +69,49 @@ pub struct PreviewFramesSpec {
 /// the service layer share a single source of truth.
 pub const PREVIEW_FRAME_PERCENTS: [f64; 6] = [15.0, 30.0, 45.0, 60.0, 75.0, 90.0];
 
+/// Phase 8 (ADR-0028) — re-encode a source file with a chosen video
+/// encoder.  Audio is always passed through with `-c:a copy`; the
+/// service layer's `audio_passthrough_is_byte_exact` regression test
+/// asserts this invariant on the round-trip output.
+#[derive(Debug, Clone)]
+pub struct ReencodeSpec {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    /// `-c:v` argument (e.g. `"hevc_videotoolbox"`).  Picked by
+    /// `services::encoder_detection` from the [`crate::domain::quality::EncoderKind`]
+    /// chosen for this run.
+    pub video_encoder_arg: String,
+    /// Maximum height for the output, in pixels.  `None` for the
+    /// `Source` profile (which never re-encodes anyway).
+    pub max_height: Option<u32>,
+    /// Maximum frame rate.  `None` for `Source`.
+    pub max_fps: Option<u32>,
+    /// Process scheduling priority for the spawned ffmpeg child.  See
+    /// `infra::process::priority`.
+    pub priority: ProcessPriority,
+}
+
+/// Encoder name that comes back from `ffmpeg -encoders`.  We parse
+/// stdout into one of these per available encoder so the detection
+/// service can do membership checks without re-parsing strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncoderListing {
+    pub name: String,
+}
+
+/// Process priority hint passed into the re-encode call (ADR-0029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessPriority {
+    /// Default OS scheduling.  Used by the existing remux/thumbnail
+    /// paths where priority lowering would slow latency-sensitive
+    /// post-processing of a finished download.
+    Normal,
+    /// Lowest reasonable scheduling priority — `nice 19` on Unix,
+    /// `BELOW_NORMAL_PRIORITY_CLASS` on Windows.  Used by the
+    /// background re-encode pass.
+    Background,
+}
+
 #[async_trait]
 pub trait Ffmpeg: Send + Sync + std::fmt::Debug {
     async fn version(&self) -> Result<FfmpegVersion, AppError>;
@@ -90,6 +133,25 @@ pub trait Ffmpeg: Send + Sync + std::fmt::Debug {
         }
         Ok(())
     }
+
+    /// List the encoders the bundled ffmpeg knows about.  Output is
+    /// parsed from `ffmpeg -encoders` and pre-filtered to the names
+    /// the detection layer cares about (`hevc_*`, `h264_*`,
+    /// `libx265`, `libx264`).
+    async fn list_encoders(&self) -> Result<Vec<EncoderListing>, AppError>;
+
+    /// Run a 1-second synthetic test encode using the supplied
+    /// `-c:v` argument.  Used by the encoder-detection pass to
+    /// confirm the encoder actually initialises on this hardware
+    /// (e.g. NVENC may be advertised on an Ubuntu image without an
+    /// NVIDIA card).  Returns `Ok(())` on a successful exit;
+    /// `Err(_)` for any non-zero exit or timeout.
+    async fn test_encoder(&self, video_encoder_arg: &str) -> Result<(), AppError>;
+
+    /// Re-encode a source file with the supplied encoder.  Audio is
+    /// always passed through unchanged via `-c:a copy`.  Honours the
+    /// supplied [`ProcessPriority`] for the spawned child.
+    async fn reencode(&self, spec: &ReencodeSpec) -> Result<(), AppError>;
 }
 
 pub type SharedFfmpeg = Arc<dyn Ffmpeg>;

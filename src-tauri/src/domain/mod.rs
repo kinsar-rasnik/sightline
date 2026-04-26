@@ -3,6 +3,7 @@
 pub mod chapter;
 pub mod cleanup;
 pub mod deep_link;
+pub mod distribution;
 pub mod download_state;
 pub mod duration;
 pub mod game_filter;
@@ -11,6 +12,7 @@ pub mod interval_merger;
 pub mod library_layout;
 pub mod nfo;
 pub mod poll_schedule;
+pub mod quality;
 pub mod quality_preset;
 pub mod sanitize;
 pub mod streamer;

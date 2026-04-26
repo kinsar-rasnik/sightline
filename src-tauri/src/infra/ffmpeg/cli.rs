@@ -7,10 +7,32 @@ use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::debug;
 
-use super::{Ffmpeg, FfmpegVersion, RemuxSpec, ThumbnailSpec, already_mp4, seek_seconds};
+use super::{
+    EncoderListing, Ffmpeg, FfmpegVersion, ReencodeSpec, RemuxSpec, ThumbnailSpec, already_mp4,
+    seek_seconds,
+};
 use crate::error::AppError;
+use crate::infra::process::priority::apply_priority;
 
 const TOOL: &str = "ffmpeg";
+
+/// Encoder names the detection layer cares about.  The `ffmpeg
+/// -encoders` output contains hundreds of entries — we only want the
+/// hardware/software encoders that actually drive Phase 8's pipeline.
+const TRACKED_ENCODERS: &[&str] = &[
+    "hevc_videotoolbox",
+    "h264_videotoolbox",
+    "hevc_nvenc",
+    "h264_nvenc",
+    "hevc_amf",
+    "h264_amf",
+    "hevc_qsv",
+    "h264_qsv",
+    "hevc_vaapi",
+    "h264_vaapi",
+    "libx265",
+    "libx264",
+];
 
 #[derive(Debug, Clone)]
 pub struct FfmpegCli {
@@ -118,5 +140,316 @@ impl Ffmpeg for FfmpegCli {
             )));
         }
         Ok(())
+    }
+
+    async fn list_encoders(&self) -> Result<Vec<EncoderListing>, AppError> {
+        let mut cmd = Command::new(&self.binary);
+        cmd.kill_on_drop(true).stdin(Stdio::null());
+        cmd.args(["-hide_banner", "-encoders"]);
+        let output = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .map_err(|e| Self::sidecar_err(format!("spawn: {e}")))?;
+        if !output.status.success() {
+            return Err(Self::sidecar_err(format!(
+                "encoders exit {:?}",
+                output.status.code()
+            )));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_encoders_output(&text))
+    }
+
+    async fn test_encoder(&self, video_encoder_arg: &str) -> Result<(), AppError> {
+        // 1-second synthetic colour-bar source piped to the encoder
+        // and discarded.  `lavfi` + `testsrc` is the canonical
+        // ffmpeg way to produce a synthetic input without touching
+        // disk.  Output goes to /dev/null.
+        let mut cmd = self.command();
+        cmd.args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-t",
+            "1",
+            "-i",
+            "testsrc=size=256x144:rate=30",
+            "-c:v",
+            video_encoder_arg,
+            "-f",
+            "null",
+            "-",
+        ]);
+        // Bound the test encode to 10 s wall-clock — a real encoder
+        // takes well under 1 s; anything beyond 10 s indicates the
+        // encoder is mis-configured (or the host is wedged).
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            cmd.stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .status()
+                .await
+        })
+        .await
+        .map_err(|_| Self::sidecar_err(format!("test_encoder timeout for {video_encoder_arg}")))?;
+        let status = result.map_err(|e| Self::sidecar_err(format!("spawn: {e}")))?;
+        if !status.success() {
+            return Err(Self::sidecar_err(format!(
+                "test_encoder {video_encoder_arg} exit {:?}",
+                status.code()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn reencode(&self, spec: &ReencodeSpec) -> Result<(), AppError> {
+        let mut cmd = self.command();
+        for arg in build_reencode_args(spec) {
+            cmd.arg(arg);
+        }
+
+        let mut child = cmd
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| Self::sidecar_err(format!("spawn: {e}")))?;
+
+        // Apply scheduling priority post-spawn (Unix `nice`-style or
+        // Windows `BELOW_NORMAL`).  Failure to lower priority is not
+        // fatal — log and continue.  See ADR-0029 §Layer 1.
+        if let Some(pid) = child.id()
+            && let Err(e) = apply_priority(pid, spec.priority)
+        {
+            debug!(pid, error = %e, priority = ?spec.priority, "apply_priority failed");
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| Self::sidecar_err(format!("wait: {e}")))?;
+        if !status.success() {
+            return Err(Self::sidecar_err(format!(
+                "reencode {} exit {:?}",
+                spec.video_encoder_arg,
+                status.code()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Build the argument vector handed to ffmpeg for a re-encode pass.
+/// Pure — exposed so tests can assert the audio-passthrough invariant
+/// (ADR-0028 §Audio policy) without spawning a real ffmpeg.
+///
+/// Layout (left-to-right): `-y -i <src> [-vf <filter>] -c:v <enc> -c:a copy -movflags +faststart <dst>`.
+/// Every non-source quality profile must produce exactly one
+/// `-c:a copy` and no other `-c:a` value.
+pub fn build_reencode_args(spec: &ReencodeSpec) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+
+    let mut args: Vec<OsString> = Vec::new();
+    args.push(OsString::from("-y"));
+    args.push(OsString::from("-i"));
+    args.push(spec.source.clone().into_os_string());
+
+    // Video filter chain: width/height + fps if requested.  We use
+    // `scale` rather than `scale_vt` / `scale_npp` to avoid filter-
+    // name divergence between the hardware encoders — the
+    // hwaccel-aware path is a v2.x optimisation.  Software scale is
+    // fine for the bandwidth numbers Phase 8 targets.
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(h) = spec.max_height {
+        filters.push(format!("scale=-2:'min({h},ih)'"));
+    }
+    if let Some(fps) = spec.max_fps {
+        filters.push(format!("fps={fps}"));
+    }
+    if !filters.is_empty() {
+        args.push(OsString::from("-vf"));
+        args.push(OsString::from(filters.join(",")));
+    }
+
+    args.push(OsString::from("-c:v"));
+    args.push(OsString::from(&spec.video_encoder_arg));
+    // Audio passthrough — load-bearing invariant per ADR-0028
+    // §Audio policy.  Tested by
+    // `infra::ffmpeg::cli::tests::reencode_args_pass_audio_through`
+    // and `services::reencode::tests::audio_passthrough_is_byte_exact`.
+    args.push(OsString::from("-c:a"));
+    args.push(OsString::from("copy"));
+    args.push(OsString::from("-movflags"));
+    args.push(OsString::from("+faststart"));
+    args.push(spec.destination.clone().into_os_string());
+
+    args
+}
+
+/// Parse the lines of `ffmpeg -encoders` and return the tracked
+/// encoders.  Pure — exposed for unit tests.
+///
+/// Output looks like:
+///
+/// ```text
+/// Encoders:
+///  V..... = Video
+///  A..... = Audio
+///  ...
+///  ------
+///  V..... libx264              libx264 H.264 / AVC ...
+///  V..... libx265              libx265 HEVC ...
+///  V..... hevc_videotoolbox    VideoToolbox HEVC encoder ...
+/// ```
+///
+/// We skip the header (lines until we see the `------` divider),
+/// then parse each subsequent line by whitespace-splitting and
+/// keeping the second token (the encoder name).
+pub fn parse_encoders_output(text: &str) -> Vec<EncoderListing> {
+    let mut found = Vec::new();
+    let mut past_header = false;
+    for line in text.lines() {
+        if !past_header {
+            if line.trim_start().starts_with("------") {
+                past_header = true;
+            }
+            continue;
+        }
+        let trimmed = line.trim_start();
+        // The flag column is e.g. "V.....", followed by whitespace,
+        // followed by the encoder name. Skip empty lines.
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
+        // First token = flag column.  We don't use it; only V/A/S.
+        let _ = parts.next();
+        if let Some(name) = parts.next()
+            && TRACKED_ENCODERS.contains(&name)
+        {
+            found.push(EncoderListing {
+                name: name.to_owned(),
+            });
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::infra::ffmpeg::ProcessPriority;
+
+    /// ADR-0028 §Audio policy regression guard.  Asserts that the
+    /// argument vector handed to ffmpeg for any non-source profile
+    /// contains exactly one `-c:a` directive and that its value is
+    /// `copy`.  A future engineer accidentally swapping in `-c:a aac`
+    /// or `-c:a libopus` would flip this test red immediately.
+    #[test]
+    fn reencode_args_pass_audio_through() {
+        let spec = ReencodeSpec {
+            source: std::path::PathBuf::from("/tmp/in.mp4"),
+            destination: std::path::PathBuf::from("/tmp/out.mp4"),
+            video_encoder_arg: "hevc_videotoolbox".into(),
+            max_height: Some(720),
+            max_fps: Some(30),
+            priority: ProcessPriority::Background,
+        };
+        let args: Vec<String> = build_reencode_args(&spec)
+            .into_iter()
+            .map(|os| os.to_string_lossy().into_owned())
+            .collect();
+
+        // Find every -c:a position; there must be exactly one and
+        // the directly-following arg must be `copy`.
+        let positions: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "-c:a")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "exactly one -c:a expected, got {positions:?}"
+        );
+        let codec_pos = positions[0] + 1;
+        assert_eq!(
+            args.get(codec_pos).map(|s| s.as_str()),
+            Some("copy"),
+            "audio codec must be 'copy' (passthrough); got {:?}",
+            args.get(codec_pos)
+        );
+
+        // And -c:v must come BEFORE -c:a (otherwise ffmpeg won't
+        // associate the audio passthrough with the right output
+        // stream — sanity check on the arg ordering).
+        let cv_pos = args
+            .iter()
+            .position(|a| a.as_str() == "-c:v")
+            .expect("-c:v must be present");
+        assert!(
+            cv_pos < positions[0],
+            "-c:v must precede -c:a (got cv@{cv_pos}, ca@{})",
+            positions[0]
+        );
+    }
+
+    #[test]
+    fn reencode_args_omit_filter_when_no_constraints() {
+        let spec = ReencodeSpec {
+            source: std::path::PathBuf::from("/tmp/in.mp4"),
+            destination: std::path::PathBuf::from("/tmp/out.mp4"),
+            video_encoder_arg: "libx265".into(),
+            max_height: None,
+            max_fps: None,
+            priority: ProcessPriority::Normal,
+        };
+        let args: Vec<String> = build_reencode_args(&spec)
+            .into_iter()
+            .map(|os| os.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !args.iter().any(|a| a == "-vf"),
+            "no -vf expected when max_height/max_fps are None: {args:?}"
+        );
+    }
+
+    #[test]
+    fn parse_encoders_output_finds_tracked_names() {
+        let sample = "ffmpeg version n6.1 Copyright (c) ...\n\
+            Encoders:\n\
+             V..... = Video\n\
+             A..... = Audio\n\
+             ------\n\
+             V..... libx264              libx264 H.264 / AVC encoder\n\
+             V..... libx265              libx265 HEVC encoder\n\
+             V..... hevc_videotoolbox    VideoToolbox HEVC encoder\n\
+             V..... mjpeg                MJPEG encoder\n\
+             A..... aac                  AAC (Advanced Audio Coding)\n";
+        let parsed = parse_encoders_output(sample);
+        let names: Vec<&str> = parsed.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"libx264"));
+        assert!(names.contains(&"libx265"));
+        assert!(names.contains(&"hevc_videotoolbox"));
+        assert!(!names.contains(&"mjpeg")); // not tracked
+        assert!(!names.contains(&"aac")); // not tracked
+    }
+
+    #[test]
+    fn parse_encoders_output_handles_missing_header() {
+        // No `------` divider means we're not past the header,
+        // so we collect nothing.
+        let sample = "Encoders:\n V..... libx264 desc\n";
+        assert!(parse_encoders_output(sample).is_empty());
+    }
+
+    #[test]
+    fn parse_encoders_output_skips_unknown_encoders() {
+        let sample = "Encoders:\n ------\n V..... unknown_codec desc\n V..... libx264 desc\n";
+        let parsed = parse_encoders_output(sample);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "libx264");
     }
 }

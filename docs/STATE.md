@@ -1,7 +1,7 @@
 # STATE — Sightline
 
-**Letzte Aktualisierung:** 2026-04-25
-**System-Ampel:** 🟢 Grün
+**Letzte Aktualisierung:** 2026-04-26
+**System-Ampel:** 🟢 Grün — v2.0.0 released (Phase 8 storage-aware)
 
 ---
 
@@ -11,20 +11,17 @@
 
 **Repo:** github.com/kinsar-rasnik/sightline
 
-**Roadmap:** 7 Phasen.
-- Phase 1: Foundation, Synthetic Workforce, Skeleton ✅
-- Phase 2: Twitch Ingest, Polling, Chapters ✅
-- Phase 3: Download Engine, Queue, Library Layout ✅
-- Phase 4: Tray Daemon, Timeline, UI Polish, Sidecar Bundling ✅
-- Phase 5: Player, Watch Progress, Continue Watching ✅
-- Phase 6: Multi-View Sync Engine (Housekeeping + proper) ✅
-- Phase 7: Auto-Cleanup, Release Pipeline, v1.0.0 ⏳ (next, single-run-mission)
+**Status:** v1.0.0 live unter github.com/kinsar-rasnik/sightline/releases/tag/v1.0.0 — 5 Assets (macOS aarch64, Linux AppImage + Deb, Windows MSI + NSIS).
+
+**Roadmap:**
+- Phase 1–8 ✅
+- Post-v2.0 follow-ups (v2.0.1, v2.1) tracked as Open Follow-ups below.
 
 ---
 
 ## Ampel-Begründung
 
-🟢 — Repo ist sauber, alle Phasen-Tags gesetzt, CI grün, keine offenen Blocker. Phase 7 ist startklar.
+🟢 — v1.0.0 released, alle Phasen 1–7 abgeschlossen, alle Tags gesetzt, GitHub-Release publiziert mit auto-generierten Release-Notes. Repo clean, kein offener Blocker.
 
 ---
 
@@ -33,49 +30,44 @@
 **Repository:**
 - Working-Directory: `~/Documents/sightline`
 - Branch: `main`
-- Lokales und Remote-`main`: `d08b16b` (Phase 6 Squash-Merge, PR #16)
+- main HEAD: `66c8cf0` (Phase 7 + macos-13 Hotfix, PR #18)
 - Working Tree: clean
 
-**Phasen-Tags vollständig:**
-- `phase-1-complete` bis `phase-6-complete` ✅ alle lokal + remote
-- Phase-6-Tag (`phase-6-complete`) zeigt auf `d08b16b`
+**Tags:**
+- `phase-1-complete` bis `phase-7-complete` ✅
+- `v1.0.0` → `66c8cf01` (erstes Public Release)
 
-**Letzter Merge auf main:** PR #16 "Phase 6: multi-view sync engine (split-view v1)" — squash-merged 2026-04-25. CI auf allen drei OS grün vor Merge. 18 Commits zu einem Squash-Commit zusammengefasst.
+**Letzte Merges:** PR #17 (Phase 7) + PR #18 (Hotfix macos-13 Runner-Retirement). Release-Workflow grün durchgelaufen, 5 Assets published.
 
 ---
 
-## SOLL-Zustand (Phase 7)
+## SOLL-Zustand (Phase 8)
 
-**Auto-Cleanup, Release Pipeline, v1.0.0.** Letzte Phase, sightline ist danach komplett.
+**Storage-Aware Distribution.** Vom CEO als neue, jetzt letzte Phase definiert. Hintergrund: Default-Auto-Download mit Source-Quality skaliert nicht für 20-GB-Disk-User. Phase 8 baut die UX-Reality-Anpassung.
+
+Drei Workstreams:
+1. **Quality-Pipeline:** 720p30 H.265 als neuer Default, Hardware-Encode-Detection, CPU-Throttle/Background-Friendly Re-Encode, alle Quality-Stufen als User-Override mit konkreten Warnungen + Beispielrechnungen. Audio bleibt unverändert (GTA-RP-essentiell).
+2. **Pull-Modell mit Sliding-Window:** Polling markiert VODs als "available" (Metadaten-only), User pickt manuell oder via Rule "lade die nächsten N". Auto-Cleanup nach watched-completed. Pre-Fetch der nächsten N beim Watching. Default N=2, konfigurierbar.
+3. **Storage-Forecast-UI:** Vor Streamer-Add zeigt UI "geschätzt X GB/Woche bei deinen Settings", warnt bei Watermark-Überschreitung-Risiko. Library-UI zeigt available + downloaded VODs (UX-Re-Konzeption).
+
+**Versionssprung:** v2.0.0 (Breaking-Change im Storage-Verhalten, Library-UX-Re-Konzeption).
 
 Locked Decisions:
-- OSS-Distribution via GitHub Releases, unsigned binaries (kein Code Signing, kein Notarization — bewusste Entscheidung, sightline ist Open Source und Build-from-source ist first-class)
-- Tauri-Bundling für alle 3 OS via GitHub Actions Build-Matrix
-- Tag-Push triggert Release-Workflow automatisch
-- Update-Checker gegen GitHub Releases API (opt-in via Settings)
-- Release-Notes aus Conventional Commits generiert
-- Senior Engineer (Claude Code) führt finalen Merge + Tag `v1.0.0` selbst durch (full automation, CEO-Freigabe nur über PR-Approval)
-
-Geplant:
-- Auto-Cleanup-Service (Disk-Watermarks, Retention-Policies)
-- GitHub Release Workflow (.github/workflows/release.yml)
-- Update-Checker (Backend-Service + UI-Notification + AppSettings-Toggle)
-- Release-Notes-Generator
-- Install-Doku inkl. "wie öffne ich unsigned binary auf macOS/Windows"
-- README v1.0-Polish
-- Pickup ausgewählter Phase-6-Follow-ups (Asset-Protocol-Narrowing per ADR-0019, SyncService-Settings-Caching)
-- ADRs, Tests, Subagent-Reviews
-- Final-Tag: `v1.0.0` + GitHub-Release auto-published
+- 720p30 H.265 default, Hardware-Encode wenn verfügbar
+- Audio: niemals reduzieren
+- Re-Encode CPU-Throttle: nice-Priority + adaptive Throttling bei System-Load
+- Pull-Modell ersetzt Push-Modell (Migrations-Pfad mit Backwards-Compat)
+- Streaming-Hybrid-Idee verworfen (würde Multi-View kompromittieren)
 
 ---
 
 ## Aktive Autorun-Queue
 
-**Aktuell laufend:** Keine. Phase 6 abgeschlossen, Phase 7 wartet auf Mission-Start.
+**Aktuell laufend:** Keine. v1.0.0 released, Phase 8 wartet auf Mission-Start.
 
 **Pipeline:**
-1. Phase 7 (Auto-Cleanup, Release Pipeline, v1.0.0) — single-run-mission
-2. Post-1.0: Auto-Issue-Triage-Workflow (Claude Desktop + GitHub) — eigenes späteres Projekt, nicht Teil von Phase 7
+1. Phase 8 (Storage-Aware Distribution → v2.0.0) — single-run-mission, vermutlich umfangreicher als Phase 7
+2. Post-v2.0: Auto-Issue-Triage-Workflow via Claude Desktop + GitHub (eigenes Folge-Projekt)
 
 ---
 
@@ -87,26 +79,31 @@ Keine aktiven Cron-Jobs. Workforce arbeitet ausschließlich im Push-Modus auf CT
 
 ## Blocker
 
-Keine offenen Blocker. GitHub-Connectivity stabil. Repo unter `~/Documents/sightline` (nicht im Proton-Drive-Pfad).
+Keine offenen Blocker. v1.0.0 ist live. Repo sauber.
 
 ---
 
 ## Offene Entscheidungen
 
-Keine. Alle Phase-7-Voraussetzungen geklärt:
-- Kein Code Signing nötig (OSS-Distribution)
-- Senior Engineer mergt + taggt selbst (Konventionsänderung von 2026-04-25)
-- v1.0.0 ist der Capstone-Tag
+Keine — alle Phase-8-Constraints geklärt:
+- 720p30 H.265 default, alle Stufen als Override mit Warnung
+- Audio nie reduzieren
+- Hardware-Encode bevorzugt, Software nur als Fallback mit Warnung
+- Pull-Modell ersetzt Push-Modell
+- Streaming-Hybrid verworfen
+- v2.0.0 als nächster Release-Tag
 
 ---
 
 ## Letzter Handoff
 
 `docs/HANDOFF-2026-04-25.md` — dokumentiert Phase 6 Housekeeping + Phase 6 proper.
+**Pflicht für Phase 7 + v1.0.0:** neuer HANDOFF nach Phase-8-Abschluss schreiben (`docs/HANDOFF-YYYY-MM-DD.md`), der Phase 7 + v1.0.0 + Phase 8 + v2.0.0 zusammenfasst.
 
 ---
 
 ## Änderungshistorie
 
-- 2026-04-25 — STATE.md initialisiert, IST/SOLL aufgenommen, drei Blocker dokumentiert.
-- 2026-04-25 — Phase 6 Housekeeping (PR #15) gemerged, Phase 6 proper (PR #16) gemerged + getaggt. Alle Blocker resolved. Ampel auf 🟢. Phase 7 als nächstes vorbereitet. Konventionsänderung: Senior Engineer macht Merge + Tag (siehe .claude/CHANGELOG.md).
+- 2026-04-25 — STATE.md initialisiert, IST/SOLL aufgenommen.
+- 2026-04-25 — Phase 6 Housekeeping (PR #15) und Phase 6 proper (PR #16) gemerged + getaggt.
+- 2026-04-25 — Phase 7 (PR #17) + macos-13-Hotfix (PR #18) gemerged. v1.0.0 als erstes Public Release published. Phase 8 als neue, vorerst letzte Phase aufgenommen (Storage-Aware Distribution).

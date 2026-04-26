@@ -144,6 +144,48 @@ export const commands = {
 	 *  `https://api.github.com/repos/.../releases/latest`.
 	 */
 	openReleaseUrl: (input: OpenReleaseUrlInput) => typedError<null, AppError>(__TAURI_INVOKE("open_release_url", { input })),
+	/**
+	 *  Persisted encoder-capability snapshot (or `None` if detection has
+	 *  never run).  Returns the raw `EncoderCapability` blob — the
+	 *  renderer renders the per-encoder-kind labels.
+	 */
+	getEncoderCapability: () => typedError<{
+	/**
+	 *  Encoder the service will use first.  When this is
+	 *  [`EncoderKind::Software`] but `software_encode_opt_in = 0`
+	 *  in settings, the re-encode pass refuses to run and surfaces
+	 *  an error instead.
+	 */
+	primary: EncoderKind,
+	/**
+	 *  Every encoder that passed both the `-encoders` listing AND
+	 *  the runtime test encode.  Always contains [`EncoderKind::Software`]
+	 *  in the fallback position because libx265 is bundled with
+	 *  every ffmpeg sidecar build (ADR-0013).
+	 */
+	available: EncoderKind[],
+	// Whether the primary encoder supports H.265.
+	h265: boolean,
+	// Whether the primary encoder supports H.264.
+	h264: boolean,
+	/**
+	 *  Wall-clock seconds at which the detection ran.  Used by the
+	 *  Settings UI to render "Auto-detected (NN minutes ago)".
+	 */
+	testedAt: number,
+} | null, AppError>(__TAURI_INVOKE("get_encoder_capability")),
+	/**
+	 *  Force a fresh detection probe (`ffmpeg -encoders` + 2-second test
+	 *  encode).  Persists the new capability and returns it.  Triggered
+	 *  by the Settings UI's "Re-detect" button.
+	 */
+	redetectEncoders: () => typedError<EncoderCapability, AppError>(__TAURI_INVOKE("redetect_encoders")),
+	setVideoQualityProfile: (input: SetVideoQualityProfileInput) => typedError<VideoQualityProfile, AppError>(__TAURI_INVOKE("set_video_quality_profile", { input })),
+	pickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("pick_vod", { input })),
+	pickNextN: (input: PickNextNInput) => typedError<string[], AppError>(__TAURI_INVOKE("pick_next_n", { input })),
+	unpickVod: (input: PickVodInput) => typedError<PickResult, AppError>(__TAURI_INVOKE("unpick_vod", { input })),
+	setDistributionMode: (input: SetDistributionModeInput) => typedError<DistributionMode, AppError>(__TAURI_INVOKE("set_distribution_mode", { input })),
+	setSlidingWindowSize: (input: SetSlidingWindowSizeInput) => typedError<number, AppError>(__TAURI_INVOKE("set_sliding_window_size", { input })),
 };
 
 /* Types */
@@ -314,6 +356,58 @@ export type AppSettings = {
 	 *  Empty / cleared when the user clicks "Don't skip".
 	 */
 	updateCheckSkipVersion: string | null,
+	/**
+	 *  Chosen video-quality profile.  Default `'720p30'` for new
+	 *  installs.  Persisted in `app_settings.video_quality_profile`
+	 *  (migration 0015).  Distinct from the legacy `quality_preset`
+	 *  field which is preserved for backwards-compat with v1.0
+	 *  installs that already have a value there.
+	 */
+	videoQualityProfile: VideoQualityProfile,
+	/**
+	 *  User opt-in for the libx265 / libx264 software fallback path.
+	 *  Default false; the encoder-detection pass surfaces a warning
+	 *  when no hardware encoder is available and this is off.
+	 */
+	softwareEncodeOptIn: boolean,
+	/**
+	 *  Detection result from `services::encoder_detection`.  `None`
+	 *  when detection has never run (cold start or after the user
+	 *  clicked "Re-detect" and the call hasn't yet completed).
+	 */
+	encoderCapability: EncoderCapability | null,
+	/**
+	 *  Concurrency cap on background re-encodes.  Default 1, hard
+	 *  clamped to 1..=2.
+	 */
+	maxConcurrentReencodes: number,
+	/**
+	 *  CPU-load fraction above which a sustained burst pauses the
+	 *  in-flight ffmpeg encoder (ADR-0029).
+	 */
+	cpuThrottleHighThreshold: number,
+	/**
+	 *  CPU-load fraction below which a sustained idle period resumes
+	 *  a paused encoder.  Strictly less than `cpu_throttle_high_threshold`
+	 *  (service-layer rejects an inverted pair).
+	 */
+	cpuThrottleLowThreshold: number,
+	/**
+	 *  Default `Pull` for new installs; existing v1.0 installs are
+	 *  pinned to `Auto` by migration 0017.
+	 */
+	distributionMode: DistributionMode,
+	/**
+	 *  Per-streamer cap on `(queued + downloading + ready)` rows.
+	 *  Default 2; range [1, 20].
+	 */
+	slidingWindowSize: number,
+	/**
+	 *  Whether the player's prefetch hook (ADR-0031) is allowed to
+	 *  auto-pick the next VOD.  Defaults to true; off = strict
+	 *  pull-only, the user picks every VOD by hand.
+	 */
+	prefetchEnabled: boolean,
 };
 
 export type AppShutdownRequestedEvent = {
@@ -527,6 +621,50 @@ export type DiskUsage = {
 	aboveHighWatermark: boolean,
 };
 
+/**
+ *  Distribution mode — selects between v1.0 auto-download
+ *  behaviour and the v2.0 pull-on-demand model.  Persisted in
+ *  `app_settings.distribution_mode` (migration 0017).  New installs
+ *  default to `Pull`; existing installs are pinned to `Auto` by the
+ *  migration's backward-compat detection.
+ */
+export type DistributionMode = 
+/**
+ *  v1.0 behaviour: polling auto-enqueues every newly-discovered
+ *  VOD into the download queue.
+ */
+"auto" | 
+/**
+ *  v2.0 default: polling produces `available` rows; the user
+ *  picks explicitly (or pre-fetch picks one VOD ahead).
+ */
+"pull";
+
+export type DistributionPrefetchTriggeredEvent = {
+	currentlyWatching: string,
+	prefetched: string,
+};
+
+export type DistributionVodArchivedEvent = {
+	vodId: string,
+};
+
+export type DistributionVodPickedEvent = {
+	vodId: string,
+	/**
+	 *  State the row was in before the pick.  Useful for the
+	 *  renderer's optimistic-update path: a `available -> queued`
+	 *  transition needs different cache invalidation than a
+	 *  `deleted -> queued` re-pick.
+	 */
+	fromStatus: string,
+};
+
+export type DistributionWindowEnforcedEvent = {
+	streamerId: string,
+	evictedVodId: string,
+};
+
 export type DownloadCompletedEvent = {
 	vodId: string,
 	finalPath: string,
@@ -605,6 +743,44 @@ export type DriftMeasurement = {
 	expectedPositionSeconds: number,
 	driftMs: number,
 };
+
+/**
+ *  Detection result persisted in `app_settings.encoder_capability`
+ *  as JSON.  Documented in ADR-0028 §Detection.
+ */
+export type EncoderCapability = {
+	/**
+	 *  Encoder the service will use first.  When this is
+	 *  [`EncoderKind::Software`] but `software_encode_opt_in = 0`
+	 *  in settings, the re-encode pass refuses to run and surfaces
+	 *  an error instead.
+	 */
+	primary: EncoderKind,
+	/**
+	 *  Every encoder that passed both the `-encoders` listing AND
+	 *  the runtime test encode.  Always contains [`EncoderKind::Software`]
+	 *  in the fallback position because libx265 is bundled with
+	 *  every ffmpeg sidecar build (ADR-0013).
+	 */
+	available: EncoderKind[],
+	// Whether the primary encoder supports H.265.
+	h265: boolean,
+	// Whether the primary encoder supports H.264.
+	h264: boolean,
+	/**
+	 *  Wall-clock seconds at which the detection ran.  Used by the
+	 *  Settings UI to render "Auto-detected (NN minutes ago)".
+	 */
+	testedAt: number,
+};
+
+/**
+ *  Hardware (or software) encoder available on this machine.  The
+ *  detection service (`services::encoder_detection`) builds an
+ *  [`EncoderCapability`] from running `ffmpeg -encoders` plus a
+ *  2-second test encode.
+ */
+export type EncoderKind = "video_toolbox" | "nvenc" | "amf" | "quick_sync" | "vaapi" | "software";
 
 export type EnqueueDownloadInput = {
 	vodId: string,
@@ -804,6 +980,24 @@ export type OverlapWindow = {
 	endAt: number,
 };
 
+export type PickNextNInput = {
+	streamerId: string,
+	n: number,
+};
+
+/**
+ *  Result of a `pick_vod` / `unpick_vod` call.  Carries the new
+ *  status so the renderer can update its cache without a re-fetch.
+ */
+export type PickResult = {
+	vodId: string,
+	status: VodStatus,
+};
+
+export type PickVodInput = {
+	vodId: string,
+};
+
 export type PollFinishedEvent = {
 	twitchUserId: string,
 	finishedAt: number,
@@ -856,9 +1050,17 @@ export type SetAutostartInput = {
 	enabled: boolean,
 };
 
+export type SetDistributionModeInput = {
+	mode: DistributionMode,
+};
+
 export type SetShortcutInput = {
 	actionId: string,
 	keys: string,
+};
+
+export type SetSlidingWindowSizeInput = {
+	size: number,
 };
 
 export type SetSyncLeaderInput = {
@@ -875,6 +1077,17 @@ export type SetSyncLeaderInput = {
 export type SetTwitchCredentialsInput = {
 	clientId: string,
 	clientSecret: string,
+};
+
+/**
+ *  Persist the chosen quality profile.  Wraps `update_settings` for
+ *  the typed-from-the-renderer "user picked a profile" gesture; the
+ *  generic `update_settings` command also accepts the field through
+ *  `SettingsPatch.video_quality_profile`, but a dedicated command
+ *  keeps the IPC surface readable on the Settings UI side.
+ */
+export type SetVideoQualityProfileInput = {
+	profile: VideoQualityProfile,
 };
 
 export type SetWindowCloseBehaviorInput = {
@@ -929,6 +1142,14 @@ export type SettingsPatch = {
 	 *  that release.  Omit to leave unchanged.
 	 */
 	updateCheckSkipVersion?: string | null,
+	videoQualityProfile?: VideoQualityProfile | null,
+	softwareEncodeOptIn?: boolean | null,
+	maxConcurrentReencodes?: number | null,
+	cpuThrottleHighThreshold?: number | null,
+	cpuThrottleLowThreshold?: number | null,
+	distributionMode?: DistributionMode | null,
+	slidingWindowSize?: number | null,
+	prefetchEnabled?: boolean | null,
 };
 
 /**
@@ -1186,6 +1407,13 @@ export type UpdaterUpdateAvailableEvent = {
 };
 
 /**
+ *  User-facing quality profile.  The wire strings are the strings we
+ *  persist in `app_settings.video_quality_profile`; do not rename
+ *  them without a migration.
+ */
+export type VideoQualityProfile = "480p30" | "480p60" | "720p30" | "720p60" | "1080p30" | "1080p60" | "source";
+
+/**
  *  Single-choke-point answer for `<video src>`. The player uses this
  *  to decide which state to render — the happy path (`ready`), the
  *  "file moved / deleted externally" path (`missing`), or the
@@ -1281,6 +1509,34 @@ export type VodIngestedEvent = {
 };
 
 export type VodSort = "stream_started_at_desc" | "stream_started_at_asc";
+
+/**
+ *  Lifecycle state of a single VOD row in the distribution model.
+ *  Persisted as `vods.status` (migration 0016).  CHECK constraint
+ *  in the migration file enforces the same closed set.
+ */
+export type VodStatus = 
+// Polled by the background, metadata only — file not on disk.
+"available" | 
+/**
+ *  User picked this VOD (or pre-fetch did); waiting for a
+ *  download worker.
+ */
+"queued" | 
+// Download in flight.
+"downloading" | 
+// File on disk, ready to play.
+"ready" | 
+/**
+ *  Watched (`watch_progress.state ∈ {completed, manually_watched}`)
+ *  — eligible for sliding-window cleanup.
+ */
+"archived" | 
+/**
+ *  Cleanup deleted the file.  Row stays so the user can re-pick
+ *  for a fresh download.
+ */
+"deleted";
 
 export type VodUpdatedEvent = {
 	twitchVideoId: string,

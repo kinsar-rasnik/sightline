@@ -25,20 +25,27 @@ use crate::infra::twitch::gql::GqlClient;
 use crate::infra::twitch::helix::HelixClient;
 use crate::services::cleanup::{CleanupEvent, CleanupEventSink, CleanupService};
 use crate::services::credentials::CredentialsService;
+use crate::services::distribution::{
+    DistributionEvent, DistributionEventSink, DistributionService,
+};
 use crate::services::downloads::{
     DownloadEvent, DownloadEventSink, DownloadQueueHandle, DownloadQueueService,
 };
+use crate::services::encoder_detection::EncoderDetectionService;
 use crate::services::events::{
     CleanupDiskPressureEvent, CleanupExecutedEvent, CleanupPlanReadyEvent, CredentialsChangedEvent,
-    DownloadCompletedEvent, DownloadFailedEvent, DownloadProgressEvent, DownloadStateChangedEvent,
-    EV_CLEANUP_DISK_PRESSURE, EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
-    EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED, EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED,
-    EV_LIBRARY_MIGRATING, EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED,
-    EV_POLL_FINISHED, EV_POLL_STARTED, EV_STREAMER_ADDED, EV_STREAMER_REMOVED,
-    EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED, EV_VOD_UPDATED, LibraryMigratingEvent,
-    LibraryMigrationCompletedEvent, LibraryMigrationFailedEvent, PollFinishedEvent,
-    PollStartedEvent, StreamerAddedEvent, StreamerRemovedEvent, UpdaterUpdateAvailableEvent,
-    VodIngestedEvent, VodUpdatedEvent,
+    DistributionPrefetchTriggeredEvent, DistributionVodArchivedEvent, DistributionVodPickedEvent,
+    DistributionWindowEnforcedEvent, DownloadCompletedEvent, DownloadFailedEvent,
+    DownloadProgressEvent, DownloadStateChangedEvent, EV_CLEANUP_DISK_PRESSURE,
+    EV_CLEANUP_EXECUTED, EV_CLEANUP_PLAN_READY, EV_CREDENTIALS_CHANGED,
+    EV_DISTRIBUTION_PREFETCH_TRIGGERED, EV_DISTRIBUTION_VOD_ARCHIVED, EV_DISTRIBUTION_VOD_PICKED,
+    EV_DISTRIBUTION_WINDOW_ENFORCED, EV_DOWNLOAD_COMPLETED, EV_DOWNLOAD_FAILED,
+    EV_DOWNLOAD_PROGRESS, EV_DOWNLOAD_STATE_CHANGED, EV_LIBRARY_MIGRATING,
+    EV_LIBRARY_MIGRATION_COMPLETED, EV_LIBRARY_MIGRATION_FAILED, EV_POLL_FINISHED, EV_POLL_STARTED,
+    EV_STREAMER_ADDED, EV_STREAMER_REMOVED, EV_UPDATER_UPDATE_AVAILABLE, EV_VOD_INGESTED,
+    EV_VOD_UPDATED, LibraryMigratingEvent, LibraryMigrationCompletedEvent,
+    LibraryMigrationFailedEvent, PollFinishedEvent, PollStartedEvent, StreamerAddedEvent,
+    StreamerRemovedEvent, UpdaterUpdateAvailableEvent, VodIngestedEvent, VodUpdatedEvent,
 };
 use crate::services::ingest::{IngestEvent, IngestService};
 use crate::services::library_migrator::{
@@ -91,6 +98,11 @@ pub struct AppState {
     // --- Phase 7: update checker ---
     pub updater: Arc<UpdaterService>,
     pub updater_sink: UpdaterEventSink,
+    // --- Phase 8: quality pipeline ---
+    pub encoder_detection: Arc<EncoderDetectionService>,
+    // --- Phase 8: pull-on-demand distribution ---
+    pub distribution: Arc<DistributionService>,
+    pub distribution_sink: DistributionEventSink,
     /// Sync mirror of `app_settings.window_close_behavior` so
     /// `on_window_event` can read the current preference without
     /// touching the async settings service. 0 = hide, 1 = quit.
@@ -313,6 +325,15 @@ pub fn run() {
                             crate::services::events::EV_WATCH_COMPLETED,
                             crate::services::events::WatchCompletedEvent { vod_id },
                         );
+                        // TODO(v2.0.x): call
+                        // `state.distribution.on_watched_completed`
+                        // here so a `Ready -> Archived` transition
+                        // fires + the sliding-window enforcer
+                        // runs.  Until then the v2.0 service is
+                        // implemented + tested but the runtime
+                        // trigger is dormant — see
+                        // `services::distribution` module doc and
+                        // `docs/MIGRATION-v1-to-v2.md`.
                     }
                 });
 
@@ -341,6 +362,69 @@ pub fn run() {
                         );
                     }
                 });
+
+                // Phase 8: encoder detection service.  Cheap to
+                // construct; the actual probe runs async in the
+                // background task spawned a few lines below so cold
+                // start isn't blocked on a 2-second ffmpeg probe.
+                let encoder_detection_svc = Arc::new(EncoderDetectionService::new(
+                    ffmpeg.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                    clock.clone(),
+                ));
+
+                // Phase 8: pull-on-demand distribution service +
+                // event sink.  The IPC commands wrap the service;
+                // events fan out via the same handle pattern as
+                // the cleanup / sync services.
+                let distribution_svc = Arc::new(DistributionService::new(
+                    db.clone(),
+                    clock.clone(),
+                    SettingsService::new(db.clone(), clock.clone()),
+                ));
+                let distribution_handle = handle.clone();
+                let distribution_sink: DistributionEventSink =
+                    Arc::new(move |ev| match ev {
+                        DistributionEvent::VodPicked { vod_id, from } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_PICKED,
+                                DistributionVodPickedEvent {
+                                    vod_id,
+                                    from_status: from.as_db_str().to_owned(),
+                                },
+                            );
+                        }
+                        DistributionEvent::VodArchived { vod_id } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_VOD_ARCHIVED,
+                                DistributionVodArchivedEvent { vod_id },
+                            );
+                        }
+                        DistributionEvent::PrefetchTriggered {
+                            currently_watching,
+                            prefetched,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_PREFETCH_TRIGGERED,
+                                DistributionPrefetchTriggeredEvent {
+                                    currently_watching,
+                                    prefetched,
+                                },
+                            );
+                        }
+                        DistributionEvent::WindowEnforced {
+                            streamer_id,
+                            evicted_vod_id,
+                        } => {
+                            let _ = distribution_handle.emit(
+                                EV_DISTRIBUTION_WINDOW_ENFORCED,
+                                DistributionWindowEnforcedEvent {
+                                    streamer_id,
+                                    evicted_vod_id,
+                                },
+                            );
+                        }
+                    });
 
                 // Phase 7: auto-cleanup service + event sink.
                 let cleanup_svc = Arc::new(CleanupService::new(
@@ -741,9 +825,33 @@ pub fn run() {
                     cleanup_sink: cleanup_sink.clone(),
                     updater: updater_svc.clone(),
                     updater_sink: updater_sink.clone(),
+                    encoder_detection: encoder_detection_svc.clone(),
+                    distribution: distribution_svc,
+                    distribution_sink: distribution_sink.clone(),
                     close_behavior,
                     app_handle: handle.clone(),
                 });
+
+                // Phase 8: run encoder detection in the background
+                // so cold-start UX isn't blocked.  If an existing
+                // capability is already persisted, the user sees it
+                // immediately while the probe refreshes.
+                {
+                    let svc = encoder_detection_svc.clone();
+                    tokio::spawn(async move {
+                        match svc.detect_and_persist().await {
+                            Ok(cap) => {
+                                info!(
+                                    primary = %cap.primary.as_str(),
+                                    "encoder capability detected"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(error = ?e, "encoder detection failed at startup");
+                            }
+                        }
+                    });
+                }
 
                 // Phase 7: spawn the cleanup tray-daemon tick.  It
                 // wakes every 5 minutes, checks disk pressure, and

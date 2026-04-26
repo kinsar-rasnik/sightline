@@ -3,8 +3,15 @@
 > A cross-platform desktop app for watching multi-streamer GTA Roleplay events on one unified, chronological timeline — with synchronized multi-perspective playback.
 
 <p align="center">
-  <em>v1.0.0 — local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
+  <em>v2.0.0 — storage-aware, local-first, MIT-licensed, runs on macOS / Windows / Linux.</em>
 </p>
+
+> **v2.0 highlights** — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
+> - **Pull-on-demand** is the new default for fresh installs: polling discovers VODs as `available`, and you pick what to actually download.  Existing v1.0 installs keep their auto-download behaviour automatically; toggle in Settings → Distribution.
+> - **720p30 H.265 default** with hardware-encode-first detection (VideoToolbox / NVENC / AMF / QuickSync / VAAPI).  Audio is **never** re-encoded.
+> - **Background-friendly re-encode** drops priority and adaptively suspends ffmpeg when CPU load is high — no more frame drops in your game.
+> - **Sliding window** caps disk use at `streamer_count × window_size × avg_VOD_GB`.
+> - **Migration v1 → v2** is automatic and reversible.  See [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).
 
 ---
 
@@ -35,6 +42,9 @@ All data stays on your machine. No account required. No telemetry. The optional 
 - **Player** with resume-from-position, mark-as-watched, chapter scrubber.
 - **Multi-View Sync.** Open two VODs side-by-side, lock them to shared wall-clock time, seek one and the other follows.
 - **Auto-cleanup** of watched VODs (24h / 7d / 30d / off).
+- **Pull-on-demand distribution (v2.0)** — pick VODs explicitly, no surprise downloads.  Sliding window keeps disk use bounded.
+- **Storage forecast (v2.0.x)** — see disk + bandwidth cost of adding a streamer before you commit.
+- **Quality pipeline (v2.0)** — 720p30 H.265 default, hardware-encode-first, audio passthrough invariant, CPU-throttle for background re-encodes.
 - **Sub-only detection** — clearly flagged, never silently failed downloads.
 - **Proton Drive–friendly.** The library root can live under any sync provider; the app handles temporary file locks gracefully.
 
