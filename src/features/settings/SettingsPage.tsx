@@ -26,12 +26,7 @@ import { StorageOutlook } from "@/features/storage/StorageOutlook";
 import { StorageSection } from "@/features/storage/StorageSection";
 import { UpdateSettingsSection } from "@/features/updater/UpdateSettingsSection";
 import { commands } from "@/ipc";
-import type {
-  AppSettings,
-  LibraryLayoutKind,
-  QualityPreset,
-  SettingsPatch,
-} from "@/ipc";
+import type { AppSettings, LibraryLayoutKind, SettingsPatch } from "@/ipc";
 import { formatBytes } from "@/lib/format";
 
 const KNOWN_GAMES: Array<{ id: string; name: string }> = [
@@ -678,29 +673,6 @@ function DownloadsAndStorageSection({
           pending={pending}
         />
       </div>
-
-      <fieldset className="space-y-2">
-        <legend className="text-xs text-[--color-muted]">Quality preset</legend>
-        <div className="flex flex-wrap gap-2">
-          {(["source", "1080p60", "720p60", "480p"] as QualityPreset[]).map(
-            (preset) => (
-              <button
-                key={preset}
-                type="button"
-                aria-pressed={settings.qualityPreset === preset}
-                onClick={() => onUpdate({ qualityPreset: preset })}
-                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  settings.qualityPreset === preset
-                    ? "bg-[--color-accent] text-white border-transparent"
-                    : "bg-transparent text-[--color-fg] border-[--color-border] hover:bg-[--color-surface]"
-                }`}
-              >
-                {preset}
-              </button>
-            )
-          )}
-        </div>
-      </fieldset>
 
       <div className="space-y-1 max-w-2xl">
         <label className="block text-xs">
