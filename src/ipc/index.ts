@@ -33,6 +33,8 @@ import {
   type CredentialsStatus,
   type CheckForUpdateInput,
   type DiskUsage,
+  type EncoderCapability,
+  type EncoderKind,
   type ExecuteCleanupInput,
   type OpenReleaseUrlInput,
   type SkipUpdateVersionInput,
@@ -104,6 +106,7 @@ import {
   type RecordSyncDriftInput,
   type ReportSyncOutOfRangeInput,
   type SetSyncLeaderInput,
+  type SetVideoQualityProfileInput,
   type SyncDriftCorrectedEvent,
   type SyncGroupClosedEvent,
   type SyncLayout,
@@ -117,6 +120,7 @@ import {
   type SyncStateChangedEvent,
   type SyncStatus,
   type UpdateWatchProgressInput,
+  type VideoQualityProfile,
   type VideoSource,
   type VideoSourceState,
   type VodAssets,
@@ -159,6 +163,8 @@ export type {
   CredentialsStatus,
   CheckForUpdateInput,
   DiskUsage,
+  EncoderCapability,
+  EncoderKind,
   ExecuteCleanupInput,
   OpenReleaseUrlInput,
   SkipUpdateVersionInput,
@@ -230,6 +236,7 @@ export type {
   RecordSyncDriftInput,
   ReportSyncOutOfRangeInput,
   SetSyncLeaderInput,
+  SetVideoQualityProfileInput,
   SyncDriftCorrectedEvent,
   SyncGroupClosedEvent,
   SyncLayout,
@@ -243,6 +250,7 @@ export type {
   SyncStateChangedEvent,
   SyncStatus,
   UpdateWatchProgressInput,
+  VideoQualityProfile,
   VideoSource,
   VideoSourceState,
   VodAssets,
@@ -519,6 +527,15 @@ export const commands = {
   openReleaseUrl: async (input: OpenReleaseUrlInput): Promise<void> => {
     unwrap(await generatedCommands.openReleaseUrl(input));
   },
+  // --- Phase 8: quality pipeline ---
+  getEncoderCapability: async (): Promise<EncoderCapability | null> =>
+    unwrap(await generatedCommands.getEncoderCapability()),
+  redetectEncoders: async (): Promise<EncoderCapability> =>
+    unwrap(await generatedCommands.redetectEncoders()),
+  setVideoQualityProfile: async (
+    input: SetVideoQualityProfileInput,
+  ): Promise<VideoQualityProfile> =>
+    unwrap(await generatedCommands.setVideoQualityProfile(input)),
 };
 
 /**
