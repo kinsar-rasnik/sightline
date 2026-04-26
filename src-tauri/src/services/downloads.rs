@@ -37,7 +37,8 @@ use crate::domain::download_state::{
 };
 use crate::domain::library_layout::{LibraryLayoutKind, VodWithStreamer, layout as build_layout};
 use crate::domain::nfo::{NfoInput, generate as generate_nfo};
-use crate::domain::quality_preset::{QualityPreset, resolve as resolve_preset};
+use crate::domain::quality::VideoQualityProfile;
+use crate::domain::quality_preset::QualityPreset;
 use crate::domain::sanitize::sanitize_component;
 use crate::error::AppError;
 use crate::infra::clock::Clock;
@@ -678,7 +679,11 @@ impl DownloadQueueService {
             });
         }
 
-        // Ask yt-dlp for source metadata so we can preflight + resolve quality.
+        // Ask yt-dlp for source metadata so we can preflight + report
+        // size estimates.  Quality selection itself reads the Phase 8
+        // `video_quality_profile` setting (ADR-0028 / ADR-0035) — the
+        // legacy `quality_preset` field is preserved on the row but
+        // is no longer load-bearing for the format selector.
         let info = self
             .ytdlp
             .fetch_info(&VodInfoRequest {
@@ -689,11 +694,7 @@ impl DownloadQueueService {
                 reason: format!("fetch_info: {e}"),
                 retryable: true,
             })?;
-        let resolved = resolve_preset(
-            settings.quality_preset,
-            info.height.unwrap_or(0),
-            info.fps.unwrap_or(0),
-        );
+        let profile: VideoQualityProfile = settings.video_quality_profile;
 
         let estimated = size_estimate(&info).unwrap_or(512 * 1024 * 1024);
         check_preflight(
@@ -727,7 +728,7 @@ impl DownloadQueueService {
             url: vod.vod.url.clone(),
             output_dir: staging_root.clone(),
             output_stem: stem.clone(),
-            format_selector: resolved.format_selector().into(),
+            format_selector: profile.format_selector().into(),
             limit_rate_bps: self.rate.per_worker_bps(),
             no_part,
         };
@@ -905,7 +906,7 @@ impl DownloadQueueService {
 
         Ok(PipelineOk {
             final_path,
-            quality_resolved: Some(resolved.as_db_str().into()),
+            quality_resolved: Some(profile.as_db_str().into()),
         })
     }
 
@@ -1547,5 +1548,140 @@ mod tests {
         svc.enqueue("v1", Some(100)).await.unwrap();
         let row = svc.reprioritize("v1", 500).await.unwrap();
         assert_eq!(row.priority, 500);
+    }
+
+    /// AC1 trip-wire (v2.0.3 hotfix): the pipeline must build the
+    /// yt-dlp `--format` selector from `app_settings.video_quality_profile`
+    /// (Phase 8 / ADR-0028), NOT from the legacy `quality_preset`
+    /// column.  In v2.0.2 the bug here meant a CEO who set 720p30 in
+    /// Settings still got the legacy `Source` default, which on
+    /// Twitch resolves to 1080p60 H.264 — 13 GB for a 6-hour VOD.
+    /// See ADR-0035 and the mission report for v2.0.3.
+    #[tokio::test]
+    async fn pipeline_uses_video_quality_profile_for_format_selector() {
+        use crate::domain::quality::VideoQualityProfile;
+        use crate::infra::ytdlp::SharedYtDlp;
+        use crate::services::settings::SettingsPatch;
+
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(1_000_000));
+        let settings_svc = SettingsService::new(db.clone(), clock.clone());
+
+        // Concrete YtDlpFake handle so we can inspect call records.
+        let ytdlp_fake = Arc::new(YtDlpFake::new(FakeScript::default()));
+        let ytdlp: SharedYtDlp = ytdlp_fake.clone();
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let library_dir = tempfile::tempdir().unwrap();
+
+        let svc = Arc::new(DownloadQueueService::new(
+            db.clone(),
+            clock.clone(),
+            ytdlp,
+            Arc::new(FfmpegFake::new(FfmpegScript::default())),
+            Arc::new(FakeFreeSpace(u64::MAX)),
+            Arc::new(GlobalRate::new()),
+            SettingsService::new(db.clone(), clock.clone()),
+            Arc::new(VodReadService::new(db.clone())),
+            staging_dir.path().to_path_buf(),
+        ));
+
+        seed_streamer_and_vod(&db).await;
+
+        // The CEO's v2.0.2 install configures 720p30 H.265 — that
+        // setting is the AC1 anchor.  We also point library_root
+        // somewhere writable so the post-download pipeline doesn't
+        // bail on the "library root not configured" arm.
+        settings_svc
+            .update(SettingsPatch {
+                video_quality_profile: Some(VideoQualityProfile::P720p30),
+                library_root: Some(library_dir.path().display().to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        svc.enqueue("v1", None).await.unwrap();
+        let events: DownloadEventSink = Arc::new(|_| {});
+        svc.process_one(&events, "v1").await.unwrap();
+
+        let calls = ytdlp_fake.calls();
+        assert_eq!(
+            calls.downloads.len(),
+            1,
+            "expected exactly one yt-dlp download spawn"
+        );
+        let sel = &calls.downloads[0].format_selector;
+        assert!(
+            sel.contains("[height<=720]"),
+            "selector should cap height at 720, got: {sel}"
+        );
+        assert!(
+            sel.contains("[fps<=30]"),
+            "selector should cap fps at 30, got: {sel}"
+        );
+        assert!(
+            sel.contains("bestaudio"),
+            "ADR-0028 audio passthrough: selector must keep bestaudio, got: {sel}"
+        );
+        assert!(
+            !sel.contains("vcodec"),
+            "selector must not filter on vcodec (re-encode handles H.265), got: {sel}"
+        );
+    }
+
+    /// Companion to the AC1 trip-wire: when the user picks `Source`
+    /// (the legacy v1.0 default) the pipeline must spawn yt-dlp with
+    /// the unrestricted `bestvideo+bestaudio/best` selector — i.e.
+    /// the v1.0 behaviour is preserved when the user explicitly asks
+    /// for it, separate from the v2 default.
+    #[tokio::test]
+    async fn pipeline_with_source_profile_does_not_cap_height_or_fps() {
+        use crate::domain::quality::VideoQualityProfile;
+        use crate::infra::ytdlp::SharedYtDlp;
+        use crate::services::settings::SettingsPatch;
+
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(1_000_000));
+        let settings_svc = SettingsService::new(db.clone(), clock.clone());
+
+        let ytdlp_fake = Arc::new(YtDlpFake::new(FakeScript::default()));
+        let ytdlp: SharedYtDlp = ytdlp_fake.clone();
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let library_dir = tempfile::tempdir().unwrap();
+
+        let svc = Arc::new(DownloadQueueService::new(
+            db.clone(),
+            clock.clone(),
+            ytdlp,
+            Arc::new(FfmpegFake::new(FfmpegScript::default())),
+            Arc::new(FakeFreeSpace(u64::MAX)),
+            Arc::new(GlobalRate::new()),
+            SettingsService::new(db.clone(), clock.clone()),
+            Arc::new(VodReadService::new(db.clone())),
+            staging_dir.path().to_path_buf(),
+        ));
+
+        seed_streamer_and_vod(&db).await;
+
+        settings_svc
+            .update(SettingsPatch {
+                video_quality_profile: Some(VideoQualityProfile::Source),
+                library_root: Some(library_dir.path().display().to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        svc.enqueue("v1", None).await.unwrap();
+        let events: DownloadEventSink = Arc::new(|_| {});
+        svc.process_one(&events, "v1").await.unwrap();
+
+        let calls = ytdlp_fake.calls();
+        let sel = &calls.downloads[0].format_selector;
+        assert_eq!(sel, "bestvideo+bestaudio/best");
     }
 }

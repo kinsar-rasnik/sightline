@@ -103,6 +103,66 @@ impl VideoQualityProfile {
         }
     }
 
+    /// yt-dlp `-f` format selector for this profile.  Returned as a
+    /// static string — no allocation per invocation.
+    ///
+    /// **Audio invariance (ADR-0028).**  Every selector pairs the
+    /// video stream with `bestaudio` so the audio track passes
+    /// through unchanged into the muxed file.  The downstream ffmpeg
+    /// pass uses `-c:a copy`, completing the byte-exact passthrough
+    /// chain.  A future change that swaps `bestaudio` for an
+    /// audio-codec-restricted selector would silently break the
+    /// guarantee — the unit test
+    /// `every_selector_contains_bestaudio` is the trip-wire.
+    ///
+    /// **Codec policy.**  Selectors filter on `height` and `fps` only,
+    /// never on `vcodec`.  Twitch overwhelmingly delivers H.264; the
+    /// Phase 8 H.265 target is reached by the post-download re-encode
+    /// pass (`services::reencode`), not by yt-dlp's source pick.
+    ///
+    /// **30-fps fallback chain.**  30-fps profiles include a
+    /// height-only fallback step so a source that exposes only
+    /// 60-fps variants downloads at the requested height (the
+    /// re-encoder downsamples fps).  60-fps profiles don't need this
+    /// step because `[fps<=60]` already accepts every reasonable
+    /// Twitch variant.  In both cases the final `/best` is the
+    /// safety net for sources missing every height tier.
+    pub fn format_selector(self) -> &'static str {
+        match self {
+            VideoQualityProfile::Source => "bestvideo+bestaudio/best",
+            VideoQualityProfile::P480p30 => {
+                "bestvideo[height<=480][fps<=30]+bestaudio\
+                 /best[height<=480][fps<=30]\
+                 /bestvideo[height<=480]+bestaudio\
+                 /best[height<=480]/best"
+            }
+            VideoQualityProfile::P480p60 => {
+                "bestvideo[height<=480][fps<=60]+bestaudio\
+                 /best[height<=480][fps<=60]/best"
+            }
+            VideoQualityProfile::P720p30 => {
+                "bestvideo[height<=720][fps<=30]+bestaudio\
+                 /best[height<=720][fps<=30]\
+                 /bestvideo[height<=720]+bestaudio\
+                 /best[height<=720]/best"
+            }
+            VideoQualityProfile::P720p60 => {
+                "bestvideo[height<=720][fps<=60]+bestaudio\
+                 /best[height<=720][fps<=60]/best"
+            }
+            VideoQualityProfile::P1080p30 => {
+                "bestvideo[height<=1080][fps<=30]+bestaudio\
+                 /best[height<=1080][fps<=30]\
+                 /bestvideo[height<=1080]+bestaudio\
+                 /best[height<=1080]/best"
+            }
+            VideoQualityProfile::P1080p60 => {
+                "bestvideo[height<=1080][fps<=60]+bestaudio\
+                 /best[height<=1080][fps<=60]/best"
+            }
+        }
+    }
+
     /// Human-readable label used by the Settings UI.  Stable strings
     /// are not part of the IPC contract — the renderer i18ns these
     /// in v2.x — but keeping them in the domain layer keeps the
@@ -401,6 +461,127 @@ mod tests {
         let json = serde_json::to_string(&cap).unwrap();
         let parsed: EncoderCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, parsed);
+    }
+
+    /// ADR-0028 audio-passthrough invariant trip-wire: every
+    /// selector must include `bestaudio` so the muxed audio stream
+    /// is the source stream byte-for-byte.  A future change that
+    /// swaps in `aac` / `libopus` / etc. flips this test red.
+    #[test]
+    fn every_selector_contains_bestaudio() {
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P480p60,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P720p60,
+            VideoQualityProfile::P1080p30,
+            VideoQualityProfile::P1080p60,
+            VideoQualityProfile::Source,
+        ] {
+            let sel = p.format_selector();
+            assert!(
+                sel.contains("bestaudio"),
+                "{p:?} selector missing bestaudio: {sel}"
+            );
+        }
+    }
+
+    /// Selectors must NEVER carry a `vcodec` filter — Twitch's H.264
+    /// source is always acceptable as input and the H.265 target is
+    /// the re-encode pass's job, not yt-dlp's source pick.
+    #[test]
+    fn no_selector_filters_on_vcodec() {
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P480p60,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P720p60,
+            VideoQualityProfile::P1080p30,
+            VideoQualityProfile::P1080p60,
+            VideoQualityProfile::Source,
+        ] {
+            let sel = p.format_selector();
+            assert!(
+                !sel.contains("vcodec"),
+                "{p:?} selector unexpectedly filters on vcodec: {sel}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_selector_passes_through_best_quality() {
+        // Source must not impose any height / fps cap — pure passthrough.
+        let sel = VideoQualityProfile::Source.format_selector();
+        assert_eq!(sel, "bestvideo+bestaudio/best");
+        assert!(!sel.contains("height"), "Source must not cap height: {sel}");
+        assert!(!sel.contains("fps"), "Source must not cap fps: {sel}");
+    }
+
+    #[test]
+    fn capped_profiles_use_their_height_in_every_height_clause() {
+        // For each non-Source profile, every `[height<=N]` clause must
+        // use the profile's max_height.  Catches a copy/paste bug
+        // where, e.g., the 720p30 selector accidentally references 1080.
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P480p60,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P720p60,
+            VideoQualityProfile::P1080p30,
+            VideoQualityProfile::P1080p60,
+        ] {
+            let cap = p.max_height().unwrap();
+            let needle = format!("[height<={cap}]");
+            let sel = p.format_selector();
+            assert!(
+                sel.contains(&needle),
+                "{p:?} selector missing {needle}: {sel}"
+            );
+        }
+    }
+
+    #[test]
+    fn capped_profiles_request_their_target_fps() {
+        // Each non-Source profile must include at least one
+        // `[fps<=N]` clause matching its max_fps.  This is what
+        // actually drives Twitch's variant pick — without it the
+        // 30-fps profiles would silently grab 60-fps variants.
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P480p60,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P720p60,
+            VideoQualityProfile::P1080p30,
+            VideoQualityProfile::P1080p60,
+        ] {
+            let target = p.max_fps().unwrap();
+            let needle = format!("[fps<={target}]");
+            let sel = p.format_selector();
+            assert!(
+                sel.contains(&needle),
+                "{p:?} selector missing {needle}: {sel}"
+            );
+        }
+    }
+
+    #[test]
+    fn thirty_fps_profiles_have_height_only_fallback() {
+        // 30-fps profiles need a height-only fallback so a source
+        // exposing only 60-fps variants still downloads at the
+        // requested height (the re-encoder then downsamples fps).
+        for p in [
+            VideoQualityProfile::P480p30,
+            VideoQualityProfile::P720p30,
+            VideoQualityProfile::P1080p30,
+        ] {
+            let cap = p.max_height().unwrap();
+            let needle = format!("/bestvideo[height<={cap}]+bestaudio");
+            let sel = p.format_selector();
+            assert!(
+                sel.contains(&needle),
+                "{p:?} selector missing height-only fallback {needle}: {sel}"
+            );
+        }
     }
 
     #[test]
