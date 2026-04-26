@@ -1032,6 +1032,14 @@ async fn sync_vods_after_download_state(
 /// against missing vod rows (UPDATE WHERE returns 0 rows-affected).
 /// Public crate-internal helper because both `enqueue` (which is
 /// called from the IPC layer) and the worker transitions need it.
+///
+/// SAFETY (rust-backend.md): the SQL is built with `format!` rather
+/// than the `query!` macro because the `IN (?, ...)` placeholder
+/// list has a variable length that the macro cannot validate at
+/// compile time.  The `valid_from` slice is `&[&str]` from internal
+/// callers only — every `target` and every element comes from a
+/// `'static` literal in `target_vods_status_for_state`.  No user
+/// input touches this function.
 async fn sync_vod_status(
     pool: &sqlx::SqlitePool,
     vod_id: &str,

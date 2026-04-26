@@ -1,6 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 
 import { Button } from "@/components/primitives/Button";
 import { ErrorBanner } from "@/components/primitives/ErrorBanner";
@@ -16,7 +15,7 @@ import { useVods } from "@/features/vods/use-vods";
 import { VodCard } from "@/features/vods/VodCard";
 import {
   commands,
-  events,
+  IpcError,
   type CoStream,
   type DownloadRow,
   type VodStatus,
@@ -92,49 +91,34 @@ export function LibraryPage() {
     return vods.data.filter((v) => matchesLifecycle(v.vod.status, lifecycle));
   }, [vods.data, lifecycle]);
 
-  // ADR-0033 §Event-driven UI updates: subscribe to distribution
-  // events and bust the vods cache so status badges + filter chips
-  // reflect reality immediately rather than after the next refetch.
-  // R-RC-02 fix: track resolved unlisteners in a ref so cleanup is
-  // synchronous and the unmounted component cannot receive a late
-  // event tick into invalidateQueries.
-  useEffect(() => {
-    let cancelled = false;
-    const unlisteners: Array<() => void> = [];
-    const subscribe = async (
-      topic: string,
-      handler: () => void
-    ): Promise<void> => {
-      const unsub = await listen(topic, handler);
-      if (cancelled) {
-        unsub();
-        return;
-      }
-      unlisteners.push(unsub);
-    };
-    const invalidate = () =>
-      qc.invalidateQueries({ queryKey: ["vods"] });
-    void Promise.all([
-      subscribe(events.distributionVodPicked, invalidate),
-      subscribe(events.distributionVodArchived, invalidate),
-      subscribe(events.distributionWindowEnforced, invalidate),
-      subscribe(events.downloadCompleted, invalidate),
-    ]);
-    return () => {
-      cancelled = true;
-      unlisteners.forEach((u) => u());
-    };
-  }, [qc]);
+  // ADR-0033 §Event-driven UI updates: cache invalidation for
+  // distribution + download events is centralised in
+  // `src/lib/event-subscriptions.ts` (subscribed once at app
+  // startup), so the Library page no longer needs its own
+  // listener.  Cross-route consistency: a download completing
+  // while the user is on Settings will still bust the vods cache,
+  // so the badge update is visible the moment they navigate back.
 
   const handleDownload = async (vodId: string) => {
     setActionError(null);
     try {
       await commands.pickVod({ vodId });
-    } catch {
-      // Pull-mode pick failed — fall back to the legacy enqueue
-      // path so a user in auto-mode (or with a stale vods.status)
-      // still gets the download started. Await mutateAsync so the
-      // subsequent invalidateQueries observes the new row.
+    } catch (err) {
+      // R-RC-02 fix: narrow the fallback to InvalidInput only.
+      // For any other error variant (DB pool down, unknown VOD,
+      // etc.) we surface it instead of silently re-firing through
+      // the legacy enqueue path — that path would succeed
+      // idempotently for an already-queued row but emit a noisy
+      // duplicate event.  InvalidInput is the only variant where
+      // the auto-mode fallback is the right move (a user in
+      // auto-mode whose vods.status hasn't been backfilled).
+      const isInvalidInput =
+        err instanceof IpcError && err.appError.kind === "invalid_input";
+      if (!isInvalidInput) {
+        const detail = err instanceof Error ? err.message : "unknown error";
+        setActionError(`Could not start download: ${detail}`);
+        return;
+      }
       try {
         await enqueue.mutateAsync(vodId);
       } catch (e) {

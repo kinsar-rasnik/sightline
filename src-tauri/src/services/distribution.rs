@@ -233,8 +233,15 @@ impl DistributionService {
         }
         validate_transition(current, VodStatus::Deleted).map_err(|e| map_distribution_err(&e))?;
         self.write_status(vod_id, VodStatus::Deleted).await?;
-        // Also flag the downloads row as cancelled so the queue
-        // doesn't try to "complete" it on a future tick.
+        // Flag the downloads row as cancelled so the queue does
+        // not try to "complete" it on a future tick.  We do NOT
+        // call the `downloads::sync_vods_after_download_state`
+        // helper here — vods.status is already 'deleted' from
+        // `write_status` above, and that helper's FailedPermanent
+        // branch only allows 'queued'/'downloading' as valid_from,
+        // so the call would silently no-op.  Using a raw UPDATE
+        // makes the intent explicit: distribution → downloads
+        // convergence, not the reverse direction.
         sqlx::query(
             "UPDATE downloads SET state = 'failed_permanent',
                  last_error = 'user_removed', last_error_at = ?
@@ -714,6 +721,45 @@ mod tests {
         let (sink, _) = capture_sink();
         let err = svc.remove_vod("v1", &sink).await.unwrap_err();
         assert!(matches!(err, AppError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
+    async fn remove_vod_unlinks_the_underlying_file() {
+        // R-RC-02 follow-up: prove that the best-effort
+        // tokio::fs::remove_file actually fires for a real downloads
+        // row with a populated final_path.
+        let (svc, db) = setup().await;
+        seed_vod(&db, "s1", "v1", "ready", 100).await;
+        // Seed a real file on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let final_path = tmp.path().join("v1.mp4");
+        tokio::fs::write(&final_path, b"deadbeef").await.unwrap();
+        // Seed a downloads row that points at the file.  The
+        // downloads.state machine requires CHECK-allowed values
+        // and the foreign-key target (vods row) is already there.
+        sqlx::query(
+            "INSERT INTO downloads (vod_id, state, priority, quality_preset,
+                 final_path, queued_at, finished_at)
+             VALUES ('v1', 'completed', 100, 'source', ?, 0, 1)",
+        )
+        .bind(final_path.display().to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        assert!(final_path.exists());
+        let (sink, _) = capture_sink();
+        svc.remove_vod("v1", &sink).await.unwrap();
+        assert!(
+            !final_path.exists(),
+            "remove_vod must unlink the underlying file"
+        );
+        // downloads row also flipped to failed_permanent.
+        let dl_state: String =
+            sqlx::query_scalar("SELECT state FROM downloads WHERE vod_id = 'v1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(dl_state, "failed_permanent");
     }
 
     #[tokio::test]

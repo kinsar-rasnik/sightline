@@ -17,10 +17,17 @@ export function subscribeEventsToQueryClient(client: QueryClient): Promise<Unlis
     [events.vodIngested, [["vods"], ["streamers"], ["poll-status"]]],
     [events.vodUpdated, [["vods"], ["poll-status"]]],
     [events.pollFinished, [["poll-status"], ["streamers"]]],
-    [events.downloadStateChanged, [["downloads"]]],
-    [events.downloadCompleted, [["downloads"], ["library-info"]]],
-    [events.downloadFailed, [["downloads"]]],
+    [events.downloadStateChanged, [["downloads"], ["vods"]]],
+    [events.downloadCompleted, [["downloads"], ["library-info"], ["vods"]]],
+    [events.downloadFailed, [["downloads"], ["vods"]]],
     [events.libraryMigrationCompleted, [["library-info"], ["downloads"]]],
+    // v2.0.1: distribution lifecycle drives Library UI badge state.
+    // Bust the vods + forecast caches whenever the distribution
+    // state machine moves a row.
+    [events.distributionVodPicked, [["vods"], ["forecast"]]],
+    [events.distributionVodArchived, [["vods"], ["forecast"]]],
+    [events.distributionWindowEnforced, [["vods"], ["forecast"]]],
+    [events.distributionPrefetchTriggered, [["vods"]]],
   ];
 
   const store = useActivePollsStore.getState();

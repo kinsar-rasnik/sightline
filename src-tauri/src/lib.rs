@@ -432,6 +432,9 @@ pub fn run() {
                         // window enforce.  Best-effort — the watch
                         // event already fired and the user's session
                         // shouldn't stall on a distribution failure.
+                        // A pool-closed error during clean shutdown
+                        // is expected-and-benign; a future reviewer
+                        // should NOT add a retry loop here.
                         let dist = watch_distribution.clone();
                         let sink = watch_distribution_sink.clone();
                         tokio::spawn(async move {
