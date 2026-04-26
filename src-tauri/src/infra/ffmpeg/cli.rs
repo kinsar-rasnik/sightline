@@ -205,37 +205,9 @@ impl Ffmpeg for FfmpegCli {
 
     async fn reencode(&self, spec: &ReencodeSpec) -> Result<(), AppError> {
         let mut cmd = self.command();
-        cmd.args(["-y", "-i"]).arg(&spec.source);
-
-        // Build the video filter chain: width/height + fps if
-        // requested.  We use `scale` rather than `scale_vt` /
-        // `scale_npp` to avoid filter-name divergence between the
-        // hardware encoders — the hwaccel-aware path is a v2.x
-        // optimisation.  Software scale is fine for the bandwidth
-        // numbers Phase 8 targets.
-        let mut filters: Vec<String> = Vec::new();
-        if let Some(h) = spec.max_height {
-            filters.push(format!("scale=-2:'min({h},ih)'"));
+        for arg in build_reencode_args(spec) {
+            cmd.arg(arg);
         }
-        if let Some(fps) = spec.max_fps {
-            filters.push(format!("fps={fps}"));
-        }
-        if !filters.is_empty() {
-            cmd.args(["-vf", &filters.join(",")]);
-        }
-
-        cmd.args([
-            "-c:v",
-            &spec.video_encoder_arg,
-            // Audio passthrough — load-bearing invariant per
-            // ADR-0028 §Audio policy.  Tested by
-            // `services::reencode::tests::audio_passthrough_is_byte_exact`.
-            "-c:a",
-            "copy",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(&spec.destination);
 
         let mut child = cmd
             .stdout(Stdio::null())
@@ -265,6 +237,53 @@ impl Ffmpeg for FfmpegCli {
         }
         Ok(())
     }
+}
+
+/// Build the argument vector handed to ffmpeg for a re-encode pass.
+/// Pure — exposed so tests can assert the audio-passthrough invariant
+/// (ADR-0028 §Audio policy) without spawning a real ffmpeg.
+///
+/// Layout (left-to-right): `-y -i <src> [-vf <filter>] -c:v <enc> -c:a copy -movflags +faststart <dst>`.
+/// Every non-source quality profile must produce exactly one
+/// `-c:a copy` and no other `-c:a` value.
+pub fn build_reencode_args(spec: &ReencodeSpec) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+
+    let mut args: Vec<OsString> = Vec::new();
+    args.push(OsString::from("-y"));
+    args.push(OsString::from("-i"));
+    args.push(spec.source.clone().into_os_string());
+
+    // Video filter chain: width/height + fps if requested.  We use
+    // `scale` rather than `scale_vt` / `scale_npp` to avoid filter-
+    // name divergence between the hardware encoders — the
+    // hwaccel-aware path is a v2.x optimisation.  Software scale is
+    // fine for the bandwidth numbers Phase 8 targets.
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(h) = spec.max_height {
+        filters.push(format!("scale=-2:'min({h},ih)'"));
+    }
+    if let Some(fps) = spec.max_fps {
+        filters.push(format!("fps={fps}"));
+    }
+    if !filters.is_empty() {
+        args.push(OsString::from("-vf"));
+        args.push(OsString::from(filters.join(",")));
+    }
+
+    args.push(OsString::from("-c:v"));
+    args.push(OsString::from(&spec.video_encoder_arg));
+    // Audio passthrough — load-bearing invariant per ADR-0028
+    // §Audio policy.  Tested by
+    // `infra::ffmpeg::cli::tests::reencode_args_pass_audio_through`
+    // and `services::reencode::tests::audio_passthrough_is_byte_exact`.
+    args.push(OsString::from("-c:a"));
+    args.push(OsString::from("copy"));
+    args.push(OsString::from("-movflags"));
+    args.push(OsString::from("+faststart"));
+    args.push(spec.destination.clone().into_os_string());
+
+    args
 }
 
 /// Parse the lines of `ffmpeg -encoders` and return the tracked
@@ -317,8 +336,85 @@ pub fn parse_encoders_output(text: &str) -> Vec<EncoderListing> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::infra::ffmpeg::ProcessPriority;
+
+    /// ADR-0028 §Audio policy regression guard.  Asserts that the
+    /// argument vector handed to ffmpeg for any non-source profile
+    /// contains exactly one `-c:a` directive and that its value is
+    /// `copy`.  A future engineer accidentally swapping in `-c:a aac`
+    /// or `-c:a libopus` would flip this test red immediately.
+    #[test]
+    fn reencode_args_pass_audio_through() {
+        let spec = ReencodeSpec {
+            source: std::path::PathBuf::from("/tmp/in.mp4"),
+            destination: std::path::PathBuf::from("/tmp/out.mp4"),
+            video_encoder_arg: "hevc_videotoolbox".into(),
+            max_height: Some(720),
+            max_fps: Some(30),
+            priority: ProcessPriority::Background,
+        };
+        let args: Vec<String> = build_reencode_args(&spec)
+            .into_iter()
+            .map(|os| os.to_string_lossy().into_owned())
+            .collect();
+
+        // Find every -c:a position; there must be exactly one and
+        // the directly-following arg must be `copy`.
+        let positions: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "-c:a")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "exactly one -c:a expected, got {positions:?}"
+        );
+        let codec_pos = positions[0] + 1;
+        assert_eq!(
+            args.get(codec_pos).map(|s| s.as_str()),
+            Some("copy"),
+            "audio codec must be 'copy' (passthrough); got {:?}",
+            args.get(codec_pos)
+        );
+
+        // And -c:v must come BEFORE -c:a (otherwise ffmpeg won't
+        // associate the audio passthrough with the right output
+        // stream — sanity check on the arg ordering).
+        let cv_pos = args
+            .iter()
+            .position(|a| a.as_str() == "-c:v")
+            .expect("-c:v must be present");
+        assert!(
+            cv_pos < positions[0],
+            "-c:v must precede -c:a (got cv@{cv_pos}, ca@{})",
+            positions[0]
+        );
+    }
+
+    #[test]
+    fn reencode_args_omit_filter_when_no_constraints() {
+        let spec = ReencodeSpec {
+            source: std::path::PathBuf::from("/tmp/in.mp4"),
+            destination: std::path::PathBuf::from("/tmp/out.mp4"),
+            video_encoder_arg: "libx265".into(),
+            max_height: None,
+            max_fps: None,
+            priority: ProcessPriority::Normal,
+        };
+        let args: Vec<String> = build_reencode_args(&spec)
+            .into_iter()
+            .map(|os| os.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !args.iter().any(|a| a == "-vf"),
+            "no -vf expected when max_height/max_fps are None: {args:?}"
+        );
+    }
 
     #[test]
     fn parse_encoders_output_finds_tracked_names() {

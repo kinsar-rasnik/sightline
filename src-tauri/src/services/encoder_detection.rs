@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::domain::quality::{EncoderCapability, EncoderKind};
@@ -35,6 +36,12 @@ pub struct EncoderDetectionService {
     settings: SettingsService,
     clock: Arc<dyn Clock>,
     target_os: &'static str,
+    /// Serialises concurrent `detect_and_persist` calls.  The
+    /// startup task and the user-driven "Re-detect" button share
+    /// the same SettingsService write path; without this guard, two
+    /// 1-second test encodes can race in the cold-start window.
+    /// See R-RC-01 finding P1 on commit 94e4340.
+    detect_lock: Arc<Mutex<()>>,
 }
 
 impl EncoderDetectionService {
@@ -44,6 +51,7 @@ impl EncoderDetectionService {
             settings,
             clock,
             target_os: detect_target_os(),
+            detect_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -62,13 +70,19 @@ impl EncoderDetectionService {
             settings,
             clock,
             target_os,
+            detect_lock: Arc::new(Mutex::new(())),
         }
     }
 
     /// Run the detection probe and persist the result.  Returns the
     /// chosen capability for the caller to render immediately
     /// (avoids a second round-trip to the settings table).
+    ///
+    /// Guarded by `detect_lock` — concurrent callers (startup task +
+    /// "Re-detect" button) serialise so the 1-second test encode
+    /// runs at most once per logical detection request.
     pub async fn detect_and_persist(&self) -> Result<EncoderCapability, AppError> {
+        let _guard = self.detect_lock.lock().await;
         let capability = self.detect().await?;
         self.settings.record_encoder_capability(&capability).await?;
         info!(

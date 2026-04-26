@@ -342,7 +342,21 @@ impl SettingsService {
         let software_encode_opt_in_raw: i64 = row.try_get(33)?;
         let encoder_capability_json: Option<String> = row.try_get(34)?;
         let encoder_capability = match encoder_capability_json {
-            Some(json) => serde_json::from_str(&json).ok(),
+            Some(json) => match serde_json::from_str(&json) {
+                Ok(cap) => Some(cap),
+                Err(e) => {
+                    // Log + clear-on-read so a corrupt blob (schema
+                    // drift, bad hand-edit) re-triggers detection
+                    // on next startup rather than silently disabling
+                    // hardware encoding.  See R-RC-01 finding P2 on
+                    // commit 94e4340.
+                    tracing::warn!(
+                        error = %e,
+                        "encoder_capability JSON corrupt — clearing in-memory copy"
+                    );
+                    None
+                }
+            },
             None => None,
         };
         let max_concurrent_reencodes: i64 = row.try_get(35)?;

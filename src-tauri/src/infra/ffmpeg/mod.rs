@@ -140,7 +140,7 @@ pub trait Ffmpeg: Send + Sync + std::fmt::Debug {
     /// `libx265`, `libx264`).
     async fn list_encoders(&self) -> Result<Vec<EncoderListing>, AppError>;
 
-    /// Run a 2-second synthetic test encode using the supplied
+    /// Run a 1-second synthetic test encode using the supplied
     /// `-c:v` argument.  Used by the encoder-detection pass to
     /// confirm the encoder actually initialises on this hardware
     /// (e.g. NVENC may be advertised on an Ubuntu image without an

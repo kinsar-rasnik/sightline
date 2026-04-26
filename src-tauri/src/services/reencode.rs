@@ -258,26 +258,25 @@ impl ReencodeService {
         capability: &EncoderCapability,
         software_opt_in: bool,
     ) -> Result<EncoderKind, AppError> {
-        // Prefer the persisted primary unless that's Software and
-        // the user hasn't opted in — in that case, refuse rather
-        // than silently saturate the CPU.
+        // Order: H.265 availability is checked FIRST so a stripped
+        // ffmpeg build (Software primary, h265=false) returns the
+        // accurate "encoder lacks H.265" message instead of the
+        // generic "no hardware encoder" path.  See R-RC-01 finding
+        // P1 on commit 94e4340.
+        if !capability.h265 {
+            return Err(AppError::InvalidInput {
+                detail: format!(
+                    "encoder {} does not support H.265 on this machine",
+                    capability.primary.as_str()
+                ),
+            });
+        }
         if matches!(capability.primary, EncoderKind::Software) && !software_opt_in {
             warn!("no hardware encoder detected and software opt-in is off");
             return Err(AppError::InvalidInput {
                 detail:
                     "no hardware encoder available; enable software encoding in Settings to proceed"
                         .into(),
-            });
-        }
-        if !capability.h265 {
-            // Even the chosen encoder doesn't support H.265.
-            // Refuse — falling back to H.264 silently would surprise
-            // the user (their storage forecast was based on H.265).
-            return Err(AppError::InvalidInput {
-                detail: format!(
-                    "encoder {} does not support H.265 on this machine",
-                    capability.primary.as_str()
-                ),
             });
         }
         Ok(capability.primary)
@@ -421,24 +420,52 @@ mod tests {
 
     #[test]
     fn throttle_step_run_to_suspend_after_dwell() {
+        // Sustained high load (>= high_threshold) holds the timer
+        // across consecutive ticks because the Run branch's "reset
+        // on dip" only fires when cpu_load < high_threshold.  Once
+        // total elapsed >= dwell, the next tick flips to Suspend.
         let dwell = Duration::from_secs(30);
         let t0 = Instant::now();
-        let s0 = ThrottleState::new(t0);
-        // Within dwell, even high load doesn't flip.
-        let s1 = step_throttle(s0, 0.85, 0.7, 0.5, t0 + Duration::from_secs(20), dwell);
-        assert_eq!(s1.decision, ThrottleDecision::Run);
-        // Past dwell, sustained high load flips to Suspend.
-        let s2 = step_throttle(s1, 0.85, 0.7, 0.5, t0 + Duration::from_secs(35), dwell);
-        // Note: s1 reset `since` because cpu_load < high_threshold (0.85 >= 0.7,
-        // but the Run branch's "reset on dip" applies when cpu_load < high). So
-        // we test the proper sustained case below.
-        let _ = s2;
-
-        // Sustained high load:
         let mut s = ThrottleState::new(t0);
+        // 15s in, still high — no flip yet (state held with old `since`).
         s = step_throttle(s, 0.85, 0.7, 0.5, t0 + Duration::from_secs(15), dwell);
+        assert_eq!(s.decision, ThrottleDecision::Run);
+        // 35s in, dwell elapsed — flip to Suspend.
         s = step_throttle(s, 0.85, 0.7, 0.5, t0 + Duration::from_secs(35), dwell);
         assert_eq!(s.decision, ThrottleDecision::Suspend);
+    }
+
+    #[test]
+    fn throttle_step_holds_state_at_exact_threshold() {
+        // cpu_load == high_threshold hits neither the suspend (>=)
+        // nor the reset (<) branch on the way up, so the state is
+        // preserved unchanged.  Documented behaviour: a reading
+        // exactly on the boundary is "indeterminate" and we wait
+        // for the next sample.
+        let dwell = Duration::from_secs(30);
+        let t0 = Instant::now();
+        let initial = ThrottleState::new(t0);
+        let after = step_throttle(initial, 0.7, 0.7, 0.5, t0 + Duration::from_secs(10), dwell);
+        // Decision unchanged AND `since` unchanged — sample is treated as no-info.
+        assert_eq!(after.decision, ThrottleDecision::Run);
+        assert_eq!(after.since, initial.since);
+
+        // Same on the way down: cpu_load == low_threshold while
+        // suspended doesn't resume.
+        let suspended = ThrottleState {
+            decision: ThrottleDecision::Suspend,
+            since: t0,
+        };
+        let after2 = step_throttle(
+            suspended,
+            0.5,
+            0.7,
+            0.5,
+            t0 + Duration::from_secs(10),
+            dwell,
+        );
+        assert_eq!(after2.decision, ThrottleDecision::Suspend);
+        assert_eq!(after2.since, suspended.since);
     }
 
     #[test]
