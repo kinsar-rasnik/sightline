@@ -1041,12 +1041,164 @@ pub fn run() {
         });
 }
 
+/// Holds the [`tracing_appender::non_blocking::WorkerGuard`] for the
+/// lifetime of the process.  Dropping the guard would shut down the
+/// background writer thread and silently drop pending log lines, so
+/// we stash it in a `OnceCell` that lives as long as the binary.
+static LOG_GUARD: once_cell::sync::OnceCell<tracing_appender::non_blocking::WorkerGuard> =
+    once_cell::sync::OnceCell::new();
+
+/// Initialise tracing with both stderr and a daily-rotating file sink
+/// in the OS-native log directory.  See ADR-0037.  The file sink is
+/// best-effort: a non-writable home directory degrades to stderr-only
+/// rather than aborting startup.
+///
+/// Default verbosity per sink: file = `info`, stderr = `warn`.  When
+/// `RUST_LOG` is set both layers parse it identically — there is no
+/// per-sink override (no `RUST_LOG_FILE` / `RUST_LOG_STDERR`); a
+/// developer running `RUST_LOG=debug pnpm tauri dev` sees the same
+/// lines on screen and on disk.
 fn init_tracing() {
-    use tracing_subscriber::{EnvFilter, fmt};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let subscriber = fmt().with_env_filter(filter).with_target(false).finish();
-    if tracing::subscriber::set_global_default(subscriber).is_err() {
-        warn!("tracing subscriber already initialized");
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, Layer, fmt};
+
+    // Build one filter from RUST_LOG; clone for each sink so the
+    // uniformity is structural rather than relying on two independent
+    // env-var lookups returning the same answer.  When RUST_LOG is
+    // unset, the cloned filters are constructed separately so each
+    // sink can carry its own default level (file=info, stderr=warn).
+    let (stderr_filter, file_filter) = match EnvFilter::try_from_default_env() {
+        Ok(env) => (env.clone(), env),
+        Err(_) => (EnvFilter::new("warn"), EnvFilter::new("info")),
+    };
+
+    let stderr_layer = fmt::layer()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_filter(stderr_filter);
+
+    let file_layer = init_rolling_file_appender().map(|appender| {
+        // tracing-appender's `RollingFileAppender` is a synchronous
+        // blocking writer — `non_blocking` queues events to a
+        // background thread so a slow filesystem cannot stall a
+        // Tokio worker.  The returned guard MUST outlive the process;
+        // see `LOG_GUARD` above.
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        // Second call (e.g. test harness re-entering init_tracing)
+        // returns Err(guard); the duplicate guard drops here, which
+        // tears down its background thread immediately. That's fine
+        // because the registry's try_init below also fails on the
+        // second call and the second appender is unused anyway.
+        let _ = LOG_GUARD.set(guard);
+        fmt::layer()
+            .with_target(true)
+            .with_ansi(false)
+            .with_writer(non_blocking)
+            .with_filter(file_filter)
+    });
+    if file_layer.is_none() {
+        eprintln!("[sightline] file logger disabled — proceeding with stderr only");
+    }
+
+    let result = tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(file_layer)
+        .try_init();
+
+    if let Err(e) = result {
+        // Some test harness or earlier path already installed a global
+        // subscriber.  Not fatal — surface to stderr so a developer can
+        // notice during dev.
+        eprintln!("[sightline] tracing init: {e}");
+    }
+}
+
+/// Build the daily-rotating file appender for [`init_tracing`].  Returns
+/// `None` when the log directory cannot be resolved or created — the
+/// caller falls back to stderr-only logging in that case.
+///
+/// Rotation policy: one file per day under
+/// [`default_log_dir`], retaining the most recent 7 days.  See
+/// ADR-0037.  `tracing-appender` does not enforce a per-file size cap;
+/// the v2.1 backlog tracks adding one if log volume turns out to be
+/// higher than the typical few-MB-per-day we observe in development.
+fn init_rolling_file_appender() -> Option<tracing_appender::rolling::RollingFileAppender> {
+    let log_dir = default_log_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "[sightline] cannot create log dir {}: {}",
+            log_dir.display(),
+            e
+        );
+        return None;
+    }
+    match tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("sightline")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(&log_dir)
+    {
+        Ok(a) => Some(a),
+        Err(e) => {
+            eprintln!(
+                "[sightline] cannot init rolling appender at {}: {}",
+                log_dir.display(),
+                e
+            );
+            None
+        }
+    }
+}
+
+/// OS-native log directory for the application.  Computed manually
+/// because [`init_tracing`] runs before the Tauri runtime exists, so
+/// `tauri::path::PathResolver::app_log_dir()` is unavailable.  The
+/// algorithm matches Tauri 2's `app_log_dir()` for bundle id
+/// `dev.sightline.app` so the file we write is the same file the
+/// runtime would point at:
+///
+/// * macOS:   `$HOME/Library/Logs/dev.sightline.app/`
+/// * Windows: `%LOCALAPPDATA%\dev.sightline.app\logs\`
+/// * Linux:   `$XDG_CACHE_HOME/dev.sightline.app/logs/` (or
+///   `$HOME/.cache/dev.sightline.app/logs/` if XDG is unset)
+///
+/// Returns `None` when the underlying environment variables are unset
+/// — usually only in stripped-down container environments.
+fn default_log_dir() -> Option<std::path::PathBuf> {
+    const BUNDLE_ID: &str = "dev.sightline.app";
+
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(|h| {
+            std::path::PathBuf::from(h)
+                .join("Library")
+                .join("Logs")
+                .join(BUNDLE_ID)
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|p| std::path::PathBuf::from(p).join(BUNDLE_ID).join("logs"))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache"))
+            })
+            .map(|p| p.join(BUNDLE_ID).join("logs"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        None
     }
 }
 
@@ -1209,3 +1361,66 @@ fn resolve_db_path(handle: &tauri::AppHandle) -> Result<std::path::PathBuf, erro
 }
 
 pub type SharedState = Arc<AppState>;
+
+#[cfg(test)]
+// Test code: panics on assertion failures are the contract; the main
+// crate-wide bans on unwrap/expect don't apply here.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_log_dir_resolves_on_supported_platforms() {
+        // CI runners always have HOME (Unix) or LOCALAPPDATA (Windows)
+        // — a None here would mean we hit the fallthrough cfg arm,
+        // which would be a regression worth catching.
+        let dir = default_log_dir();
+        assert!(
+            dir.is_some(),
+            "default_log_dir() returned None on a supported platform; \
+             check the cfg arms in lib.rs"
+        );
+        let dir = dir.unwrap();
+        assert!(
+            dir.to_string_lossy().contains("dev.sightline.app"),
+            "log dir {dir:?} should be namespaced by the bundle id"
+        );
+    }
+
+    #[test]
+    fn rolling_file_appender_writes_to_disk() {
+        // ADR-0037 smoke test: prove that the rotation builder we use
+        // in init_rolling_file_appender actually produces a file with
+        // our content on disk.  Avoids a regression where an upstream
+        // rename (e.g. `filename_suffix` becoming required) silently
+        // disables the file sink.
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("sightline")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(tmp.path())
+            .unwrap();
+        writeln!(appender, "v2.0.3 logger smoke test").unwrap();
+        appender.flush().unwrap();
+        drop(appender);
+
+        let log_file = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|s| s == "log")
+            })
+            .expect("at least one .log file in temp dir");
+        let content = std::fs::read_to_string(log_file.path()).unwrap();
+        assert!(
+            content.contains("v2.0.3 logger smoke test"),
+            "log file contents missing test marker: {content:?}"
+        );
+    }
+}

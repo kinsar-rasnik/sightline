@@ -2,6 +2,91 @@
 
 All notable changes to Sightline. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] — 2026-04-26
+
+> **Critical hotfix.**  v2.0.2 was the first release a real user could actually install end-to-end — and the moment the CEO pointed it at a Mac mini with a Proton-Drive library on an external HDD, three latent download-engine bugs hit at once: the Phase 8 quality slider was ignored (downloads ran at `1080p60 H.264` regardless of the `720p30 H.265` setting), the concurrency cap was ignored (six parallel `yt-dlp` processes for a single VOD), and fragment-rename races filled the disk with `ERROR: Unable to rename file: ...mp4.part-Frag160.part`.  v2.0.3 plugs the three holes plus backfills the Tech-Spec §8 file logger that has been outstanding since v1.0.
+
+### What was wrong
+
+Three intertwined plumbing failures + one observability gap:
+
+1. **Quality wiring.**  The Phase 8 `app_settings.video_quality_profile` field (ADR-0028) was set by the Settings UI but never reached `services::downloads::pipeline_inner` — the worker still read the legacy Phase 3 `quality_preset` field whose default is `Source`.  Result: a CEO who picked `720p30 H.265 (recommended)` got `bestvideo+bestaudio = 1080p60 H.264` from Twitch, ~13 GB / 6 h.  The whole point of the Phase 8 quality pipeline was the storage-conscious default; v2.0.2 silently bypassed it.
+2. **Concurrency wiring.**  `app_settings.max_concurrent_downloads` was read once at queue startup, sized a `Semaphore`, and never resynced.  The Settings UI slider went up to 5; the service-layer clamp accepted 1..=5.  Worse: `drain_once` had a structural race — `pick_next_queued` returned a row, `tokio::spawn` fired the worker task, and the inner loop iterated immediately to pick the **same** row again because the `state='queued' → 'downloading'` transition was inside the spawned task and hadn't run yet.  Two workers contended for the same staging fragments; yt-dlp errored out; both retried; disk filled.
+3. **No file logger.**  Tech-Spec §8 promised `$LOG_DIR/sightline.log` since v1.0.  Reality: stderr-only fmt subscriber.  No `~/Library/Logs/dev.sightline.app/` directory was ever created.  Triaging the CEO's report required `RUST_LOG=debug pnpm tauri dev > /tmp/sightline.log` from a developer-grade shell.
+
+### Fix
+
+#### Quality profile → yt-dlp `--format` (AC1)
+
+- `services::downloads::pipeline_inner` now reads `settings.video_quality_profile` (Phase 8) and passes its `format_selector()` into `DownloadSpec.format_selector`.  The legacy `quality_preset` is still seeded onto new download rows for back-compat but is no longer load-bearing.
+- New `VideoQualityProfile::format_selector()` co-located in `domain/quality.rs`.  Selectors honour ADR-0028's audio-passthrough invariant (`bestaudio` always paired in) and avoid `vcodec` filters (H.265 is the re-encoder's job, not yt-dlp's source pick).
+- 30-fps profiles probe the **exact target height first** (with and without the fps filter) before walking down to lower heights.  Naive `[height<=720][fps<=30]+bestaudio` would silently pick 480p30 over 720p60 on a `{1080p60, 720p60, 480p30}` Twitch ladder because yt-dlp's `/` is left-to-right "first match wins".
+- 8 unit + integration tests (incl. two arm-ordering trip-wires).
+
+#### Live concurrency cap + per-VOD process lock (AC2 + AC3)
+
+- The static `Semaphore` is gone.  `drain_once` reads the cap fresh from settings on every tick — slider changes propagate within ≤ 5 s without an app restart.  Service-layer + UI clamps tightened to 1..=3.
+- New `Arc<Mutex<HashSet<String>>>` of in-flight `vod_id`s.  `try_lock_inflight` returns an `InFlightGuard` whose `Drop` releases the slot — panic, error, or graceful exit all converge.  Mutex poison is recovered via `.into_inner()` so a panicking thread elsewhere doesn't leak a slot forever.
+- `pick_next_queued_excluding` adds a `NOT IN (?, ...)` clause for the in-flight snapshot — same drain pass can't re-pick a row whose state-transition hasn't yet landed.  The lock is belt-and-suspenders for any future race.
+- Migration `0018_concurrency_default.sql` flattens any pre-existing NULL or `>3` value to 1; existing 1/2/3 are preserved (CEO's 2 stays at 2).
+- 4 new tests including `drain_once_respects_concurrency_cap` (cap=1, two queued, asserts in-flight = 1 immediately after drain returns).
+
+#### File-logger activation (AC4)
+
+- `tracing-appender = "0.2"` added.  `init_tracing` now composes a `Registry` with stderr (default `warn`) and a daily-rotating file appender (default `info`) under the OS-native log directory:
+  - macOS: `~/Library/Logs/dev.sightline.app/sightline.<date>.log`
+  - Windows: `%LOCALAPPDATA%\dev.sightline.app\logs\sightline.<date>.log`
+  - Linux: `$XDG_CACHE_HOME/dev.sightline.app/logs/sightline.<date>.log` (or `~/.cache/.../` if XDG is unset)
+- Paths match Tauri 2's `app_log_dir()` exactly so a future `tauri::Manager::path().app_log_dir()` call points at the same file.
+- `tracing_appender::non_blocking` keeps writes off the Tokio worker thread; the `WorkerGuard` lives in a process-static `OnceCell`.
+- Daily rotation, last 7 files retained.  Per-file 20 MB cap is **not** implemented (per AC's own escape-hatch text); tracked as v2.1 backlog.
+- Best-effort: a non-writable home degrades to stderr-only, never aborts startup.
+
+#### Cleanup
+
+- Settings → Downloads & Storage no longer shows the Phase-1 era "Quality preset" pills.  The Phase 8 radios in Settings → Video Quality are now the single canonical quality UI.  Backend column drop deferred to v2.1 (refactor exceeds the per-task budget).
+- Concurrent-downloads slider clamped to 1..=3 with an explicit help line: "Higher values risk fragment-rename races on Twitch under load. Recommended: 1."
+
+### Documentation
+
+Three new ADRs:
+- [ADR-0035](docs/adr/0035-download-engine-settings-wiring.md) — the wiring story for AC1 + AC2, plus the v2.1 backlog of column drops and column-DEFAULT changes.
+- [ADR-0036](docs/adr/0036-per-download-process-lock.md) — the in-flight HashSet + guard pattern, the alternative `UPDATE ... RETURNING` atomic-claim approach, and the GlobalRate refresh logic.
+- [ADR-0037](docs/adr/0037-file-logger-activation.md) — the OS path matrix, why we don't use `tauri-plugin-log` yet, and the deferred 20-MB-cap story.
+
+[README.md](README.md) gains a "Logs" subsection under Pre-built binaries so a user filing a bug report can find the file without hunting.
+
+### Quality + scope-discipline
+
+- 4 sub-phases (A: Logger / B: Quality / C: Concurrency + Lock / D: UI cleanup), 4 R-RC-01 mid-phase reviews, 3 R-RC-02 re-reviews — all clean by end-of-phase.
+- End-of-phase R-RC-03: code-reviewer + security-reviewer passed PROCEED.  One Medium open as v2.1 backlog (cap `ytdlp.stderr` debug logging in the file sink to keep `RUST_LOG=debug` URL traffic off disk).
+- 485 backend tests + 152 frontend tests, all green.
+- R-SC-02 AC vollständigkeits-check ✅ (5 of 6 ACs fully delivered; AC2's "Default = 1 für Neuinstallationen" deferred per the AC's own self-contradiction with "CEO hat 2, das bleibt 2" — SQLite cannot distinguish "user-set 2" from "default-2").
+- R-SC-03 versions-manifest consistency: `Cargo.toml`, `Cargo.lock`, `package.json`, `tauri.conf.json` all at 2.0.3 before tag-push.
+
+### Schema
+
+New migration `0018_concurrency_default.sql`.  Schema version bumped to **18**.
+
+### IPC
+
+No new commands.  No DTO changes.
+
+### Reverting
+
+Revert is `git revert` of the v2.0.3 commits + downgrade the binary; migration 0018 only narrows existing values down into the safe range, so the schema is forward-compatible with the v2.0.2 binary.
+
+### Limitations / known follow-ups (v2.1 candidates)
+
+- Drop the legacy `app_settings.quality_preset` column + `downloads.quality_preset` column + matching IPC field.  Refactor exceeds the per-task budget.
+- Change `app_settings.max_concurrent_downloads` column DEFAULT from 2 to 1 via a SQLite table-rewrite migration.
+- Record the actual downloaded tier in `downloads.quality_resolved` by parsing yt-dlp's `format_id`.
+- Atomic-claim alternative for the in-flight lock (`UPDATE ... RETURNING`) — would make the in-memory lock pure belt-and-suspenders.
+- Per-file 20 MB log cap (custom `MakeWriter` wrapper or hourly-rotation switch).
+- Cap `ytdlp.stderr` at `warn` in the file sink so `RUST_LOG=debug` doesn't persist VOD URLs to disk.
+- Linux Proton-Drive detection in `path_is_on_sync_provider` (currently macOS-tuned).
+- `tauri-plugin-log` adoption.
+
 ## [2.0.2] — 2026-04-26
 
 > **Critical hotfix.**  v2.0.1 macOS `.dmg` shipped with a broken sidecar resolver — the encoder-detection step on first launch failed with `sidecar: spawn: No such file or directory (os error 2)`.  v2.0.2 fixes the path resolution so the bundled `ffmpeg` and `yt-dlp` are actually found at runtime.  No breaking changes, no schema migrations, no setting renames.

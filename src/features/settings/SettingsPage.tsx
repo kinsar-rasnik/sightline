@@ -26,12 +26,7 @@ import { StorageOutlook } from "@/features/storage/StorageOutlook";
 import { StorageSection } from "@/features/storage/StorageSection";
 import { UpdateSettingsSection } from "@/features/updater/UpdateSettingsSection";
 import { commands } from "@/ipc";
-import type {
-  AppSettings,
-  LibraryLayoutKind,
-  QualityPreset,
-  SettingsPatch,
-} from "@/ipc";
+import type { AppSettings, LibraryLayoutKind, SettingsPatch } from "@/ipc";
 import { formatBytes } from "@/lib/format";
 
 const KNOWN_GAMES: Array<{ id: string; name: string }> = [
@@ -658,44 +653,26 @@ function DownloadsAndStorageSection({
       </h3>
 
       <div className="grid grid-cols-2 gap-6 max-w-2xl">
-        <IntervalField
-          label="Max concurrent downloads"
-          value={settings.maxConcurrentDownloads}
-          setValue={(n) => onUpdate({ maxConcurrentDownloads: n })}
-          min={1}
-          max={5}
-          step={1}
-          unit=""
-        />
+        <div className="space-y-1">
+          <IntervalField
+            label="Max concurrent downloads (1–3)"
+            value={settings.maxConcurrentDownloads}
+            setValue={(n) => onUpdate({ maxConcurrentDownloads: n })}
+            min={1}
+            max={3}
+            step={1}
+            unit=""
+          />
+          <p className="text-[10px] text-[--color-muted]">
+            Higher values risk fragment-rename races on Twitch under load. Recommended: 1.
+          </p>
+        </div>
         <BandwidthLimit
           currentBps={settings.bandwidthLimitBps}
           onUpdate={(bps) => onUpdate({ bandwidthLimitBps: bps })}
           pending={pending}
         />
       </div>
-
-      <fieldset className="space-y-2">
-        <legend className="text-xs text-[--color-muted]">Quality preset</legend>
-        <div className="flex flex-wrap gap-2">
-          {(["source", "1080p60", "720p60", "480p"] as QualityPreset[]).map(
-            (preset) => (
-              <button
-                key={preset}
-                type="button"
-                aria-pressed={settings.qualityPreset === preset}
-                onClick={() => onUpdate({ qualityPreset: preset })}
-                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  settings.qualityPreset === preset
-                    ? "bg-[--color-accent] text-white border-transparent"
-                    : "bg-transparent text-[--color-fg] border-[--color-border] hover:bg-[--color-surface]"
-                }`}
-              >
-                {preset}
-              </button>
-            )
-          )}
-        </div>
-      </fieldset>
 
       <div className="space-y-1 max-w-2xl">
         <label className="block text-xs">

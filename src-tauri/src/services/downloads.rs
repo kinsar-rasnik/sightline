@@ -21,14 +21,15 @@
 //! [`ADR-0010`] / [`ADR-0012`] for the throttle and atomic-move
 //! rationales.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use sqlx::Row;
-use tokio::sync::{Semaphore, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, instrument, warn};
 
@@ -37,7 +38,8 @@ use crate::domain::download_state::{
 };
 use crate::domain::library_layout::{LibraryLayoutKind, VodWithStreamer, layout as build_layout};
 use crate::domain::nfo::{NfoInput, generate as generate_nfo};
-use crate::domain::quality_preset::{QualityPreset, resolve as resolve_preset};
+use crate::domain::quality::VideoQualityProfile;
+use crate::domain::quality_preset::QualityPreset;
 use crate::domain::sanitize::sanitize_component;
 use crate::error::AppError;
 use crate::infra::clock::Clock;
@@ -180,6 +182,40 @@ pub struct DownloadQueueService {
     /// Default staging dir — used when `app_settings.staging_path`
     /// is NULL.
     default_staging: PathBuf,
+    /// Set of `vod_id`s for which a worker task is currently running
+    /// (or about to spawn).  Belt-and-suspenders to the
+    /// `app_settings.max_concurrent_downloads` cap (AC2): even if two
+    /// drain_once iterations both pick the same row before the
+    /// state-machine transition has landed, the second `try_lock`
+    /// returns `None` and we don't spawn a duplicate yt-dlp.  See
+    /// ADR-0036.
+    in_flight: Arc<Mutex<HashSet<String>>>,
+}
+
+/// Drop-guard for the per-VOD in-flight lock.  Removing the entry on
+/// `Drop` means a panic, an early return, or a graceful task exit all
+/// release the slot — no manual cleanup paths to forget.  Created by
+/// [`DownloadQueueService::try_lock_inflight`].
+struct InFlightGuard {
+    set: Arc<Mutex<HashSet<String>>>,
+    vod_id: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        // Recover from a poisoned mutex (a previous holder panicked)
+        // by taking the inner data anyway — the alternative of
+        // silently skipping the removal would leak this `vod_id`
+        // and permanently block future downloads of that VOD.  The
+        // lock-acquisition pattern matches `try_lock_inflight` and
+        // `in_flight_snapshot` so all three call-sites converge on
+        // the same poison-recovery posture.
+        let mut set = match self.set.lock() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(&self.vod_id);
+    }
 }
 
 impl DownloadQueueService {
@@ -205,6 +241,44 @@ impl DownloadQueueService {
             settings,
             vods,
             default_staging,
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Try to atomically claim the per-VOD download slot.  Returns
+    /// `Some(guard)` when no other worker is currently running for
+    /// this `vod_id`; `None` when one already is.  The slot is
+    /// released when the guard drops.
+    fn try_lock_inflight(&self, vod_id: &str) -> Option<InFlightGuard> {
+        // `lock().unwrap()` here would be the only `unwrap` in the
+        // hot path; we tolerate it because mutex poisoning is a
+        // process-wide bug indicator and any caller seeing it is
+        // already toast.  Switch to `try_lock` if poisoning becomes
+        // a real risk.
+        let mut set = match self.in_flight.lock() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if set.contains(vod_id) {
+            None
+        } else {
+            set.insert(vod_id.to_owned());
+            Some(InFlightGuard {
+                set: self.in_flight.clone(),
+                vod_id: vod_id.to_owned(),
+            })
+        }
+    }
+
+    /// Snapshot of the current in-flight set.  Used by drain_once
+    /// to exclude rows from `pick_next_queued` that are already
+    /// being worked on (the state-machine transition that would
+    /// otherwise hide them from the SELECT happens inside the
+    /// spawned task, with a small race window).
+    fn in_flight_snapshot(&self) -> HashSet<String> {
+        match self.in_flight.lock() {
+            Ok(s) => s.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
 
@@ -506,10 +580,13 @@ impl DownloadQueueService {
 
     // ---------------- Worker pool ----------------
 
-    /// Spawn the orchestration loop. A single `manager` task scans
-    /// `queued` rows at WAKEUP / interval, and hands each to a worker
-    /// future gated by a [`Semaphore`] sized from
-    /// `max_concurrent_downloads`.
+    /// Spawn the orchestration loop.  A single manager task scans
+    /// `queued` rows at WAKEUP / interval; the cap is read live from
+    /// `app_settings.max_concurrent_downloads` on every drain pass
+    /// (AC2 — slider changes take effect on the next tick without
+    /// needing an app restart).  Per-VOD claims are tracked in
+    /// `in_flight` so a drain pass can never spawn two workers for
+    /// the same vod_id (AC3 — fixes the v2.0.2 frag-rename race).
     pub fn spawn(self: Arc<Self>, events: DownloadEventSink) -> DownloadQueueSpawn {
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<QueueCommand>(32);
         let (tx_stop, mut rx_stop) = broadcast::channel::<()>(1);
@@ -518,7 +595,6 @@ impl DownloadQueueService {
             let this = self;
             async move {
                 let _ = this.crash_recover().await;
-                let semaphore = Arc::new(Semaphore::new(current_concurrency(&this).await as usize));
                 let tick_interval = Duration::from_secs(5);
 
                 loop {
@@ -528,10 +604,10 @@ impl DownloadQueueService {
                             break;
                         }
                         Some(_cmd) = rx_cmd.recv() => {
-                            let _ = this.drain_once(&events, &semaphore).await;
+                            let _ = this.drain_once(&events).await;
                         }
                         _ = tokio::time::sleep(tick_interval) => {
-                            let _ = this.drain_once(&events, &semaphore).await;
+                            let _ = this.drain_once(&events).await;
                         }
                     }
                 }
@@ -547,29 +623,65 @@ impl DownloadQueueService {
         }
     }
 
-    /// Drain every `queued` row that will fit under the semaphore right
-    /// now; each download runs in its own spawned task so the manager
-    /// loop stays responsive.
-    async fn drain_once(
-        self: &Arc<Self>,
-        events: &DownloadEventSink,
-        semaphore: &Arc<Semaphore>,
-    ) -> Result<(), AppError> {
+    /// Drain every `queued` row that will fit under the live cap and
+    /// the per-VOD lock.  Each download runs in its own spawned task
+    /// so the manager loop stays responsive; the in-flight `Drop`
+    /// guard releases the per-VOD slot when the task ends (success,
+    /// failure, panic, or shutdown).
+    async fn drain_once(self: &Arc<Self>, events: &DownloadEventSink) -> Result<(), AppError> {
+        let cap = current_concurrency(self).await as usize;
+
+        // Refresh the global throttle's worker count from the live
+        // in-flight set first — guards from downloads that completed
+        // since the previous drain pass have already dropped, and
+        // there's no other code path that resyncs the count between
+        // ticks.  Without this refresh GlobalRate keeps dividing
+        // the bandwidth budget by the previous-tick worker count,
+        // under-allocating to the survivors.
+        self.rate
+            .set_active_workers(self.in_flight_snapshot().len());
+
         loop {
-            let permit = match semaphore.clone().try_acquire_owned() {
-                Ok(p) => p,
-                Err(_) => return Ok(()),
-            };
-            let row = self.pick_next_queued().await?;
+            // Snapshot before each pick so the exclusion list reflects
+            // anything we just spawned in this same drain pass.
+            let in_flight = self.in_flight_snapshot();
+            if in_flight.len() >= cap {
+                return Ok(());
+            }
+            let row = self.pick_next_queued_excluding(&in_flight).await?;
             let Some(row) = row else {
                 return Ok(());
             };
-            self.rate
-                .set_active_workers(semaphore.available_permits() + 1);
+
+            // Belt-and-suspenders: pick_next_queued_excluding's SELECT
+            // already filters by the snapshot, but the lock is the
+            // authoritative claim.  If two drain passes ever race
+            // (the manager loop is single-threaded today, but a
+            // future refactor or a misuse from tests could change
+            // that), the lock is the wall.  When it triggers we
+            // `continue` rather than `return`: the next iteration's
+            // `in_flight_snapshot()` includes the now-locked vod_id,
+            // so `pick_next_queued_excluding` returns the next
+            // queued row instead of looping on the same one.
+            let Some(guard) = self.try_lock_inflight(&row.vod_id) else {
+                warn!(
+                    vod_id = %row.vod_id,
+                    "AC3 lock-conflict (concurrent drain pass) — skipping VOD, trying next queued row"
+                );
+                continue;
+            };
+
+            // The throttle wants to know how many workers are active
+            // so per-worker bandwidth divides correctly.  After this
+            // spawn the count includes the new task.
+            self.rate.set_active_workers(in_flight.len() + 1);
+
             let this = self.clone();
             let events = events.clone();
             tokio::spawn(async move {
-                let _permit = permit;
+                // Move the guard into the task so its Drop fires at
+                // task exit (any path: Ok, Err, panic, abort).
+                let _guard = guard;
                 let vod_id = row.vod_id.clone();
                 if let Err(e) = this.process_one(&events, &vod_id).await {
                     warn!(vod_id = %vod_id, error = %e, "download pipeline failed");
@@ -578,13 +690,29 @@ impl DownloadQueueService {
         }
     }
 
-    async fn pick_next_queued(&self) -> Result<Option<DownloadRow>, AppError> {
-        let row = sqlx::query(&format!(
-            "{base} WHERE d.state = 'queued' ORDER BY d.priority DESC, d.queued_at ASC LIMIT 1",
-            base = DOWNLOAD_LIST_BASE
-        ))
-        .fetch_optional(self.db.pool())
-        .await?;
+    async fn pick_next_queued_excluding(
+        &self,
+        exclude: &HashSet<String>,
+    ) -> Result<Option<DownloadRow>, AppError> {
+        // Build the parameterized NOT IN clause.  SQL injection is a
+        // non-concern: every excluded value comes from the in-memory
+        // `in_flight` set populated solely from `DownloadRow.vod_id`
+        // we ourselves persisted, but the bind-parameter form is what
+        // makes that hold structurally rather than by inspection.
+        let mut sql = format!("{base} WHERE d.state = 'queued'", base = DOWNLOAD_LIST_BASE,);
+        if !exclude.is_empty() {
+            let placeholders = std::iter::repeat_n("?", exclude.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            sql.push_str(&format!(" AND d.vod_id NOT IN ({placeholders})"));
+        }
+        sql.push_str(" ORDER BY d.priority DESC, d.queued_at ASC LIMIT 1");
+
+        let mut q = sqlx::query(&sql);
+        for vod_id in exclude {
+            q = q.bind(vod_id);
+        }
+        let row = q.fetch_optional(self.db.pool()).await?;
         row.as_ref().map(row_to_download).transpose()
     }
 
@@ -678,7 +806,11 @@ impl DownloadQueueService {
             });
         }
 
-        // Ask yt-dlp for source metadata so we can preflight + resolve quality.
+        // Ask yt-dlp for source metadata so we can preflight + report
+        // size estimates.  Quality selection itself reads the Phase 8
+        // `video_quality_profile` setting (ADR-0028 / ADR-0035) — the
+        // legacy `quality_preset` field is preserved on the row but
+        // is no longer load-bearing for the format selector.
         let info = self
             .ytdlp
             .fetch_info(&VodInfoRequest {
@@ -689,11 +821,7 @@ impl DownloadQueueService {
                 reason: format!("fetch_info: {e}"),
                 retryable: true,
             })?;
-        let resolved = resolve_preset(
-            settings.quality_preset,
-            info.height.unwrap_or(0),
-            info.fps.unwrap_or(0),
-        );
+        let profile: VideoQualityProfile = settings.video_quality_profile;
 
         let estimated = size_estimate(&info).unwrap_or(512 * 1024 * 1024);
         check_preflight(
@@ -727,7 +855,7 @@ impl DownloadQueueService {
             url: vod.vod.url.clone(),
             output_dir: staging_root.clone(),
             output_stem: stem.clone(),
-            format_selector: resolved.format_selector().into(),
+            format_selector: profile.format_selector().into(),
             limit_rate_bps: self.rate.per_worker_bps(),
             no_part,
         };
@@ -905,7 +1033,17 @@ impl DownloadQueueService {
 
         Ok(PipelineOk {
             final_path,
-            quality_resolved: Some(resolved.as_db_str().into()),
+            // v2.0.3 semantics: `quality_resolved` is the user's
+            // requested profile, not the actual downloaded tier.  The
+            // legacy resolver downgraded it to match what the source
+            // could satisfy; the Phase 8 selector chain handles fallback
+            // inside yt-dlp itself, so we no longer have a clean post-
+            // hoc "what tier did we land on" signal here.  Recording
+            // the requested profile keeps the column populated and the
+            // UI consistent with the Settings page.  v2.1 backlog item:
+            // parse yt-dlp's output `format_id` to record the actual
+            // downloaded tier.
+            quality_resolved: Some(profile.as_db_str().into()),
         })
     }
 
@@ -1142,12 +1280,17 @@ fn columns_unused_reference() -> &'static str {
     DOWNLOAD_COLUMNS
 }
 
+/// Current desired worker concurrency, read live from settings on
+/// every drain pass so a Settings-UI slider change takes effect on
+/// the next tick.  Clamped to the v2.0.3 hard range 1..=3 (ADR-0035).
+/// On a settings-fetch failure the safest non-zero default is 1 so a
+/// broken read doesn't accidentally lift the cap.
 async fn current_concurrency(svc: &DownloadQueueService) -> i64 {
     svc.settings
         .get()
         .await
-        .map(|s| s.max_concurrent_downloads.clamp(1, 5))
-        .unwrap_or(2)
+        .map(|s| s.max_concurrent_downloads.clamp(1, 3))
+        .unwrap_or(1)
 }
 
 /// Tiny heuristic: Proton Drive / Dropbox / iCloud paths contain well-
@@ -1547,5 +1690,322 @@ mod tests {
         svc.enqueue("v1", Some(100)).await.unwrap();
         let row = svc.reprioritize("v1", 500).await.unwrap();
         assert_eq!(row.priority, 500);
+    }
+
+    /// AC1 trip-wire (v2.0.3 hotfix): the pipeline must build the
+    /// yt-dlp `--format` selector from `app_settings.video_quality_profile`
+    /// (Phase 8 / ADR-0028), NOT from the legacy `quality_preset`
+    /// column.  In v2.0.2 the bug here meant a CEO who set 720p30 in
+    /// Settings still got the legacy `Source` default, which on
+    /// Twitch resolves to 1080p60 H.264 — 13 GB for a 6-hour VOD.
+    /// See ADR-0035 and the mission report for v2.0.3.
+    #[tokio::test]
+    async fn pipeline_uses_video_quality_profile_for_format_selector() {
+        use crate::domain::quality::VideoQualityProfile;
+        use crate::infra::ytdlp::SharedYtDlp;
+        use crate::services::settings::SettingsPatch;
+
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(1_000_000));
+        let settings_svc = SettingsService::new(db.clone(), clock.clone());
+
+        // Concrete YtDlpFake handle so we can inspect call records.
+        let ytdlp_fake = Arc::new(YtDlpFake::new(FakeScript::default()));
+        let ytdlp: SharedYtDlp = ytdlp_fake.clone();
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let library_dir = tempfile::tempdir().unwrap();
+
+        let svc = Arc::new(DownloadQueueService::new(
+            db.clone(),
+            clock.clone(),
+            ytdlp,
+            Arc::new(FfmpegFake::new(FfmpegScript::default())),
+            Arc::new(FakeFreeSpace(u64::MAX)),
+            Arc::new(GlobalRate::new()),
+            SettingsService::new(db.clone(), clock.clone()),
+            Arc::new(VodReadService::new(db.clone())),
+            staging_dir.path().to_path_buf(),
+        ));
+
+        seed_streamer_and_vod(&db).await;
+
+        // The CEO's v2.0.2 install configures 720p30 H.265 — that
+        // setting is the AC1 anchor.  We also point library_root
+        // somewhere writable so the post-download pipeline doesn't
+        // bail on the "library root not configured" arm.
+        settings_svc
+            .update(SettingsPatch {
+                video_quality_profile: Some(VideoQualityProfile::P720p30),
+                library_root: Some(library_dir.path().display().to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        svc.enqueue("v1", None).await.unwrap();
+        let events: DownloadEventSink = Arc::new(|_| {});
+        svc.process_one(&events, "v1").await.unwrap();
+
+        let calls = ytdlp_fake.calls();
+        assert_eq!(
+            calls.downloads.len(),
+            1,
+            "expected exactly one yt-dlp download spawn"
+        );
+        let sel = &calls.downloads[0].format_selector;
+        assert!(
+            sel.contains("[height<=720]"),
+            "selector should cap height at 720, got: {sel}"
+        );
+        assert!(
+            sel.contains("[fps<=30]"),
+            "selector should cap fps at 30, got: {sel}"
+        );
+        assert!(
+            sel.contains("bestaudio"),
+            "ADR-0028 audio passthrough: selector must keep bestaudio, got: {sel}"
+        );
+        assert!(
+            !sel.contains("vcodec"),
+            "selector must not filter on vcodec (re-encode handles H.265), got: {sel}"
+        );
+    }
+
+    /// AC3 happy path: a fresh service has no in-flight rows; first
+    /// claim returns Some, the immediate second claim for the same
+    /// vod_id returns None (= "already in flight"); dropping the
+    /// guard releases the slot so the next claim succeeds again.
+    #[tokio::test]
+    async fn try_lock_inflight_blocks_duplicate_claims_same_vod() {
+        let (svc, _db) = setup_service().await;
+        let g1 = svc.try_lock_inflight("v1");
+        assert!(g1.is_some(), "first claim must succeed on a clean service");
+        let g2 = svc.try_lock_inflight("v1");
+        assert!(
+            g2.is_none(),
+            "second claim for same vod_id must return None"
+        );
+        drop(g1);
+        let g3 = svc.try_lock_inflight("v1");
+        assert!(
+            g3.is_some(),
+            "third claim must succeed after the original guard drops"
+        );
+    }
+
+    /// AC3 invariant: the lock is per-vod_id, NOT global — two
+    /// different vod_ids can both be in flight simultaneously.
+    #[tokio::test]
+    async fn try_lock_inflight_allows_different_vod_ids() {
+        let (svc, _db) = setup_service().await;
+        let g1 = svc.try_lock_inflight("v1");
+        let g2 = svc.try_lock_inflight("v2");
+        assert!(g1.is_some());
+        assert!(g2.is_some());
+    }
+
+    /// AC2 selection invariant: `pick_next_queued_excluding` must
+    /// SKIP rows whose vod_id is in the exclusion set — that's the
+    /// SQL-side mechanism that prevents drain_once from picking the
+    /// same locked row in successive iterations within one tick.
+    #[tokio::test]
+    async fn pick_next_queued_excluding_skips_locked_vods() {
+        let (svc, db) = setup_service().await;
+        // Two queueable vods.
+        sqlx::query(
+            "INSERT INTO streamers (twitch_user_id, login, display_name,
+                 broadcaster_type, twitch_created_at, added_at)
+             VALUES ('100', 'sampler', 'Sampler', '', 0, 0)",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        for vid in ["v1", "v2"] {
+            sqlx::query(
+                "INSERT INTO vods (twitch_video_id, twitch_user_id, title, stream_started_at,
+                     published_at, url, duration_seconds, ingest_status, first_seen_at, last_seen_at)
+                 VALUES (?, '100', 'title', 1, 1, 'https://twitch.tv/videos/x', 1800, 'eligible', 0, 0)",
+            )
+            .bind(vid)
+            .execute(db.pool())
+            .await
+            .unwrap();
+            svc.enqueue(vid, None).await.unwrap();
+        }
+
+        // No exclusion → returns the higher-priority row (FIFO at
+        // priority 100, so v1 wins on insertion order).
+        let mut empty: HashSet<String> = HashSet::new();
+        let pick = svc.pick_next_queued_excluding(&empty).await.unwrap();
+        assert_eq!(pick.unwrap().vod_id, "v1");
+
+        // Exclude v1 → v2 surfaces.
+        empty.insert("v1".to_owned());
+        let pick = svc.pick_next_queued_excluding(&empty).await.unwrap();
+        assert_eq!(pick.unwrap().vod_id, "v2");
+
+        // Exclude both → nothing.
+        empty.insert("v2".to_owned());
+        let pick = svc.pick_next_queued_excluding(&empty).await.unwrap();
+        assert!(pick.is_none());
+    }
+
+    /// AC2 + AC3 wired together: with cap=1 and two queued vods,
+    /// drain_once spawns exactly one worker.  We use a YtDlpFake
+    /// configured with a long tick delay so the spawned task is
+    /// still in flight when we inspect the in_flight set.
+    #[tokio::test]
+    async fn drain_once_respects_concurrency_cap() {
+        use crate::infra::ytdlp::SharedYtDlp;
+        use crate::services::settings::SettingsPatch;
+
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(1_000_000));
+        let settings_svc = SettingsService::new(db.clone(), clock.clone());
+
+        let ytdlp_fake = Arc::new(YtDlpFake::new(FakeScript {
+            // Hold the spawned task in flight long enough for the
+            // test to observe the in_flight set after drain_once
+            // returns.  500 ms is a balance between deterministic
+            // observation and not slowing the suite.
+            tick_delay_ms: 500,
+            ..Default::default()
+        }));
+        let ytdlp: SharedYtDlp = ytdlp_fake.clone();
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let library_dir = tempfile::tempdir().unwrap();
+
+        let svc = Arc::new(DownloadQueueService::new(
+            db.clone(),
+            clock.clone(),
+            ytdlp,
+            Arc::new(FfmpegFake::new(FfmpegScript::default())),
+            Arc::new(FakeFreeSpace(u64::MAX)),
+            Arc::new(GlobalRate::new()),
+            SettingsService::new(db.clone(), clock.clone()),
+            Arc::new(VodReadService::new(db.clone())),
+            staging_dir.path().to_path_buf(),
+        ));
+
+        // Pin the cap at 1 + a non-NULL library_root so the pipeline
+        // can run.
+        settings_svc
+            .update(SettingsPatch {
+                max_concurrent_downloads: Some(1),
+                library_root: Some(library_dir.path().display().to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // Seed two streamers + two vods + two queued downloads.
+        sqlx::query(
+            "INSERT INTO streamers (twitch_user_id, login, display_name,
+                 broadcaster_type, twitch_created_at, added_at)
+             VALUES ('100', 'sampler', 'Sampler', '', 0, 0)",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        for vid in ["v1", "v2"] {
+            sqlx::query(
+                "INSERT INTO vods (twitch_video_id, twitch_user_id, title, stream_started_at,
+                     published_at, url, duration_seconds, ingest_status, first_seen_at, last_seen_at)
+                 VALUES (?, '100', 'title', 1, 1, 'https://twitch.tv/videos/x', 1800, 'eligible', 0, 0)",
+            )
+            .bind(vid)
+            .execute(db.pool())
+            .await
+            .unwrap();
+            svc.enqueue(vid, None).await.unwrap();
+        }
+
+        let events: DownloadEventSink = Arc::new(|_| {});
+        svc.drain_once(&events).await.unwrap();
+
+        // This assertion is synchronously safe: drain_once is awaited
+        // above, and its inner `tokio::spawn` cannot drop the
+        // InFlightGuard before the spawned task even runs (the guard
+        // is moved into the closure).  The guard only drops when the
+        // task ends — and the task is currently inside the
+        // `tick_delay_ms` wait of YtDlpFake.  Do NOT add a `sleep`
+        // before this assertion — it would only weaken the guarantee.
+        assert_eq!(
+            svc.in_flight_snapshot().len(),
+            1,
+            "with cap=1 drain_once must spawn exactly one worker"
+        );
+
+        // Wait for the spawned task to finish so the temp dirs can
+        // be cleaned up cleanly when the test exits.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(
+            svc.in_flight_snapshot().len(),
+            0,
+            "in_flight slot must be released by the guard's Drop"
+        );
+    }
+
+    /// Companion to the AC1 trip-wire: when the user picks `Source`
+    /// (the legacy v1.0 default) the pipeline must spawn yt-dlp with
+    /// the unrestricted `bestvideo+bestaudio/best` selector — i.e.
+    /// the v1.0 behaviour is preserved when the user explicitly asks
+    /// for it, separate from the v2 default.
+    #[tokio::test]
+    async fn pipeline_with_source_profile_does_not_cap_height_or_fps() {
+        use crate::domain::quality::VideoQualityProfile;
+        use crate::infra::ytdlp::SharedYtDlp;
+        use crate::services::settings::SettingsPatch;
+
+        let db = Db::open_in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::at(1_000_000));
+        let settings_svc = SettingsService::new(db.clone(), clock.clone());
+
+        let ytdlp_fake = Arc::new(YtDlpFake::new(FakeScript::default()));
+        let ytdlp: SharedYtDlp = ytdlp_fake.clone();
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let library_dir = tempfile::tempdir().unwrap();
+
+        let svc = Arc::new(DownloadQueueService::new(
+            db.clone(),
+            clock.clone(),
+            ytdlp,
+            Arc::new(FfmpegFake::new(FfmpegScript::default())),
+            Arc::new(FakeFreeSpace(u64::MAX)),
+            Arc::new(GlobalRate::new()),
+            SettingsService::new(db.clone(), clock.clone()),
+            Arc::new(VodReadService::new(db.clone())),
+            staging_dir.path().to_path_buf(),
+        ));
+
+        seed_streamer_and_vod(&db).await;
+
+        settings_svc
+            .update(SettingsPatch {
+                video_quality_profile: Some(VideoQualityProfile::Source),
+                library_root: Some(library_dir.path().display().to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        svc.enqueue("v1", None).await.unwrap();
+        let events: DownloadEventSink = Arc::new(|_| {});
+        svc.process_one(&events, "v1").await.unwrap();
+
+        let calls = ytdlp_fake.calls();
+        assert_eq!(
+            calls.downloads.len(),
+            1,
+            "expected exactly one yt-dlp download spawn"
+        );
+        let sel = &calls.downloads[0].format_selector;
+        assert_eq!(sel, "bestvideo+bestaudio/best");
     }
 }
