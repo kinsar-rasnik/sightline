@@ -106,14 +106,19 @@ mod tests {
         assert!(is_process_alive(me), "self-pid {me} should be alive");
     }
 
-    #[test]
-    fn very_large_pid_is_dead() {
-        // u32::MAX is reserved on every supported OS (Linux's pid_max
-        // tops out at 2^22; Windows PIDs are 32-bit but the OS never
-        // hands out u32::MAX as a real PID).  This is the cheapest
-        // way to assert "definitely dead" without spawning a process.
-        assert!(!is_process_alive(u32::MAX));
-    }
+    // NOTE: a `very_large_pid_is_dead` test (asserting `u32::MAX`
+    // resolves as dead) was removed in the hotfix on 2026-04-26.
+    // Some Linux `kill` builds (procps-ng on the GitHub
+    // ubuntu-latest runner image) parse the PID via strtol() →
+    // truncate-to-int, turning `u32::MAX` into `-1`.  `kill(-1, 0)`
+    // is the "broadcast to every process I can signal" idiom, which
+    // returns 0 whenever the calling process has at least one
+    // signalable peer (always).  `is_process_alive(u32::MAX)` then
+    // returned `true` and the assertion failed.  The
+    // `killed_child_reports_dead` test below covers the realistic
+    // dead-PID scenario without depending on undefined "very large
+    // PID" parsing behaviour, and `pid_zero_is_never_alive` covers
+    // the compile-time guard.
 
     #[test]
     fn killed_child_reports_dead() {
