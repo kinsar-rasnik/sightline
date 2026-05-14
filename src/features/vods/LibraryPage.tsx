@@ -267,28 +267,27 @@ export function LibraryPage() {
             aria-label={`Library — ${filteredVods.length} VODs`}
           >
             {filteredVods.map((v) => {
-              const cw = continueWatching.data?.find(
-                (e) => e.vodId === v.vod.twitchVideoId
-              );
               const vodId = v.vod.twitchVideoId;
               return (
                 <li key={vodId}>
                   <VodCard
+                    vodId={vodId}
+                    variant="full"
                     row={v}
-                    download={downloadsById.get(vodId) ?? null}
                     selected={selected === vodId}
                     onSelect={() => setSelected(vodId)}
-                    onPlay={() =>
-                      openPlayer({
-                        vodId,
-                        autoplay: true,
-                      })
-                    }
-                    onDownload={() => void handleDownload(vodId)}
-                    onCancel={() => void handleCancel(vodId)}
-                    onRepick={() => void handleDownload(vodId)}
-                    onRemove={() => void handleRemove(vodId)}
-                    {...(cw ? { watchedFraction: cw.watchedFraction } : {})}
+                    actions={{
+                      download: downloadsById.get(vodId) ?? null,
+                      onPlay: () =>
+                        openPlayer({
+                          vodId,
+                          autoplay: true,
+                        }),
+                      onDownload: () => void handleDownload(vodId),
+                      onCancel: () => void handleCancel(vodId),
+                      onRepick: () => void handleDownload(vodId),
+                      onRemove: () => void handleRemove(vodId),
+                    }}
                   />
                 </li>
               );
