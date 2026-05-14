@@ -1,89 +1,224 @@
 @import "tailwindcss";
 
 @theme {
-  /* ---- Surfaces ---- */
+  /* ============================================================
+   * COLOUR SYSTEM (TV1)
+   * ============================================================ */
+
+  /* Surfaces — 4-tier ladder (L* 4 → 7 → 10 → 13) */
   --color-bg: #0a0a0d;
-  --color-surface: #14141a;
-  --color-surface-elevated: #1c1c24;
-  --color-surface-interactive: #242430;
+  --color-surface-1: #14141a;
+  --color-surface-2: #1c1c24;
+  --color-surface-3: #242430;
+  --color-surface-skeleton: #10101a;
+  --color-scrim: rgba(0, 0, 0, 0.60);
 
-  /* ---- Text ---- */
+  /* Text — H-11 two-step ramp (third grey removed) */
   --color-fg: #f5f5f7;
-  --color-muted: #a1a1aa;
-  --color-subtle: #71717a;
+  --color-muted: rgba(245, 245, 247, 0.65);
 
-  /* ---- Accent + roles ---- */
-  --color-accent: #7c3aed;
-  --color-accent-fg: #ffffff;
+  /* Brand accent — #d4a14a Locked Input */
+  --color-accent: #d4a14a;
+  --color-accent-fg: #0a0a0d;
+
+  /* Status — functional surfaces only (Settings forms, not browse) */
   --color-success: #10b981;
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
   --color-info: #3b82f6;
 
-  /* ---- Borders ---- */
+  /* Borders — chrome dividers (cards in idle carry NO border per H-14) */
   --color-border: #2a2a34;
   --color-border-strong: #3a3a48;
 
-  /* ---- Focus ---- */
-  --color-focus-ring: #8b5cf6;
+  /* Outlines — H-20 binding "white (or 80–90 % opacity white)"; 85 % = mid */
+  --color-outline-focus: rgba(255, 255, 255, 0.85);
+  --color-outline-selection: rgba(255, 255, 255, 0.85);
+  --color-outline-hover: rgba(255, 255, 255, 0.30);  /* Sightline-specific helper, outside H-20 */
 
-  /* ---- Spacing (4px base) ---- */
+  /* Live indicator (TV-A7 binding) */
+  --color-live: var(--color-accent);
+
+  /* ============================================================
+   * TYPOGRAPHY (TV2)
+   * ============================================================ */
+
+  --font-stack: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+                Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-stack-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --font-weight-body: 400;
+  --font-weight-mid: 500;
+  --font-weight-title: 600;
+  --font-weight-heading: 700;
+
+  --font-size-xs: 0.75rem;    /* 12 px — meta, badges */
+  --font-size-sm: 0.875rem;   /* 14 px — card title, button */
+  --font-size-base: 1rem;     /* 16 px — body */
+  --font-size-lg: 1.125rem;   /* 18 px — section label */
+  --font-size-xl: 1.25rem;    /* 20 px — modal header */
+  --font-size-2xl: 1.5rem;    /* 24 px — hero CTA */
+  --font-size-hero: 2rem;     /* 32 px — hero title */
+
+  --line-height-tight: 1.2;
+  --line-height-body: 1.4;
+  --line-height-loose: 1.6;
+
+  /* ============================================================
+   * SPACING — 4-px base grid (TV3)
+   * ============================================================ */
+
   --space-0: 0;
-  --space-1: 0.25rem;   /*  4px */
-  --space-2: 0.5rem;    /*  8px */
-  --space-3: 0.75rem;   /* 12px */
-  --space-4: 1rem;      /* 16px */
-  --space-5: 1.25rem;   /* 20px */
-  --space-6: 1.5rem;    /* 24px */
-  --space-8: 2rem;      /* 32px */
-  --space-12: 3rem;     /* 48px */
-  --space-16: 4rem;     /* 64px */
+  --space-1: 0.25rem;   /*  4 px */
+  --space-2: 0.5rem;    /*  8 px */
+  --space-3: 0.75rem;   /* 12 px */
+  --space-4: 1rem;      /* 16 px */
+  --space-5: 1.25rem;   /* 20 px */
+  --space-6: 1.5rem;    /* 24 px */
+  --space-8: 2rem;      /* 32 px */
+  --space-12: 3rem;     /* 48 px */
+  --space-16: 4rem;     /* 64 px */
 
-  /* ---- Typography ---- */
-  --font-size-xs: 0.75rem;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
-  --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.5rem;
+  /* ============================================================
+   * CARD GEOMETRY (TV4 — TV-A1 / TV-A2 / TV-A3 binding)
+   * ============================================================ */
 
-  /* ---- Motion ---- */
-  --motion-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
-  --motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  --motion-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  --card-lane-height: 72px;
+  --card-image-share: 0.75;
+  --card-aspect: 16 / 9;
+  --card-corner-radius: 4px;
+  --card-width-readable-px: 160px;
+  --card-width-image-only-px: 96px;
+  --card-hover-zoom-factor: 1.10;
 
-  /* ---- Radius ---- */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
+  /* ============================================================
+   * CARD ELEMENT NUMERICS (TV5)
+   * ============================================================ */
 
-  /* ---- Shadow (dark-friendly) ---- */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35);
-  --shadow-lg: 0 12px 36px rgb(0 0 0 / 0.5);
+  --selection-checkmark-size: 16px;
+  --selection-checkmark-padding: 4px;
+  --retention-badge-height: 20px;
+  --retention-badge-padding-x: 6px;
+  --retention-badge-icon-size: 12px;
+  --retention-badge-text-size: var(--font-size-xs);
+  --retention-badge-gap: 4px;
+  --avatar-size-single: 16px;
+  --avatar-dot-size: 12px;
+  --avatar-dot-gap: 2px;
+  --progress-stripe-height: 3px;
+  --focus-outline-width: 2px;
+  --focus-outline-offset: 2px;
+  --selection-outline-width: 2px;
+  --silhouette-offset: 2px;
+  --fan-out-gap-ratio: 0.25;
+  --stack-marker-padding: 8px;
+
+  /* ============================================================
+   * MOTION — durations + easing curves (TV6)
+   * ============================================================ */
+
+  --motion-hover-delay: 800ms;
+  --motion-zoom-duration: 200ms;
+  --motion-crossfade-duration: 250ms;
+  --motion-panel-slide-duration: 200ms;
+  --motion-frame-cadence: 400ms;
+  --motion-easing-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-easing-in-out: cubic-bezier(0.4, 0, 0.6, 1);
+  --motion-fade-instant: 100ms;
+  --motion-modal-open-duration: 220ms;
+  --motion-sidebar-reveal-duration: 200ms;
+  --motion-toolbar-fade-duration: 180ms;
+
+  /* ============================================================
+   * ELEVATION (TV7)
+   * ============================================================ */
+
+  --shadow-card: none;
+  --shadow-modal: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-toolbar: 0 -2px 4px rgba(0, 0, 0, 0.3);
+
+  /* Border-radius utility scale (separate from --card-corner-radius
+   * which is the canonical card radius) */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 9999px;
+
+  /* ============================================================
+   * Z-INDEX STACK (TV7)
+   * ============================================================ */
+
+  --z-base: 0;
+  --z-axis: 5;
+  --z-card-idle: 10;
+  --z-card-hover: 20;
+  --z-fan-out: 30;
+  --z-now-indicator: 35;
+  --z-selection-bar: 40;
+  --z-tooltip: 45;
+  --z-scrim: 49;
+  --z-modal: 50;
+  --z-toast: 60;
+
+  /* ============================================================
+   * NOW-INDICATOR (TV8 — ADR-0038 D3 binding)
+   * ============================================================ */
+
+  --now-indicator-color: rgba(255, 255, 255, 0.30);
+  --now-indicator-width: 1px;
+
+  /* ============================================================
+   * SIDEBAR (TV9 — Q-1 binding; TV-A4 binding)
+   * ============================================================ */
+
+  --sidebar-collapsed-width: 56px;
+  --sidebar-expanded-width: 240px;
+  --sidebar-avatar-size: 32px;
+  --sidebar-avatar-padding: 12px;
+  --sidebar-live-dot-size: 8px;
+  --sidebar-live-dot-offset: 2px;
+
+  /* ============================================================
+   * HERO-SLOT (TV10 — Q-2 + ADR-0038 D9 binding; TV-A5 / TV-A6 binding)
+   * ============================================================ */
+
+  --hero-slot-height: 280px;
+  --hero-slot-padding-v: var(--space-12);
+  --hero-slot-padding-h: var(--space-8);
+  --hero-card-aspect: 16 / 9;
+  --hero-cta-padding-v: var(--space-3);
+  --hero-cta-padding-h: var(--space-6);
+  --hero-title-size: var(--font-size-hero);
+  --hero-pitch-size: var(--font-size-base);
+
+  /* ============================================================
+   * ICON SYSTEM (TV11 — Lucide-react)
+   * ============================================================ */
+
+  --icon-size-sm: 14px;
+  --icon-size-base: 16px;
+  --icon-size-lg: 20px;
+  --icon-size-xl: 24px;
+  --icon-stroke-width: 1.5;
 }
 
 @layer base {
   :root {
-    color-scheme: dark light;
+    color-scheme: dark;  /* binding: dark-only in v2.1 */
   }
 
-  @media (prefers-color-scheme: light) {
+  /* Reduced-motion override block (TV6) */
+  @media (prefers-reduced-motion: reduce) {
     :root {
-      --color-bg: #fafafa;
-      --color-surface: #ffffff;
-      --color-surface-elevated: #f4f4f5;
-      --color-surface-interactive: #e4e4e7;
-      --color-fg: #0f0f12;
-      --color-muted: #52525b;
-      --color-subtle: #71717a;
-      --color-border: #e4e4e7;
-      --color-border-strong: #d4d4d8;
-      --color-focus-ring: #7c3aed;
-      --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
-      --shadow-md: 0 4px 12px rgb(0 0 0 / 0.08);
-      --shadow-lg: 0 12px 36px rgb(0 0 0 / 0.12);
+      --motion-hover-delay: 0ms;
+      --motion-zoom-duration: 0ms;
+      --motion-crossfade-duration: 0ms;
+      --motion-panel-slide-duration: 0ms;
+      --motion-frame-cadence: 0ms;
+      --motion-modal-open-duration: 100ms;
+      --motion-sidebar-reveal-duration: 0ms;
+      --motion-toolbar-fade-duration: 0ms;
+      --card-hover-zoom-factor: 1.0;
     }
   }
 
@@ -94,32 +229,26 @@
   }
 
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-      "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-stack);
     background-color: var(--color-bg);
     color: var(--color-fg);
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Focus-visible rings — applied globally so every interactive element
-     is keyboard-friendly without per-component plumbing. */
+  /* Global focus-visible outline (H-20 binding) */
   :focus-visible {
-    outline: 2px solid var(--color-focus-ring);
-    outline-offset: 2px;
-    border-radius: 3px;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0ms !important;
-      transition-duration: 0ms !important;
-    }
+    outline: var(--focus-outline-width) solid var(--color-outline-focus);
+    outline-offset: var(--focus-outline-offset);
+    border-radius: var(--card-corner-radius);
   }
 }
 
-/* Keyframe animations used by the slide-in drawer and toast stack. */
+/* Tabular-numerics utility for duration / retention text */
+.font-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keyframe library — no idle pulse / shimmer (anti-pattern §5) */
 @keyframes sightline-slide-in {
   from { transform: translateX(24px); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }
@@ -130,18 +259,14 @@
   to   { opacity: 1; }
 }
 
-@keyframes sightline-shimmer {
-  0%   { opacity: 1; }
-  50%  { opacity: 0.6; }
-  100% { opacity: 1; }
-}
+/* sightline-shimmer removed per anti-pattern §5 (no idle pulse) */
 
 .sightline-slide-in {
-  animation: sightline-slide-in var(--motion-base) both;
+  animation: sightline-slide-in var(--motion-panel-slide-duration) var(--motion-easing-out) both;
 }
 
 .sightline-fade-in {
-  animation: sightline-fade-in var(--motion-fast) both;
+  animation: sightline-fade-in var(--motion-fade-instant) var(--motion-easing-out) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
