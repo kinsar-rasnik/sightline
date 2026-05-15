@@ -6,6 +6,36 @@ Format: `## YYYY-MM-DD — Titel`
 
 ---
 
+## 2026-05-15 — ADR-0040 Lc-correction docs patch
+
+**Was:** R-ADR-01 in-flight-Befund aus Wave-4 Mission 1 (APCA-Test
+in PR #40) hat den ADR-internal Lc-88-Claim als over-optimistic
+identifiziert; tatsächlicher max-achievable Lc gegen den
+Locked-Input-Accent `#d4a14a` ist 58. Token-Substanz unverändert;
+reine Begründungs-Korrektur in § TV1 + § Risks #1 + § TV10
+Hero-Composition + § Acceptance-Note. Sekundärer § TV1
+`#f5f5f7`-Bullet ebenfalls korrigiert (over-pessimistic 30 →
+gemessen 44).
+
+**Pattern:** Erste recorded Post-Acceptance documentary
+correction. R-ADR-01 hat empirische Validierung gegen einen
+ADR-internal Claim demonstriert — eine separate Validierungs-Achse
+zur Token-Korrektheit. Der Mission-Brief-Stop-Trigger
+("APCA-Test scheitert → STOP") wurde korrekt NICHT ausgelöst, weil
+das Failure am documentary-Claim lag, nicht am Token-Wert.
+Pattern-Note für R-ADR-Rules-Evolution in Decision-Log §9.
+
+**Warum:** Drift jetzt fixen ist billiger als nach Missions
+2/3/4 — die ADR ist binding Spec; Begründungs-Korrektheit muss
+erhalten bleiben, damit künftige Reviewer (vision-compliance) gegen
+korrekte Lc-Bänder graden.
+
+**Referenz:** `docs/adr/0040-visual-system-v2.md` § TV1 + § Risks #1
++ § TV10 + § Acceptance-Note;
+`docs/decision-log/v2.1-adr-0040-visual-system-v2.md` §9.
+
+---
+
 ## 2026-05-12 — ADR-0041 ACCEPTED (Acceptance-Patch nach R-ADR-03 reine Status-Konvertierung)
 
 - **Was:** ADR-0041 Multiview Pane Expansion ACCEPTED 2026-05-12

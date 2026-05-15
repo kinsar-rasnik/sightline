@@ -26,6 +26,12 @@
   (Counting-Bug "six" → "seven"; explicit TV-A1 × TV-A5 N_max
   compound-risk notation in Risks) were folded into this acceptance
   patch without altering any TV-Decision substance.
+- **Lc-correction 2026-05-15 (R-ADR-01 finding from Wave-4 Mission 1).**
+  § TV1 and § Risks #1 APCA Lc-values corrected from over-optimistic
+  88 to empirically-measured 58 (max achievable for the locked-input
+  accent). Token substance unchanged; correction is documentary per
+  R-ADR-02 audit pattern. Detail in
+  `docs/decision-log/v2.1-adr-0040-visual-system-v2.md` §9.
 - **Wave.** v2.1 ADR Wave 3 of (Timeline-Layout → VodCard → **Visual System v2**).
   Parallel v2.1 wave: Multiview-Pane-Expansion-ADR (per ADR-0038 CEO-A1) —
   filed separately. After this ADR's sign-off and the Multiview-Pane-
@@ -177,11 +183,18 @@ smell carried in from the pre-anchor codebase.
 `#d4a14a` is a warm amber / honey gold:
 - HSL: `40°, 60 %, 56 %`
 - OKLCH: `0.74 L, 0.12 C, 82° h` (approx.)
-- APCA contrast against `#0a0a0d`: Lc ≈ 88 (well above the Lc 75
-  target for body text and Lc 60 for non-text glyphs).
-- APCA contrast against `#f5f5f7`: Lc ≈ 30 (insufficient for body
-  text; accent should never carry body text against light bg, but
-  this surface combination doesn't arise in dark-only Sightline).
+- APCA contrast against `#0a0a0d`: Lc ≈ 58 (maximum achievable for
+  the locked-input `#d4a14a` accent). Passes APCA L\*c ≥ 45 threshold
+  for large fluent text at ≥ 24 px / weight ≥ 500 — Hero-CTA "Watch
+  live" sits in this band (`--font-size-2xl` 24 px). Does NOT pass
+  the Lc 75 small-body-text threshold; accent fill must not carry
+  body text in v2.1. Documented as binding constraint.
+- APCA contrast against `#f5f5f7`: Lc ≈ 44 (empirically measured in
+  the Wave-4 Mission-1 APCA-test; the earlier Lc ≈ 30 claim was
+  itself divergent — over-pessimistic). Still well below the Lc 75
+  body-text threshold; `--color-fg` must never sit on an accent fill.
+  The Hero-CTA uses `--color-accent-fg` (dark) per § Risks #1, not
+  `--color-fg`.
 
 **H-06 / H-07 conformance — coverage-based, not saturation-based.**
 
@@ -870,7 +883,7 @@ composition that differs from Full / Compact / Sliver:
 | Image area             | 16:9 of card-height, no width-cap (image extends right to card edge)          |
 | Title                  | `--font-size-hero` (32 px) / weight 700 — overlaid bottom-left                |
 | Pitch copy             | 1–2 lines `--font-size-base` (16 px), below title                             |
-| Primary CTA            | "Watch live" — `--color-accent` fill, `--color-accent-fg` text, `--hero-cta-padding-*` |
+| Primary CTA            | "Watch live" — `--color-accent` fill, `--color-accent-fg` text, `--font-size-2xl` (24 px) / weight ≥ 500, `--hero-cta-padding-*`. The 24-px size is binding: it places the CTA in the APCA large-fluent-text band where the Lc 58 accent contrast is acceptable (see § Risks #1). |
 | Secondary CTA          | "More info" — neutral pill, same padding                                      |
 | Hover behaviour        | No frame-strip preview (hero already shows live thumbnail); only CTA luminance bump |
 | Metadata strip         | Expanded at idle (no hover gate); shows streamer name + duration + viewers   |
@@ -1151,11 +1164,25 @@ so a one-place edit in `globals.css` propagates everywhere correctly.
 ### Risks
 
 1. **APCA contrast on accent foreground.** `--color-accent-fg: #0a0a0d`
-   on `--color-accent: #d4a14a` yields Lc ≈ 88 (text on accent fill).
-   But if hero-CTA text is `--color-fg: #f5f5f7` on accent (instead
-   of `#0a0a0d`), contrast drops to Lc ≈ 30 — too low. Mitigation:
-   hero-CTA explicitly uses `--color-accent-fg` (the dark variant);
-   never `--color-fg` over accent. Documented as binding rule.
+   on `--color-accent: #d4a14a` yields **Lc ≈ 58** (empirically
+   measured in the Wave-4 Mission-1 APCA-test — the earlier Lc ≈ 88
+   claim was an over-optimistic ADR-internal estimate; corrected
+   2026-05-15, see § Acceptance Lc-correction note and decision-log
+   §9). Lc 58 is the **maximum achievable** for the locked-input
+   `#d4a14a` accent — no better `--color-accent-fg` value exists
+   without violating the Locked-Input. **Mitigation:** the Hero-CTA
+   "Watch live" renders at `--font-size-2xl` (24 px) / weight ≥ 500,
+   which lands in the APCA **large-fluent-text band** (L\*c ≥ 45) —
+   accent fill is acceptable at this size. `--color-fg: #f5f5f7` on
+   accent measures Lc ≈ 44 and is likewise below the Lc 75 body-text
+   threshold; the Hero-CTA explicitly uses `--color-accent-fg` (the
+   dark variant), never `--color-fg`. **Binding constraint:**
+   accent-fill surfaces in v2.1 carry only large text (≥ 24 px /
+   weight ≥ 500); body-text-size text (< 24 px) on an accent fill is
+   excluded. If a future UI surface needs accent-fill with
+   body-text-size text, a second accent tone (a lighter variant
+   raising contrast above Lc 75) is required — its own ADR wave, not
+   a v2.1 token edit.
 2. **Tailwind v4 utility generation from custom-prefixed tokens.**
    Tailwind v4's `@theme {}` discovery generates utilities for
    `--color-*`, `--space-*`, `--font-size-*`, `--font-weight-*`,
