@@ -12,10 +12,18 @@ import { useActivePollsStore } from "@/stores/active-polls-store";
 export function subscribeEventsToQueryClient(client: QueryClient): Promise<UnlistenFn[]> {
   const topicsToKeys: Array<[string, string[][]]> = [
     [events.credentialsChanged, [["settings"], ["credentials-status"]]],
-    [events.streamerAdded, [["streamers"], ["poll-status"]]],
-    [events.streamerRemoved, [["streamers"], ["poll-status"], ["vods"]]],
-    [events.vodIngested, [["vods"], ["streamers"], ["poll-status"]]],
-    [events.vodUpdated, [["vods"], ["poll-status"]]],
+    // ADR-0038 D8: streamer/VOD lifecycle invalidates the timeline
+    // caches; the `["timeline"]` prefix covers list + stats + co-streams.
+    [events.streamerAdded, [["streamers"], ["poll-status"], ["timeline"]]],
+    [
+      events.streamerRemoved,
+      [["streamers"], ["poll-status"], ["vods"], ["timeline"]],
+    ],
+    [
+      events.vodIngested,
+      [["vods"], ["streamers"], ["poll-status"], ["timeline"]],
+    ],
+    [events.vodUpdated, [["vods"], ["poll-status"], ["timeline"]]],
     [events.pollFinished, [["poll-status"], ["streamers"]]],
     [events.downloadStateChanged, [["downloads"], ["vods"]]],
     [events.downloadCompleted, [["downloads"], ["library-info"], ["vods"]]],
