@@ -161,6 +161,14 @@ export function TimelinePage() {
     if (!el) return;
     const measure = () => setAreaWidth(el.clientWidth);
     measure();
+    // ResizeObserver catches lane-area resizes with no accompanying
+    // `window` resize (panel collapse, sidebar reveal); fall back to the
+    // window event where ResizeObserver is unavailable (jsdom).
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measure);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
@@ -174,9 +182,11 @@ export function TimelinePage() {
       if (e.key === "Escape") clearSelection();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      clearSelection();
+    };
   }, [clearSelection]);
-  useEffect(() => () => clearSelection(), [clearSelection]);
 
   const handleActivate = useCallback((vodId: string) => {
     useNavStore.getState().openPlayer({ vodId, autoplay: true });

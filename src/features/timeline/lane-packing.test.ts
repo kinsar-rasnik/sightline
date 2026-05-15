@@ -155,6 +155,14 @@ describe("packIntoLanes — Greedy Best-Fit (ADR-0038 D1)", () => {
     expect(new Set(result.map(slotKey)).size).toBe(5);
     assertNoSlotCollision(intervals, result);
   });
+
+  test("zero-duration intervals (startAt === endAt) pack without error", () => {
+    // The DB CHECK permits startAt === endAt; an instantaneous row
+    // must still receive a lane assignment.
+    const result = packIntoLanes([iv("a", 100, 100), iv("b", 100, 100)]);
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.vodId).sort()).toEqual(["a", "b"]);
+  });
 });
 
 describe("packIntoLanes — Interval Graph Coloring fallback (ADR-0038 D1)", () => {
@@ -235,5 +243,20 @@ describe("multi-perspective grouping (ADR-0038 D5 + CEO-A2)", () => {
     const a = iv("a", 0, 100, "s1");
     const b = iv("b", 200, 300, "s2");
     expect(groupMultiPerspective([a, b])).toHaveLength(0);
+  });
+
+  test("grouping is transitive across the connected component (D5)", () => {
+    // A↔B and B↔C each clear 50 %, but A↔C do not — D5 groups the
+    // connected component, so C joins via B even though C shares its
+    // streamer with A. The stack stays inspectable per D5.
+    const a = iv("a", 0, 100, "s1");
+    const b = iv("b", 50, 150, "s2");
+    const c = iv("c", 80, 180, "s1");
+    expect(overlapFractionOfShorter(a, c)).toBeLessThan(0.5);
+    const groups = groupMultiPerspective([a, b, c]);
+    expect(groups).toHaveLength(1);
+    expect(new Set(groups[0]!.members.map((m) => m.vodId))).toEqual(
+      new Set(["a", "b", "c"]),
+    );
   });
 });

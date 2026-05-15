@@ -21,11 +21,7 @@ import {
 } from "@/features/vods/VodCard";
 import { useIsVodSelected } from "@/stores/timeline-multiselect-store";
 
-import { variantForWidth } from "./TimelineCard";
-
-function isModifiedClick(event: MouseEvent): boolean {
-  return event.shiftKey || event.metaKey || event.ctrlKey;
-}
+import { isModifiedClick, variantForWidth } from "./TimelineCard";
 
 interface TimelineStackMarkerProps {
   /** VOD of the longest-running interval — the stack anchors here. */

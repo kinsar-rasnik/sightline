@@ -35,6 +35,11 @@ function spanSeconds(level: ZoomLevel): number {
   return ZOOM_LEVEL_SPAN_SECONDS[level];
 }
 
+/** Half the zoom-level span in milliseconds — the viewport-centre offset. */
+function halfSpanMs(level: ZoomLevel): number {
+  return (spanSeconds(level) * 1000) / 2;
+}
+
 /** `viewportStartAt` that places the wall-clock instant at the 75 % anchor. */
 function centeredStart(level: ZoomLevel, nowMs: number): Date {
   return new Date(nowMs - spanSeconds(level) * NOW_ANCHOR_FRACTION * 1000);
@@ -75,9 +80,8 @@ export const useTimelineViewStore = create<TimelineViewState>((set) => {
     setZoom: (level) =>
       set((s) => {
         // Hold the viewport centre fixed across the zoom change.
-        const centerMs =
-          s.viewportStartAt.getTime() + spanSeconds(s.zoomLevel) * 500;
-        const start = new Date(centerMs - spanSeconds(level) * 500);
+        const centerMs = s.viewportStartAt.getTime() + halfSpanMs(s.zoomLevel);
+        const start = new Date(centerMs - halfSpanMs(level));
         return {
           zoomLevel: level,
           viewportStartAt: start,

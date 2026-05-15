@@ -231,9 +231,17 @@ export function groupMultiPerspective(
     const streamers = new Set(component.map((iv) => iv.streamerId));
     if (streamers.size < 2) continue;
 
-    const members = component.sort(
-      (a, b) => b.endAt - b.startAt - (a.endAt - a.startAt),
-    );
+    // `component` is in DFS post-order; this longest-first sort is
+    // load-bearing — `leadVodId` is `members[0]` (D5: the stack anchors
+    // at the longest-running interval). The `vodId` tie-break keeps the
+    // lead deterministic when two members share a duration.
+    const members = component.sort((a, b) => {
+      const byDuration = b.endAt - b.startAt - (a.endAt - a.startAt);
+      if (byDuration !== 0) return byDuration;
+      if (a.vodId < b.vodId) return -1;
+      if (a.vodId > b.vodId) return 1;
+      return 0;
+    });
     const lead = members[0];
     if (!lead) continue;
     groups.push({ leadVodId: lead.vodId, members });

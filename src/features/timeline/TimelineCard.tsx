@@ -27,7 +27,8 @@ export function variantForWidth(widthPx: number): VodCardVariant {
   return "sliver";
 }
 
-function isModifiedClick(event: MouseEvent): boolean {
+/** D7: a Shift / Cmd / Ctrl click is a selection gesture, not an open. */
+export function isModifiedClick(event: MouseEvent): boolean {
   return event.shiftKey || event.metaKey || event.ctrlKey;
 }
 
